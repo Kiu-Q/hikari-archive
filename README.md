@@ -1,15 +1,15 @@
 <picture>
   <source
     width="100%"
-    srcset="./banner.png"
+    srcset="./docs/content/public/banner-dark-1280x640.avif"
     media="(prefers-color-scheme: dark)"
   />
   <source
     width="100%"
-    srcset="./banner.png"
+    srcset="./docs/content/public/banner-light-1280x640.avif"
     media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
   />
-  <img width="250" src="./banner.png" />
+  <img width="250" src="./docs/content/public/banner-light-1280x640.avif" />
 </picture>
 
 <h1 align="center">Hikari Archive</h1>
@@ -48,12 +48,6 @@
 > [!WARNING]
 > **This project is heavily vibe-coded**
 >
-> ### ⚡ HELP NEEDED: Electron App Build Setup
->
-> Seeking contributors to configure the production Electron build process.
->
-> ---
->
 > What does "vibe-coded" mean? It means the code was written based on intuition, vibes, and "it just works" mentality rather than following strict software engineering best practices, comprehensive testing, or thorough documentation.
 >
 > **Consequences you might encounter:**
@@ -78,18 +72,9 @@ Hikari Archive brings virtual characters to life with:
 - **AI Integration**: WebSocket communication with OpenClaw agent gateway for AI interactions
 - **Cross-Platform**: Runs on Electron desktop and Web browsers with mobile support
 
-> **Developer's Words:**
->
-> I discovered Project-AIRI on Threads in February, and as an ACG fan, I really liked it. However, I wanted to make it work with the OpenClaw agent with more "waifu-like" interaction, so I built this app using AI.
->
-> By the way, Hikari, as shown in the banner, is my favorite Blue Archive character (however, due to VRM model license issues, I cannot include its VRM model here).
->
-> "Hikari" (ヒカリ) in Japan is now the second fastest Shinkansen, and like this project, we may not be the best project in the companion aspect, but we still want to make the dream come true.
->
-
 ## What's So Special About This Project?
 
-> Unlike other VRM viewers, Hikari Archive was built with a focus on real-time AI agent integration and cross-platform compatibility from the ground up.
+Unlike other VRM viewers, Hikari Archive was built with a focus on real-time AI agent integration and cross-platform compatibility from the ground up.
 
 > [!TIP]
 > Worried about performance or compatibility?
@@ -142,13 +127,11 @@ Capable of
   - [x] Window dragging (Electron)
   - [x] Touch controls (Web/Mobile)
   - [ ] Interact with your screen
-  - [x] Cross-Platform
+- [x] Cross-Platform
   - [x] Electron desktop application
   - [x] Web browser version
   - [x] Mobile support with Tailscale remote access
   - [x] Shared codebase
-  - [x] Web build
-  - [ ] Electron app build
 
 ## Development
 

@@ -28,7 +28,7 @@ jobs:
         run: npm i
 
       - name: Build for web
-        run: npm run dev:web
+        run: npm run build:web
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -36,7 +36,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: ./dist
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
