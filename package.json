@@ -14,7 +14,6 @@
     "build": "npm run build:electron && electron-forge make",
     "build:electron": "vite build --mode electron",
     "build:web": "vite build --mode web",
-    "build:web:fixed": "VITE_ASSET_BASE_URL='./' vite build --mode web",
     "start:electron": "npm run build:electron && npx electron .",
     "start:web": "node web-server.cjs",
     "start:asset-server": "node asset-server.js",
