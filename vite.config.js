@@ -29,7 +29,7 @@ export default defineConfig(({ mode }) => {
     define: {
       'import.meta.env.VITE_MODE': JSON.stringify(mode),
       'import.meta.env.VITE_WEBSOCKET_URL': JSON.stringify(env.VITE_WEBSOCKET_URL || 'ws://localhost:18789'),
-      'import.meta.env.VITE_ASSET_BASE_URL': JSON.stringify(env.VITE_ASSET_BASE_URL || './assets/'),
+      'import.meta.env.VITE_ASSET_BASE_URL': JSON.stringify(env.VITE_ASSET_BASE_URL || './'),
       'import.meta.env.VITE_WINDOW_WIDTH': JSON.stringify(env.VITE_WINDOW_WIDTH || '600px'),
       'import.meta.env.VITE_WINDOW_HEIGHT': JSON.stringify(env.VITE_WINDOW_HEIGHT || '900px'),
     },
