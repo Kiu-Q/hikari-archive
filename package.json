@@ -1,0 +1,48 @@
+{
+  "name": "vrm-electron",
+  "version": "1.0.0",
+  "description": "VRM Viewer - Electron + Vite Desktop App",
+  "type": "module",
+  "main": "electron/main.js",
+  "config": {
+    "forge": "./forge.config.cjs"
+  },
+  "scripts": {
+    "dev": "npm run dev:electron",
+    "dev:electron": "concurrently \"npm run start:asset-server\" \"vite --mode electron\" \"npx electron .\"",
+    "dev:web": "concurrently \"npm run start:asset-server\" \"vite --mode web --open /renderer/index-web.html\"",
+    "build": "npm run build:electron && electron-forge make",
+    "build:electron": "vite build --mode electron",
+    "build:web": "vite build --mode web",
+    "start:electron": "npm run build:electron && npx electron .",
+    "start:web": "node web-server.cjs",
+    "start:asset-server": "node asset-server.js",
+    "package": "electron-forge package",
+    "make": "electron-forge make"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-forge/cli": "^7.4.0",
+    "@electron-forge/maker-deb": "^7.4.0",
+    "@electron-forge/maker-rpm": "^7.4.0",
+    "@electron-forge/maker-squirrel": "^7.4.0",
+    "@electron-forge/maker-zip": "^7.4.0",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.4.0",
+    "@electron-forge/plugin-fuses": "^7.4.0",
+    "@electron/fuses": "^1.8.0",
+    "concurrently": "^9.2.1",
+    "electron": "^40.7.0",
+    "vite": "^7.3.1",
+    "vite-plugin-electron": "^0.28.0",
+    "vite-plugin-electron-renderer": "^0.14.5",
+    "wait-on": "^9.0.4"
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "^3.0.0",
+    "@pixiv/three-vrm-animation": "^3.0.0",
+    "three": "^0.176.0",
+    "ws": "^8.18.0"
+  }
+}
