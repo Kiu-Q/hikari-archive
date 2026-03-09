@@ -30,7 +30,7 @@ jobs:
       - name: Build for web
         run: npm run build:web
         env:
-          VITE_ASSET_BASE_URL: './assets/'
+          VITE_ASSET_BASE_URL: './'
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
