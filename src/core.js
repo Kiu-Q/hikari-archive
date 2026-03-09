@@ -519,7 +519,7 @@ loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
 // ============================================================
 // ASSET PATHS
 // ============================================================
-const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
+const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || '../';
 const VRM_MODEL_URL = `${ASSET_BASE_URL}VRM/sample.vrm`;
 const VRMA_ANIMATION_URLS = [
     `${ASSET_BASE_URL}VRMA/idle_loop.vrma`,

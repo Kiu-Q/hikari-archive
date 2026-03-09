@@ -37,6 +37,21 @@ const server = http.createServer((req, res) => {
     // Serve from dist directory (built files)
     // Default to index.html
     let filePath = './dist' + req.url;
+    
+    // Fix asset path mappings for web build
+    // Assets are at dist/VRM/* but code requests /renderer/assets/VRM/*
+    if (req.url.includes('/renderer/assets/VRM/')) {
+        filePath = filePath.replace('/renderer/assets/VRM/', '/VRM/');
+    }
+    // Assets are at dist/VRMA/* but code requests /renderer/assets/VRMA/*
+    else if (req.url.includes('/renderer/assets/VRMA/')) {
+        filePath = filePath.replace('/renderer/assets/VRMA/', '/VRMA/');
+    }
+    // Assets are at dist/loading.gif but code requests /renderer/assets/loading.gif
+    else if (req.url.includes('/renderer/assets/loading.gif')) {
+        filePath = filePath.replace('/renderer/assets/loading.gif', '/loading.gif');
+    }
+    
     if (filePath === './dist/') {
         filePath = './dist/index.html';
     }
