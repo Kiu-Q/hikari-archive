@@ -50,7 +50,7 @@
 >
 > ### ⚡ HELP NEEDED: Electron And Web App Build Setup
 >
-> Seeking contributors to configure the production Electron build process.
+> Seeking contributors to configure the production Electron and Web build process.
 >
 > ---
 >
