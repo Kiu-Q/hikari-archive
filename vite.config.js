@@ -32,7 +32,15 @@ export default defineConfig(({ mode }) => {
       outDir: isWeb ? '../dist' : 'dist',
       emptyOutDir: true,
       copyPublicDir: true,
-      assetsInlineLimit: 4096
+      assetsInlineLimit: 4096,
+      // Ensure assets are referenced correctly for GitHub Pages
+      rollupOptions: {
+        output: {
+          assetFileNames: 'assets/[name]-[hash][extname]',
+          chunkFileNames: 'assets/[name]-[hash].js',
+          entryFileNames: 'assets/[name]-[hash].js'
+        }
+      }
     },
     assetsInclude: ['**/*.vrm', '**/*.vrma', '**/*.gif'],
     server: {
