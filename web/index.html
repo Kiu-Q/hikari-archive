@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>VRM Viewer - Web App</title>
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0" />
+    
+    <!-- ============================================================
+         CSS STYLES
+         Web-specific responsive design
+    ============================================================ -->
+    <style>
+        /* Base styles */
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            overflow: hidden;
+            background: transparent;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Main settings panel (top-left) - responsive */
+        .controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            z-index: 100;
+            display: none;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            max-width: 300px;
+        }
+        .controls > div {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+        }
+        .controls label {
+            min-width: 80px;
+            font-weight: 500;
+            color: #e0e0e0;
+            font-size: 13px;
+        }
+        .status-message {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 8px 0;
+            font-size: 12px;
+            color: #ccc;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            margin-top: 8px;
+        }
+
+        /* Button styles */
+        .controls button {
+            flex: 1;
+            min-width: 70px;
+            padding: 8px 12px;
+            background: linear-gradient(145deg, #4CAF50, #2e8b57);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s ease, transform 0.1s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 13px;
+        }
+        .controls button:hover:not(:disabled) {
+            background: linear-gradient(145deg, #45a049, #228b22);
+            transform: translateY(-2px);
+        }
+        .controls button:active {
+            transform: translateY(0);
+        }
+        .controls button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        /* Dropdown styles */
+        .controls select {
+            padding: 8px 12px;
+            background: #1a1a1a !important;
+            color: #ffffff !important;
+            border: 1px solid #555 !important;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            min-width: 160px;
+            width: 100%;
+            appearance: auto !important;
+            -webkit-appearance: auto !important;
+            -moz-appearance: auto !important;
+        }
+        .controls select:hover {
+            background: #2a2a2a !important;
+            border-color: #777 !important;
+        }
+        .controls select:disabled {
+            background: #333 !important;
+            color: #ccc !important;
+            cursor: not-allowed;
+            opacity: 0.8;
+            border-color: #444 !important;
+        }
+        .controls select option {
+            background: #1a1a1a !important;
+            color: #ffffff !important;
+            padding: 8px;
+        }
+
+        /* Status display */
+        .status {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #ccc;
+            text-align: center;
+        }
+
+        /* Lip sync panel - responsive */
+        .settings-panel {
+            position: absolute;
+            bottom: 10px;
+            left: 100px;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 15px;
+            border-radius: 12px;
+            z-index: 100;
+            display: none;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            width: auto;
+            max-width: 90vw;
+            left: 10px;
+            right: 10px;
+        }
+        .settings-panel div {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+        }
+        .settings-panel label {
+            min-width: 60px;
+            font-weight: 500;
+            color: #e0e0e0;
+            font-size: 13px;
+        }
+        .settings-panel input {
+            flex: 1;
+            min-width: 120px;
+            padding: 10px 12px;
+            border: 1px solid #555;
+            border-radius: 6px;
+            background: #1a1a1a;
+            color: white;
+            font-size: 14px;
+            width: 100%;
+        }
+        .settings-panel input::placeholder {
+            color: #888;
+        }
+        .settings-panel input:focus {
+            outline: none;
+            border-color: #4CAF50;
+            background: #2a2a2a;
+        }
+        .settings-panel button {
+            padding: 8px 12px;
+            min-width: 50px;
+            background: linear-gradient(145deg, #4CAF50, #2e8b57);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+        .settings-panel button:hover:not(:disabled) {
+            background: linear-gradient(145deg, #45a049, #228b22);
+            transform: translateY(-2px);
+        }
+        .settings-panel button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Expressions section */
+        .facial-expressions {
+            margin-top: 15px;
+        }
+        .facial-expressions label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: #e0e0e0;
+        }
+        .expression-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .expr-btn {
+            padding: 6px 12px;
+            background: linear-gradient(145deg, #2196F3, #1976D2);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s ease;
+            min-width: 80px;
+        }
+        .expr-btn:hover:not(:disabled) {
+            background: linear-gradient(145deg, #1976D2, #1565C0);
+            transform: translateY(-2px);
+        }
+        .expr-btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .expr-btn.active {
+            background: linear-gradient(145deg, #FF9800, #F57C00);
+        }
+
+        /* Current word highlighting */
+        .current-word {
+            color: #4CAF50;
+            font-weight: bold;
+            text-decoration: underline;
+        }
+
+        /* Toggle buttons */
+        .toggle-btn {
+            position: fixed;
+            z-index: 200;
+            width: 60px;
+            height: 60px;
+            padding: 12px;
+            border-radius: 12px;
+            background: transparent;
+            color: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            opacity: 0;
+        }
+        .toggle-btn:hover {
+            background: linear-gradient(145deg, #4CAF50, #2e8b57);
+            color: white;
+            opacity: 0.5;
+            transform: translateY(-2px);
+        }
+        .toggle-btn:active {
+            transform: translateY(0);
+        }
+
+        /* Connection status indicator */
+        #connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: white;
+            z-index: 1000;
+            background: rgba(128, 128, 128, 0.8);
+            opacity: 0;
+            transition: opacity 1s ease;
+            pointer-events: none;
+        }
+
+        /* Glass overlay */
+        #glassOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 999;
+            background: rgba(0, 0, 0, 1);
+            pointer-events: none;
+            display: none;
+        }
+
+        /* Loading overlay */
+        #loadingOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10000;
+            background: rgba(0, 0, 0, 1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid #4CAF50;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .loading-text {
+            margin-top: 20px;
+            color: white;
+            font-size: 16px;
+        }
+
+        /* Mobile-specific adjustments */
+        @media (max-width: 768px) {
+            .controls {
+                padding: 15px;
+                max-width: 90vw;
+            }
+            .controls label {
+                min-width: auto;
+            }
+            .controls select {
+                min-width: auto;
+            }
+            .settings-panel {
+                padding: 15px;
+                left: 10px;
+                right: 10px;
+            }
+            .expression-buttons {
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+            .expr-btn {
+                min-width: 60px;
+                font-size: 12px;
+                padding: 6px 10px;
+            }
+        }
+        @media (max-width: 480px) {
+            .controls > div {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+            }
+            .controls label {
+                text-align: left;
+            }
+            .settings-panel input {
+                min-width: auto;
+            }
+            .expression-buttons {
+                flex-direction: column;
+            }
+            .expr-btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Loading...</div>
+    </div>
+
+    <!-- Glass Overlay (can be toggled) -->
+    <div id="glassOverlay"></div>
+
+    <!-- Connection Status -->
+    <div id="connection-status">Connecting...</div>
+
+    <!-- Main Settings Panel (can be toggled with ⚙️ button) -->
+    <div class="controls" id="settingsPanel">
+        <div>
+            <label>WebSocket:</label>
+            <input type="text" id="websocketUrlInput" placeholder="ws://localhost:18789" />
+            <button id="connectWsBtn">Connect</button>
+        </div>
+        <div>
+            <label>Token:</label>
+            <input type="password" id="tokenInput" placeholder="Enter token..." />
+            <button id="saveTokenBtn">Save</button>
+        </div>
+        <div>
+            <label>Animation:</label>
+            <select id="animationSelect" disabled>
+                <option value="">Select Animation</option>
+            </select>
+        </div>
+        <div>
+            <label>Expression:</label>
+            <select id="expressionSelect" disabled>
+                <option value="">Select Expression</option>
+                <option value="neutral">Neutral</option>
+                <option value="happy">Happy</option>
+                <option value="sad">Sad</option>
+                <option value="angry">Angry</option>
+                <option value="surprised">Surprised</option>
+                <option value="blink">Blink</option>
+            </select>
+        </div>
+        <div>
+            <label>Speed:</label>
+            <input type="range" id="speakingSpeedSlider" min="0.5" max="2" step="0.1" value="1" />
+            <span id="speakingSpeedValue">1.0x</span>
+        </div>
+        <div>
+            <button id="resetCameraBtn">Reset Camera</button>
+        </div>
+        
+        <!-- Status -->
+        <div class="status" id="status">Loading VRM model...</div>
+    </div>
+
+    <!-- Lip Sync Panel -->
+    <div class="settings-panel" id="lipSyncPanel">
+        <div>
+            <input type="text" id="textInputPanel" placeholder="Message" />
+            <button id="speakBtnPanel" disabled>➤</button>
+        </div>
+    </div>
+
+    <!-- Toggle Buttons -->
+    <button class="toggle-btn" id="toggleSettingsBtn" title="Settings">⚙️</button>
+    <button class="toggle-btn" id="toggleHistoryBtn" title="History">💬</button>
+
+    <!-- JavaScript -->
+    <script type="module" src="./app.js"></script>
+</body>
+</html>
