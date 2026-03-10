@@ -21,8 +21,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Kiu-Q/hikari-archive/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Kiu-Q/hikari-archive.svg?style=flat&colorA=080f12&colorB=1fa669"></a>
-  <a href="https://github.com/Kiu-Q/hikari-archive"><img src="https://img.shields.io/github/stars/Kiu-Q/hikari-archive.svg?style=flat&colorA=080f12&colorB=1fa669"></a>
+  <a href="https://github.com/Kiu-Q/hikari-archive/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Kiu-Q/hikari.svg?style=flat&colorA=080f12&colorB=1fa669"></a>
+  <a href="https://github.com/Kiu-Q/hikari-archive"><img src="https://img.shields.io/github/stars/Kiu-Q/hikari.svg?style=flat&colorA=080f12&colorB=1fa669"></a>
 </p>
 
 <p align="center">
@@ -48,9 +48,9 @@
 > [!WARNING]
 > **This project is heavily vibe-coded**
 >
-> ### ⚡ HELP NEEDED: Electron And Web App Build Setup
+> ### ⚡ HELP NEEDED: Electron App Build Setup
 >
-> Seeking contributors to configure the production Electron and Web build process.
+> Seeking contributors to configure the production Electron build process.
 >
 > ---
 >

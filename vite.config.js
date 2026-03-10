@@ -1,19 +1,37 @@
 import { defineConfig, loadEnv } from 'vite';
+import electron from 'vite-plugin-electron';
+import electronRenderer from 'vite-plugin-electron-renderer';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd());
   
+  const isWeb = mode === 'web';
+  
   return {
+    plugins: [
+      ...(isWeb ? [] : [
+        electron([
+          {
+            entry: 'electron/main.js',
+            vite: {
+              build: {
+                outDir: 'dist-electron',
+                rollupOptions: {
+                  external: ['electron']
+                }
+              }
+            }
+          }
+        ]),
+        electronRenderer()
+      ])
+    ],
     root: '.',
-    base: mode === 'web' ? './' : '/',
     build: {
-      outDir: mode === 'web' ? 'dist' : 'renderer/dist',
+      outDir: mode === 'web' ? 'dist' : 'dist',
       emptyOutDir: true,
-      rollupOptions: {
-        input: mode === 'web' ? ['index.html', 'renderer/index-web.html'] : 'renderer/index.html',
-      },
     },
-    publicDir: 'renderer/assets',
+    publicDir: 'assets',
     server: {
       port: mode === 'web' ? 8081 : 5174,
       open: false,
@@ -22,9 +40,7 @@ export default defineConfig(({ mode }) => {
     },
     preview: {
       port: 3000,
-      host: '0.0.0.0',
-      open: false,
-      base: './'
+      host: '0.0.0.0'
     },
     define: {
       'import.meta.env.VITE_MODE': JSON.stringify(mode),

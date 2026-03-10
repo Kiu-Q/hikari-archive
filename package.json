@@ -8,17 +8,16 @@
     "forge": "./forge.config.cjs"
   },
   "scripts": {
-    "dev": "npm run dev:electron",
-    "dev:electron": "concurrently \"npm run start:asset-server\" \"vite --mode electron\" \"npx electron .\"",
-    "dev:web": "concurrently \"npm run start:asset-server\" \"vite --mode web --open /renderer/index-web.html\"",
-    "build": "npm run build:electron && electron-forge make",
+    "dev": "vite --mode electron",
+    "dev:electron": "vite --mode electron",
+    "dev:web": "vite --mode web --open /web/index.html",
+    "build": "vite build --mode electron",
     "build:electron": "vite build --mode electron",
     "build:web": "vite build --mode web",
-    "start:electron": "npm run build:electron && npx electron .",
-    "start:web": "node web-server.cjs",
-    "start:asset-server": "node asset-server.js",
-    "package": "electron-forge package",
-    "make": "electron-forge make"
+    "start": "npm run build && npx electron .",
+    "start:electron": "npm run build && npx electron .",
+    "start:web": "vite preview --port 3000",
+    "preview": "vite preview --port 3000"
   },
   "keywords": [],
   "author": "",
