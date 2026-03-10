@@ -39,11 +39,11 @@
             max-height: 900px;
         }
 
-        /* Main settings panel (top-left) - matching web version */
+        /* Main settings panel (top-left) - moved further right to avoid button overlap */
         .controls {
             position: absolute;
             top: 10px;
-            left: 10px;
+            left: 100px;
             background: rgba(0, 0, 0, 0.6);
             color: white;
             padding: 20px;
@@ -52,7 +52,6 @@
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 15px;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
         }
@@ -145,7 +144,7 @@
             text-align: center;
         }
 
-        /* Lip sync panel (bottom-left, moved further right) */
+        /* Lip sync panel (bottom-left, moved left) */
         .settings-panel {
             position: absolute;
             bottom: 10px;

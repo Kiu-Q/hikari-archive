@@ -20,10 +20,10 @@
   [<a href="https://github.com/Kiu-Q/hikari-archive">View on GitHub</a>] [<a href="https://github.com/Kiu-Q/hikari-archive/issues">Report Issues</a>]
 </p>
 
-<p align="center">
-  <a href="https://github.com/Kiu-Q/hikari-archive/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Kiu-Q/hikari.svg?style=flat&colorA=080f12&colorB=1fa669"></a>
-  <a href="https://github.com/Kiu-Q/hikari-archive"><img src="https://img.shields.io/github/stars/Kiu-Q/hikari.svg?style=flat&colorA=080f12&colorB=1fa669"></a>
-</p>
+  <p align="center">
+    <a href="https://github.com/Kiu-Q/hikari-archive/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Kiu-Q/hikari-archive.svg?style=flat&colorA=080f12&colorB=1fa669"></a>
+    <a href="https://github.com/Kiu-Q/hikari-archive"><img src="https://img.shields.io/github/stars/Kiu-Q/hikari-archive.svg?style=flat&colorA=080f12&colorB=1fa669"></a>
+  </p>
 
 <p align="center">
   <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-47848F?logo=electron&logoColor=white&labelColor=47848F" alt="Electron"></a>
@@ -175,8 +175,11 @@ npm run build:electron
 # Build Web app
 npm run build:web
 
-# Create distributables
-npm run make
+# Run built Electron app
+npm run start:electron
+
+# Preview built Web app
+npm run preview
 ```
 
 ## Prerequisites
@@ -200,7 +203,7 @@ npm run make
 
 ```bash
 git clone https://github.com/Kiu-Q/hikari-archive.git
-cd hikari
+cd hikari-archive
 ```
 
 ### Step 2: Install Dependencies
@@ -275,7 +278,7 @@ npm run dev:web
 
 Open browser and navigate to:
 ```
-http://YOUR_TAILSCALE_IP:3000/renderer/index-web.html
+http://YOUR_TAILSCALE_IP:8081/index.html
 ```
 
 ## Usage
@@ -504,29 +507,22 @@ The VRM character responds to clicks/touches on different body parts:
 ## Project Structure
 
 ```
-hikari/
+hikari-archive/
 ├── electron/              # Electron-specific files
 │   ├── main.js          # Main process (window creation, IPC)
-│   └── preload.js       # Bridge between main and renderer
-├── src/                 # Core application logic
-│   ├── core.js          # Three.js, VRM, animations, lip sync (SHARED)
-│   ├── websocket.js     # WebSocket client (SHARED)
-│   ├── main.js          # Electron entry point
-│   ├── web.js           # Web entry point
-│   └── conversation-history.js  # Conversation history UI
-├── renderer/            # UI and assets
+│   ├── preload.js       # Bridge between main and renderer
+│   ├── app.js           # Electron app entry point
 │   ├── index.html       # Electron HTML
-│   ├── index-web.html   # Web HTML
-│   └── assets/
-│       ├── VRM/         # VRM model files
-│       │   └── sample.vrm
-│       └── VRMA/        # VRMA animation files
-│           ├── idle_loop.vrma
-│           ├── walk.vrma
-│           └── ...
-├── package.json         # Dependencies and scripts
-├── vite.config.js      # Vite configuration
-└── forge.config.cjs    # Electron Forge configuration
+│   └── assets/          # Electron assets (VRM, VRMA, loading.gif)
+├── web/                  # Web version files
+│   ├── index.html       # Web HTML
+│   ├── app.js           # Web app entry point
+│   └── assets/          # Web assets (VRM, VRMA, loading.gif)
+├── dist/                 # Web build output
+├── dist-electron/        # Electron build output
+├── index.html            # Root index file
+├── package.json          # Dependencies and scripts
+└── vite.config.js       # Vite configuration
 ```
 
 ## Troubleshooting
@@ -560,22 +556,19 @@ hikari/
 
 **Solutions:**
 
-1. **Check asset server:**
-   ```bash
-   npm run start:asset-server
-   ```
+1. **Verify file paths:** Check `electron/assets/VRM/` or `web/assets/VRM/` directory
 
-2. **Verify file paths:** Check `renderer/assets/VRM/` directory
+2. **Check browser console:** Look for CORS errors
 
-3. **Check browser console:** Look for CORS errors
+3. **Verify VRM file format:** Ensure VRM 1.0 format
 
 ### Issue: Animations Not Playing
 
 **Solutions:**
 
-1. **Check VRMA files:** Verify files in `renderer/assets/VRMA/`
+1. **Check VRMA files:** Verify files in `electron/assets/VRMA/` or `web/assets/VRMA/`
 
-2. **Check asset server:** Test accessing VRMA files in browser
+2. **Test file access:** Try accessing VRMA files directly in browser
 
 3. **Verify VRM compatibility:** Ensure VRM model supports animations
 
@@ -613,45 +606,22 @@ hikari/
 
 ### Custom WebSocket URL
 
-**Electron Mode:**
-- Edit settings panel in app
-- Or modify `src/main.js` default URL
+The WebSocket URL can be configured via environment variables or in the settings panel within the app.
 
-**Web Mode:**
-- Edit settings panel in app
-- Or modify `src/web.js` default URL
-
-### Custom Asset Server Port
-
-Change asset server port in `asset-server.js`:
-
-```javascript
-const PORT = 8080; // Change from 3000
-```
-
-### Custom Animations
-
-Add your own VRMA animations:
-
-1. **Place VRMA files:**
-   ```bash
-   cp your-animation.vrma renderer/assets/VRMA/
-   ```
-
-2. **Update animation list:**
-   - Edit `src/core.js`
-   - Add to `VRMA_ANIMATION_URLS` array
-   - Restart app
-
-### Customization
-
-#### Custom VRM Model
+### Custom VRM Model
 
 Replace the default VRM model:
 
+**For Electron:**
 1. **Place VRM file:**
    ```bash
-   cp your-model.vrm renderer/assets/VRM/sample.vrm
+   cp your-model.vrm electron/assets/VRM/sample.vrm
+   ```
+
+**For Web:**
+1. **Place VRM file:**
+   ```bash
+   cp your-model.vrm web/assets/VRM/sample.vrm
    ```
 
 2. **Verify compatibility:**
@@ -659,13 +629,38 @@ Replace the default VRM model:
    - Required bone structure
    - Morph targets for expressions
 
-#### Custom Loading Screen
+### Custom Animations
+
+Add your own VRMA animations:
+
+**For Electron:**
+1. **Place VRMA files:**
+   ```bash
+   cp your-animation.vrma electron/assets/VRMA/
+   ```
+
+**For Web:**
+1. **Place VRMA files:**
+   ```bash
+   cp your-animation.vrma web/assets/VRMA/
+   ```
+
+2. **Restart the app** to load new animations
+
+### Custom Loading Screen
 
 Replace the default loading animation:
 
+**For Electron:**
 1. **Place your loading GIF:**
    ```bash
-   cp your-loading.gif renderer/assets/loading.gif
+   cp your-loading.gif electron/assets/loading.gif
+   ```
+
+**For Web:**
+1. **Place your loading GIF:**
+   ```bash
+   cp your-loading.gif web/assets/loading.gif
    ```
 
 2. **Recommended specifications:**
@@ -678,7 +673,7 @@ Replace the default loading animation:
 
 For VTuber use cases, enable transparent window:
 
-**1. Edit Electron config (`electron/main.js`):**
+**Edit Electron config (`electron/main.js`):**
 ```javascript
 const win = new BrowserWindow({
   transparent: true,
@@ -687,11 +682,7 @@ const win = new BrowserWindow({
 });
 ```
 
-**2. Update renderer (`src/core.js`):**
-```javascript
-const renderer = new THREE.WebGLRenderer({ alpha: true });
-renderer.setClearColor(0x000000, 0); // Transparent background
-```
+Note: You'll also need to configure the WebGL renderer to support transparency in the app code.
 
 ## Security Best Practices
 

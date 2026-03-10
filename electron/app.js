@@ -580,10 +580,14 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
     function hideMessagingPanel() {
         if (lipSyncPanel) {
             lipSyncPanel.style.display = 'none';
-            if (historyPanel) {
-                historyPanel.style.display = 'none';
-            }
-            console.log('[messaging] Panel hidden');
+            console.log('[messaging] Messaging panel hidden');
+        }
+        
+        // Get history panel dynamically from DOM (it's created by HistoryModule)
+        const historyPanelElement = document.getElementById('history-panel');
+        if (historyPanelElement) {
+            historyPanelElement.style.display = 'none';
+            console.log('[messaging] History panel hidden');
         }
     }
 
@@ -1788,7 +1792,7 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
     // ============================================================
     let loadingGif = null;
     let loadingStartTime = 0;
-    const MIN_LOADING_TIME = 4000;
+    const MIN_LOADING_TIME = 2000;
 
     function showLoadingGif() {
         if (loadingGif && loadingGif.parentElement) {
@@ -1813,7 +1817,7 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
         
         const img = new Image();
         img.onload = () => {
-            loadingGif.style.background = `url(loadingGifUrl}') no-repeat center center`;
+            loadingGif.style.background = `url('${loadingGifUrl}') no-repeat center center`;
             loadingGif.style.backgroundSize = 'cover';
         };
         img.onerror = () => {
@@ -2320,16 +2324,16 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
                     await loadIdleLoop();
                 }
             } else if (vrmaUrl.includes('sit.vrma') || vrmaUrl.includes('sitWave.vrma')) {
-                if (window.hideAllPanels) {
-                    window.hideAllPanels();
+                // Hide both messaging and history panels
+                if (window.hideMessagingPanel) {
+                    window.hideMessagingPanel();
                 }
-                
-                if (window.hideHistoryPanel) {
-                    window.hideHistoryPanel();
+                if (HistoryModule.hideHistoryPanel) {
+                    HistoryModule.hideHistoryPanel();
                 }
                 
                 isSitAnimationActive = true;
-                console.log('[sit] Sit animation started, panels hidden, restoration prevented');
+                console.log('[sit] Sit animation started, both panels hidden, restoration prevented');
                 
                 const action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat });
                 if (action) {

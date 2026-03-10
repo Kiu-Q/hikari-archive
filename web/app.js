@@ -3431,6 +3431,7 @@ export function initHistoryPanel() {
     historyPanel.style.padding = '20px';
     historyPanel.style.borderRadius = '12px';
     historyPanel.style.zIndex = '100';
+    historyPanel.style.backdropFilter = 'blur(10px)';
     historyPanel.style.flexDirection = 'column';
     historyPanel.style.gap = '12px';
     historyPanel.style.overflow = 'hidden';

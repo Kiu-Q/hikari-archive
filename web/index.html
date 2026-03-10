@@ -12,7 +12,7 @@
             margin: 0;
             font-family: 'Inter', sans-serif;
             overflow: hidden;
-            background: transparent;
+            background: #1a1a1a;
         }
         canvas {
             display: block;
@@ -26,7 +26,7 @@
             top: 10px;
             left: 100px;
             right: 10px;
-            background: rgba(0, 0, 0, 0.9);
+            background: rgba(0, 0, 0, 0.6);
             color: white;
             padding: 20px;
             border-radius: 12px;
@@ -137,7 +137,7 @@
         .settings-panel {
             position: absolute;
             bottom: 10px;
-            left: 10px;
+            left: 100px;
             background: rgba(0, 0, 0, 0.6);
             color: white;
             padding: 20px;
@@ -148,38 +148,26 @@
             gap: 12px;
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
+            min-width: 300px;
             max-width: 95vw;
-            right: 10px;
         }
         .settings-panel div {
             display: flex;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
             align-items: center;
             gap: 10px;
-        }
-        .settings-panel label {
-            min-width: 90px;
-            font-weight: bold;
-            color: #e0e0e0;
+            width: 100%;
         }
         .settings-panel input {
             flex: 1;
-            min-width: 200px;
-            max-width: 70vw;
             padding: 8px 12px;
             border: 1px solid #555;
             border-radius: 6px;
             background: rgba(255, 255, 255, 0.1);
             color: white;
             font-size: 14px;
-        }
-        .settings-panel input:focus {
-            outline: none;
-            border-color: #4CAF50;
-            background: rgba(255, 255, 255, 0.2);
-        }
-        .settings-panel input::placeholder {
-            color: #aaa;
+            width: 100%;
+            box-sizing: border-box;
         }
         .settings-panel button {
             padding: 8px 12px;
@@ -191,7 +179,15 @@
             cursor: pointer;
             font-size: 16px;
             transition: all 0.3s ease;
-            flex: 0;
+            flex-shrink: 0;
+        }
+        .settings-panel input:focus {
+            outline: none;
+            border-color: #4CAF50;
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .settings-panel input::placeholder {
+            color: #aaa;
         }
         .settings-panel button:hover:not(:disabled) {
             background: linear-gradient(145deg, #45a049, #228b22);
@@ -364,7 +360,7 @@
             top: 50%;
             right: 20px;
             transform: translateY(-50%);
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.6);
             color: white;
             padding: 10px 15px;
             border-radius: 8px;
@@ -444,6 +440,6 @@
     <button class="toggle-btn" id="toggleSettingsBtn" style="top: 10px; left: 10px;">⚙️</button>
     <button class="toggle-btn" id="toggleLipSyncBtn" style="bottom: 10px; left: 10px;">💬</button>
 
-    <script type="module" src="/web/app.js"></script>
+    <script type="module" src="./app.js"></script>
 </body>
 </html>
