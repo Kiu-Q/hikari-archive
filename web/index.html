@@ -2,64 +2,51 @@
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>VRM Viewer - Web App</title>
+    <title>VRM Viewer - Web/Mobile App</title>
     <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
-    <meta http-equiv="Pragma" content="no-cache" />
-    <meta http-equiv="Expires" content="0" />
     <meta name="viewport"
-        content="width=device-width, initial-scale=1.0" />
+        content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     
-    <!-- ============================================================
-         CSS STYLES
-         Web-specific responsive design
-    ============================================================ -->
     <style>
-        /* Base styles */
-        * {
-            box-sizing: border-box;
-        }
         body {
             margin: 0;
-            padding: 0;
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-family: 'Inter', sans-serif;
             overflow: hidden;
             background: transparent;
         }
-        html, body {
-            width: 100%;
-            height: 100%;
-        }
         canvas {
             display: block;
-            width: 100%;
-            height: 100%;
+            width: 100vw;
+            height: 100vh;
         }
 
-        /* Main settings panel (top-left) - responsive */
+        /* Main settings panel (top-left) - responsive design */
         .controls {
             position: absolute;
             top: 10px;
-            left: 10px;
-            background: rgba(0, 0, 0, 0.6);
+            left: 100px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.9);
             color: white;
             padding: 20px;
             border-radius: 12px;
             z-index: 100;
             display: none;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
-            max-width: 300px;
+            max-width: 95vw;
         }
         .controls > div {
             display: flex;
             flex-wrap: wrap;
             align-items: center;
             gap: 10px;
-            width: 100%;
         }
         .controls label {
-            min-width: 80px;
+            min-width: 90px;
             font-weight: 500;
             color: #e0e0e0;
             font-size: 13px;
@@ -74,11 +61,11 @@
             margin-top: 8px;
         }
 
-        /* Button styles */
+        /* Button styles - green buttons */
         .controls button {
             flex: 1;
-            min-width: 70px;
-            padding: 8px 12px;
+            min-width: 80px;
+            padding: 10px 15px;
             background: linear-gradient(145deg, #4CAF50, #2e8b57);
             color: white;
             border: none;
@@ -88,7 +75,6 @@
             transition: background 0.3s ease, transform 0.1s ease;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            font-size: 13px;
         }
         .controls button:hover:not(:disabled) {
             background: linear-gradient(145deg, #45a049, #228b22);
@@ -108,31 +94,35 @@
             padding: 8px 12px;
             background: #1a1a1a !important;
             color: #ffffff !important;
-            border: 1px solid #555 !important;
+            border: 1px solid #888 !important;
             border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
-            min-width: 160px;
-            width: 100%;
+            min-width: 200px;
+            max-width: 90vw;
             appearance: auto !important;
             -webkit-appearance: auto !important;
             -moz-appearance: auto !important;
         }
         .controls select:hover {
             background: #2a2a2a !important;
-            border-color: #777 !important;
+            border-color: #aaa !important;
         }
         .controls select:disabled {
-            background: #333 !important;
+            background: #444 !important;
             color: #ccc !important;
             cursor: not-allowed;
             opacity: 0.8;
-            border-color: #444 !important;
+            border-color: #555 !important;
         }
         .controls select option {
-            background: #1a1a1a !important;
+            background: #2a2a2a !important;
             color: #ffffff !important;
             padding: 8px;
+        }
+        .controls select option:checked {
+            background: #4CAF50 !important;
+            font-weight: bold;
         }
 
         /* Status display */
@@ -143,23 +133,22 @@
             text-align: center;
         }
 
-        /* Lip sync panel - responsive */
+        /* Lip sync panel - bottom-left, mobile-responsive */
         .settings-panel {
             position: absolute;
             bottom: 10px;
-            left: 100px;
+            left: 10px;
             background: rgba(0, 0, 0, 0.6);
             color: white;
-            padding: 15px;
+            padding: 20px;
             border-radius: 12px;
             z-index: 100;
-            display: none;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
-            width: auto;
-            max-width: 90vw;
-            left: 10px;
+            max-width: 95vw;
             right: 10px;
         }
         .settings-panel div {
@@ -167,43 +156,42 @@
             flex-wrap: wrap;
             align-items: center;
             gap: 10px;
-            width: 100%;
         }
         .settings-panel label {
-            min-width: 60px;
-            font-weight: 500;
+            min-width: 90px;
+            font-weight: bold;
             color: #e0e0e0;
-            font-size: 13px;
         }
         .settings-panel input {
             flex: 1;
-            min-width: 120px;
-            padding: 10px 12px;
+            min-width: 200px;
+            max-width: 70vw;
+            padding: 8px 12px;
             border: 1px solid #555;
             border-radius: 6px;
-            background: #1a1a1a;
+            background: rgba(255, 255, 255, 0.1);
             color: white;
             font-size: 14px;
-            width: 100%;
-        }
-        .settings-panel input::placeholder {
-            color: #888;
         }
         .settings-panel input:focus {
             outline: none;
             border-color: #4CAF50;
-            background: #2a2a2a;
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .settings-panel input::placeholder {
+            color: #aaa;
         }
         .settings-panel button {
             padding: 8px 12px;
-            min-width: 50px;
+            min-width: 60px;
             background: linear-gradient(145deg, #4CAF50, #2e8b57);
             color: white;
             border: none;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 14px;
+            font-size: 16px;
             transition: all 0.3s ease;
+            flex: 0;
         }
         .settings-panel button:hover:not(:disabled) {
             background: linear-gradient(145deg, #45a049, #228b22);
@@ -214,8 +202,11 @@
             cursor: not-allowed;
             transform: none;
         }
+        #speakBtnPanel {
+            opacity: 0.5;
+        }
 
-        /* Expressions section */
+        /* Facial expressions section */
         .facial-expressions {
             margin-top: 15px;
         }
@@ -223,7 +214,6 @@
             display: block;
             margin-bottom: 8px;
             font-size: 14px;
-            color: #e0e0e0;
         }
         .expression-buttons {
             display: flex;
@@ -237,9 +227,8 @@
             border: none;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 13px;
+            font-size: 12px;
             transition: all 0.3s ease;
-            min-width: 80px;
         }
         .expr-btn:hover:not(:disabled) {
             background: linear-gradient(145deg, #1976D2, #1565C0);
@@ -254,21 +243,12 @@
             background: linear-gradient(145deg, #FF9800, #F57C00);
         }
 
-        /* Current word highlighting */
-        .current-word {
-            color: #4CAF50;
-            font-weight: bold;
-            text-decoration: underline;
-        }
-
-        /* Toggle buttons */
+        /* Toggle button styles - invisible until hovered */
         .toggle-btn {
-            position: fixed;
-            z-index: 200;
-            width: 60px;
-            height: 60px;
-            padding: 12px;
-            border-radius: 12px;
+            position: absolute;
+            width: 75px;
+            height: 75px;
+            border-radius: 8px;
             background: transparent;
             color: transparent;
             border: none;
@@ -278,155 +258,148 @@
             align-items: center;
             justify-content: center;
             transition: all 0.3s ease;
+            z-index: 200;
             opacity: 0;
+            -webkit-app-region: no-drag;
         }
         .toggle-btn:hover {
             background: linear-gradient(145deg, #4CAF50, #2e8b57);
             color: white;
-            opacity: 0.5;
+            opacity: 0.4;
             transform: translateY(-2px);
         }
         .toggle-btn:active {
             transform: translateY(0);
         }
-
-        /* Connection status indicator */
-        #connection-status {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            font-size: 12px;
-            font-weight: 600;
-            color: white;
-            z-index: 1000;
-            background: rgba(128, 128, 128, 0.8);
-            opacity: 0;
-            transition: opacity 1s ease;
-            pointer-events: none;
+        .controls {
+            opacity: 0.5;
+        }
+        .settings-panel {
+            opacity: 0.5;
+        }
+        .toggle-btn:hover + .controls,
+        .toggle-btn:hover + .settings-panel {
+            opacity: 1;
         }
 
-        /* Glass overlay */
-        #glassOverlay {
-            position: fixed;
-            top: 0;
-            left: 0;
+        /* Light control sliders */
+        .light-control {
+            margin-top: 8px;
+        }
+        .light-control label {
+            display: block;
+            font-size: 12px;
+            color: #e0e0e0;
+            margin-bottom: 4px;
+        }
+        .light-control input[type="range"] {
             width: 100%;
-            height: 100%;
-            z-index: 999;
-            background: rgba(0, 0, 0, 1);
-            pointer-events: none;
+            max-width: 70vw;
+            cursor: pointer;
+        }
+
+        /* Glass overlay - covers everything */
+        #glassOverlay {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            z-index: 9999 !important;
+            background: rgba(0, 0, 0, 1) !important;
+            backdrop-filter: blur(15px) !important;
+            -webkit-backdrop-filter: blur(15px) !important;
             display: none;
         }
 
-        /* Loading overlay */
-        #loadingOverlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 10000;
-            background: rgba(0, 0, 0, 1);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
+        /* Loading info - appears on top of glass overlay */
+        #loadingInfo {
+            position: fixed !important;
+            top: 50% !important;
+            left: 50% !important;
+            transform: translate(-50%, -50%) !important;
+            z-index: 10000 !important;
+            text-align: center;
             pointer-events: none;
-        }
-        .loading-spinner {
-            width: 50px;
-            height: 50px;
-            border: 5px solid #4CAF50;
-            border-top-color: transparent;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            display: none;
         }
         .loading-text {
-            margin-top: 20px;
-            color: white;
-            font-size: 16px;
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #2e8b57;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+        }
+        .loading-percentage {
+            font-size: 48px;
+            font-weight: bold;
+            color: #4CAF50;
+            margin-bottom: 20px;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+        }
+        .loading-bar {
+            width: 300px;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 0 auto;
+        }
+        .loading-progress {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #2e8b57);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
         }
 
-        /* Mobile-specific adjustments */
-        @media (max-width: 768px) {
-            .controls {
-                padding: 15px;
-                max-width: 90vw;
-            }
-            .controls label {
-                min-width: auto;
-            }
-            .controls select {
-                min-width: auto;
-            }
-            .settings-panel {
-                padding: 15px;
-                left: 10px;
-                right: 10px;
-            }
-            .expression-buttons {
-                flex-direction: row;
-                flex-wrap: wrap;
-            }
-            .expr-btn {
-                min-width: 60px;
-                font-size: 12px;
-                padding: 6px 10px;
-            }
+        /* Hide drag elements for web */
+        .drag-btn-wrapper {
+            display: none;
         }
-        @media (max-width: 480px) {
-            .controls > div {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 8px;
-            }
-            .controls label {
-                text-align: left;
-            }
-            .settings-panel input {
-                min-width: auto;
-            }
-            .expression-buttons {
-                flex-direction: column;
-            }
-            .expr-btn {
-                width: 100%;
-            }
+
+        /* Camera zoom on mobile tap */
+        #camera-zoom-indicator {
+            position: fixed;
+            top: 50%;
+            right: 20px;
+            transform: translateY(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            z-index: 100;
+            display: none;
+            font-size: 14px;
+            pointer-events: none;
         }
     </style>
 </head>
-
 <body>
-    <!-- Loading Overlay -->
-    <div id="loadingOverlay">
-        <div class="loading-spinner"></div>
-        <div class="loading-text">Loading...</div>
-    </div>
-
-    <!-- Glass Overlay (can be toggled) -->
+    <!-- Glass Overlay for Loading State -->
     <div id="glassOverlay"></div>
-
-    <!-- Connection Status -->
-    <div id="connection-status">Connecting...</div>
-
+    
+    <!-- Loading GIF is created dynamically in JavaScript -->
+    
     <!-- Main Settings Panel (can be toggled with ⚙️ button) -->
-    <div class="controls" id="settingsPanel">
+    <div class="controls" id="settingsPanel" style="display: none;">
+        <!-- Column 1 -->
         <div>
-            <label>WebSocket:</label>
-            <input type="text" id="websocketUrlInput" placeholder="ws://localhost:18789" />
-            <button id="connectWsBtn">Connect</button>
+            <label>WebSocket URL:</label>
+            <input type="text" id="websocketUrlInput" 
+                placeholder="ws://localhost:18789" 
+                style="flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
+            <button id="connectWsBtn" style="min-width: 80px;">Connect</button>
         </div>
         <div>
-            <label>Token:</label>
-            <input type="password" id="tokenInput" placeholder="Enter token..." />
-            <button id="saveTokenBtn">Save</button>
+            <label>OpenClaw Token:</label>
+            <input type="password" id="tokenInput" 
+                placeholder="Enter token..." 
+                style="flex: 1; min-width: 200px; max-width: 90vw; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
+            <button id="saveTokenBtn" style="min-width: 80px;">Save</button>
         </div>
+        
+        <!-- Column 2 -->
         <div>
             <label>Animation:</label>
             <select id="animationSelect" disabled>
@@ -445,32 +418,32 @@
                 <option value="blink">Blink</option>
             </select>
         </div>
-        <div>
-            <label>Speed:</label>
-            <input type="range" id="speakingSpeedSlider" min="0.5" max="2" step="0.1" value="1" />
-            <span id="speakingSpeedValue">1.0x</span>
+        <div class="light-control">
+            <label>Speaking Speed: <span id="speakingSpeedValue">1.0x</span></label>
+            <input type="range" id="speakingSpeedSlider" min="0.5" max="2.0" step="0.1" value="1" style="flex: 1; max-width: 70vw;" />
         </div>
         <div>
             <button id="resetCameraBtn">Reset Camera</button>
         </div>
         
-        <!-- Status -->
-        <div class="status" id="status">Loading VRM model...</div>
+        <!-- Status message (full width) -->
+        <div class="status-message" id="status">Loading VRM model...</div>
     </div>
-
-    <!-- Lip Sync Panel -->
-    <div class="settings-panel" id="lipSyncPanel">
+    
+    <!-- Lip Sync Panel (bottom-left, can be toggled with 💬 button) -->
+    <div class="settings-panel" id="lipSyncPanel" style="display: none;">
         <div>
-            <input type="text" id="textInputPanel" placeholder="Message" />
+            <input type="text" id="textInputPanel"
+                placeholder="Message" 
+                style="flex: 1; min-width: 200px; max-width: 70vw; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
             <button id="speakBtnPanel" disabled>➤</button>
         </div>
     </div>
 
-    <!-- Toggle Buttons -->
-    <button class="toggle-btn" id="toggleSettingsBtn" title="Settings">⚙️</button>
-    <button class="toggle-btn" id="toggleHistoryBtn" title="History">💬</button>
+    <!-- Toggle Buttons (⚙️ and 💬) -->
+    <button class="toggle-btn" id="toggleSettingsBtn" style="top: 10px; left: 10px;">⚙️</button>
+    <button class="toggle-btn" id="toggleLipSyncBtn" style="bottom: 10px; left: 10px;">💬</button>
 
-    <!-- JavaScript -->
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="/web/app.js"></script>
 </body>
 </html>

@@ -514,7 +514,7 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
     // ============================================================
     // ASSET PATHS
     // ============================================================
-    const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || '../assets/';
+    const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
     const VRM_MODEL_URL = `${ASSET_BASE_URL}VRM/sample.vrm`;
     const VRMA_ANIMATION_URLS = [
         `${ASSET_BASE_URL}VRMA/idle_loop.vrma`,
@@ -1813,11 +1813,11 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
         
         const img = new Image();
         img.onload = () => {
-            loadingGif.style.background = `url('${loadingGifUrl}') no-repeat center center`;
+            loadingGif.style.background = `url(loadingGifUrl}') no-repeat center center`;
             loadingGif.style.backgroundSize = 'cover';
         };
         img.onerror = () => {
-            loadingGif.style.background = "url('/loading.gif') no-repeat center center";
+            loadingGif.style.background = `url('${loadingGifUrl}') no-repeat center center`;
             loadingGif.style.backgroundSize = 'cover';
         };
         img.src = loadingGifUrl;
@@ -2872,7 +2872,7 @@ const WebSocketModule = (() => {
         console.log('[ws] Agent command active - idle loop prevented');
       }
       
-      const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || '../assets/';
+      const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
       
       if (command.animation && command.animation.timing === 'before') {
         console.log('[ws] Playing animation BEFORE speaking:', command.animation.file);
@@ -3064,7 +3064,7 @@ const WebSocketModule = (() => {
     function handleAnimateCommand(data) {
       console.log('[ws] Animate command:', data.animation);
       
-      const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || '../assets/';
+      const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
       
       if (data.animation && window.startSmoothTransition) {
         sendStatus('animating', { animation: data.animation });

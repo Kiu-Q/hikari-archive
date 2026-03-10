@@ -32,7 +32,7 @@ function createWindow() {
   // Load the app
   if (isDev) {
     // In development, load from Vite dev server
-    mainWindow.loadURL('http://localhost:5173/renderer/index.html');
+    mainWindow.loadURL('http://localhost:5174/electron/index.html');
     mainWindow.webContents.openDevTools();
   } else {
     // In production, load from built files
