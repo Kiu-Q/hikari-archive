@@ -37,6 +37,8 @@ jobs:
         run: npm ci
       - name: Build with Vite
         run: npm run build:web
+        env:
+          VITE_BASE_URL: /hikari-archive/
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

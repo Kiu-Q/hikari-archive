@@ -7,7 +7,11 @@ export default defineConfig(({ mode }) => {
   
   const isWeb = mode === 'web';
   
+  // Set base path for GitHub Pages deployment
+  const base = isWeb && env.VITE_BASE_URL ? env.VITE_BASE_URL : '/';
+  
   return {
+    base,
     plugins: [
       ...(isWeb ? [] : [
         electron([
