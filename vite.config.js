@@ -1,4 +1,4 @@
-QE KL,;.89import { defineConfig } from 'vite';
+import { defineConfig } from 'vite';
 import electron from 'vite-plugin-electron';
 
 // ============================================================

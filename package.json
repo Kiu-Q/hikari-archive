@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "npm run dev:electron",
-    "dev:electron": "concurrently \"npm run start:asset-server\" \"vite --mode electron\" \"npx electron .\"",
+    "dev:electron": "vite --mode electron",
     "dev:web": "concurrently \"npm run start:asset-server\" \"vite --mode web --open /renderer/index-web.html\"",
     "build": "npm run build:electron && electron-forge make",
     "build:electron": "vite build --mode electron",

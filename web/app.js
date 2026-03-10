@@ -401,7 +401,7 @@ TIMING OPTIONS:
 IMPORTANT: Do NOT use markdown code blocks (\\`\\`json or \\`\\`) around your JSON response. Just provide the raw JSON object directly.
 Note: Animations play fully before proceeding. Expression resets to 'neutral' when returning to idle_loop.`;
                 
-                // Send request to OpenClaw agent with full context
+                // Send request to OpenClaw agent
                 window.sendMessage({
                     type: 'req',
                     id: requestId,
@@ -660,7 +660,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
      */
     function resetMessagingPanel() {
         if (textInputPanel && !isMessagingDisabled) {
-            // Clear the textbox completely
+            // Clear textbox completely
             textInputPanel.value = '';
             originalMessageText = '';
             console.log('[messaging] Panel reset - textbox cleared');
@@ -701,7 +701,15 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
 
             if (hasChinese) {
                 const chineseMouthMap = {
-                    'a': 'aa', 'e': 'ee', 'i': 'ih', 'o': 'oh', 'u': 'oo'
+                    '啊': 'aa', '阿': 'aa', '喔': 'oh', '哦': 'oh', '鹅': 'ee', '饿': 'ee',
+                    '我': 'oo', '沃': 'oo', '安': 'aa', '恩': 'ih', '嗯': 'ih',
+                    '一': 'ee', '衣': 'ee', '医': 'ee', '以': 'ih', '意': 'ih',
+                    '你': 'ih', '呢': 'ih', '了': 'l', '的': 'd', '地': 'd', '得': 'd',
+                    '是': 'sh', '不': 'b', '在': 'z', '有': 'ih', '就': 'ih',
+                    '他': 't', '她': 't', '它': 't', '谁': 'sh', '说': 'sh', '话': 'h',
+                    '来': 'l', '去': 'ch', '个': 'g', '和': 'h', '与': 'y',
+                    '你': 'ih', '我': 'oo', '他': 't', '她': 't', '它': 't',
+                    '中': 'jh', '国': 'g', '人': 'r', '大': 'd', '小': 'x'
                 };
 
                 for (let i = 0; i < currentText.length; i++) {
@@ -743,7 +751,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
                 
                 const simplifiedShapes = [];
                 for (let i = 0; i < shapes.length; i++) {
-                    if (shapes[i] !== 'neutral' && (i === 0 || shapes[i - 1] === 'neutral')) {
+                    if (shapes[i] !== 'neutral' && (i === 0 || shapes[i-1] === 'neutral')) {
                         simplifiedShapes.push(shapes[i]);
                     }
                 }
@@ -762,7 +770,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
         }
 
         function applyMouthShape(vrm, shape) {
-            if (!vrm.expressionManager) return;
+            if (!vrm?.expressionManager) return;
 
             const shapeToExpression = {
                 'aa': 'aa', 'ee': 'ee', 'ih': 'ih', 'oh': 'oh', 'oo': 'oo',
@@ -989,7 +997,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
         }
 
         function update(vrm, delta) {
-            if (!vrm.expressionManager) return;
+            if (!vrm?.expressionManager) return;
 
             if (isCurrentlyTalking) {
                 applyMouthShape(vrm, mouthTarget);
@@ -1034,7 +1042,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
         let nextBlinkTime = Math.random() * (MAX_BLINK_INTERVAL - MIN_BLINK_INTERVAL) + MIN_BLINK_INTERVAL;
 
         function update(vrm, delta) {
-            if (!vrm.expressionManager) return;
+            if (!vrm?.expressionManager) return;
 
             if (!blinkSystemEnabled || activeFacialExpression) {
                 const allPossibleBlinkExpressions = [
@@ -1153,7 +1161,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
                     }
                 }
                 
-                if (!cachedHeadBone && currentVrm.humanoid.bones) {
+                if (!cachedHeadBone && currentVrm.humanoid?.bones) {
                     for (const bone of currentVrm.humanoid.bones) {
                         if (bone && (bone.name.toLowerCase().includes('head') || bone.name.toLowerCase().includes('neck'))) {
                             cachedHeadBone = bone;
@@ -1165,7 +1173,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
 
                 if (!cachedHeadBone && !headBoneWarningLogged) {
                     console.warn('[bubble] Head bone not found, using default position');
-                    console.log('[bubble] Available bones:', currentVrm.humanoid.bones.map(b => b.name));
+                    console.log('[bubble] Available bones:', currentVrm.humanoid?.bones?.map(b => b.name));
                     headBoneWarningLogged = true;
                 }
             }
@@ -1607,7 +1615,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
      * Reset facial expression to neutral
      */
     function resetExpressionToNeutral() {
-        if (!currentVrm.expressionManager) return;
+        if (!currentVrm?.expressionManager) return;
         
         console.log('[expression] Resetting to neutral');
         activeFacialExpression = null;
@@ -1617,7 +1625,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
     }
 
     function applyFacialExpression(expression) {
-        if (!currentVrm.expressionManager) return;
+        if (!currentVrm?.expressionManager) return;
 
         if (expression === 'neutral') {
             activeFacialExpression = null;
@@ -1835,190 +1843,15 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
     }
 
     // ============================================================
-    // WALK SEQUENCE SYSTEM - Web version (vertical walking)
+    // WALK SEQUENCE SYSTEM - Web version (skip walk animations)
     // ============================================================
 
     /**
-     * Web walk sequence (vertical walking - forward/backward)
-     * This is the default walking behavior for web version
-     * @param {string} vrmaUrl - URL of walk animation file
+     * Web version - walk animations are skipped (Electron-only feature)
      */
     async function runWalkSequence(vrmaUrl) {
-        if (!currentVrm || isPlayingWalkSequence) return;
-
-        try {
-            console.log('[walk] runWalkSequence start', vrmaUrl);
-            isPlayingWalkSequence = true;
-
-            if (window.hideAllPanels) {
-                window.hideAllPanels();
-            }
-
-            if (currentIdleTimeout) {
-                clearTimeout(currentIdleTimeout);
-                currentIdleTimeout = null;
-                idleSuspended = true;
-            }
-
-            const walkTimeScale = CONFIG.WALK_TIME_SCALE;
-
-            let walkingDirection = 'forward';
-            
-            if (window.electronAPI) {
-                try {
-                    walkingWindowInitialPos = await window.electronAPI.getWindowPosition();
-                    const windowBounds = await window.electronAPI.getWindowBounds();
-                    const screenHeight = window.screen ? window.screen.height : window.innerHeight;
-                    const screenCenterY = screenHeight / 2;
-                    
-                    const windowCenterY = walkingWindowInitialPos.y + (windowBounds.height / 2);
-                    walkingDirection = windowCenterY < screenCenterY ? 'forward' : 'backward';
-                    
-                    console.log('[walk] window center:', windowCenterY, 'screen center:', screenCenterY, 'walking:', walkingDirection);
-                } catch (e) {
-                    console.warn('[walk] failed to get window position:', e);
-                    walkingWindowInitialPos = { x: 0, y: 0 };
-                }
-            }
-
-            walkingPathActive = true;
-            const nowSec = performance.now() / 1000;
-            walkingStartTimeSec = nowSec + CONFIG.WALK_START_DELAY;
-            walkingInitialPos.copy(currentVrm.scene.position);
-            walkingInitialRotY = currentVrm.scene.rotation.y;
-
-            const leg = CONFIG.WALK_WALK_DURATION;
-            const turn = CONFIG.WALK_TURN_DURATION;
-            walkingTotalDurationSec = 2 * turn;
-
-            console.log('[walk] timing config', {
-                startDelay: CONFIG.WALK_START_DELAY,
-                direction: walkingDirection,
-                leg,
-                turn,
-                totalPathSeconds: walkingTotalDurationSec,
-            });
-
-            console.log('[walk] waiting before starting clip...');
-            await new Promise(resolve => setTimeout(resolve, CONFIG.WALK_START_DELAY * 1000));
-
-            console.log('[walk] turning to face', walkingDirection, ', duration (ms)', turn * 1000);
-            let action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
-            if (action) {
-                try {
-                    if (typeof action.setEffectiveTimeScale === 'function') {
-                        action.setEffectiveTimeScale(walkTimeScale);
-                    } else {
-                        action.timeScale = walkTimeScale;
-                    }
-                } catch (e) {
-                    console.warn('[walk] failed to set time scale for initial turn', e);
-                }
-            }
-            await animateWalkPhase(0, turn, 'initial_turn', walkingDirection);
-
-            console.log('[walk] starting', walkingDirection, 'walk clip (LoopRepeat)');
-            action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
-            if (action) {
-                try {
-                    if (typeof action.setEffectiveTimeScale === 'function') {
-                        action.setEffectiveTimeScale(walkTimeScale);
-                    } else {
-                        action.timeScale = walkTimeScale;
-                    }
-                } catch (e) {
-                    console.warn('[walk] failed to set time scale for walk leg', e);
-                }
-            }
-            console.log('[walk]', walkingDirection, 'leg duration (ms)', leg * 1000);
-            await animateWalkPhase(turn, turn + leg, 'walk', walkingDirection);
-
-            console.log('[walk] turning to face forward, duration (ms)', turn * 1000);
-            action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
-            if (action) {
-                try {
-                    if (typeof action.setEffectiveTimeScale === 'function') {
-                        action.setEffectiveTimeScale(walkTimeScale);
-                    } else {
-                        action.timeScale = walkTimeScale;
-                    }
-                } catch (e) {
-                    console.warn('[walk] failed to set time scale for turn to forward', e);
-                }
-            }
-            await animateWalkPhase(turn + leg, turn + leg + turn, 'turn_to_forward', walkingDirection);
-
-            walkingPathActive = false;
-            console.log('[walk] finished, keeping current position and rotation');
-
-            console.log('[walk] calling loadIdleLoop at end of sequence');
-            await loadIdleLoop();
-            
-        } finally {
-            console.log('[walk] runWalkSequence finished');
-            isPlayingWalkSequence = false;
-            idleSuspended = false;
-            scheduleRandomIdle();
-        }
-    }
-
-    function animateWalkPhase(startTimeSec, endTimeSec, phaseType, direction = 'forward') {
-        return new Promise(resolve => {
-            const durationMs = (endTimeSec - startTimeSec) * 1000;
-            const startTime = performance.now();
-            const windowOffset = CONFIG.WALK_WINDOW_OFFSET;
-
-            function step() {
-                const elapsed = performance.now() - startTime;
-                const elapsedSec = elapsed / 1000;
-                const progress = Math.min(1, elapsed / durationMs);
-
-                if (!currentVrm) {
-                    resolve();
-                    return;
-                }
-
-                let rotY = walkingInitialRotY;
-                let windowY = walkingWindowInitialPos.y || 0;
-
-                if (phaseType === 'initial_turn') {
-                    rotY = walkingInitialRotY;
-                    windowY = walkingWindowInitialPos.y || 0;
-                } else if (phaseType === 'walk') {
-                    rotY = walkingInitialRotY;
-                    if (direction === 'forward') {
-                        windowY = (walkingWindowInitialPos.y || 0) - Math.round(windowOffset * progress);
-                    } else {
-                        windowY = (walkingWindowInitialPos.y || 0) + Math.round(windowOffset * progress);
-                    }
-                } else if (phaseType === 'turn_to_forward') {
-                    rotY = walkingInitialRotY;
-                    if (direction === 'forward') {
-                        windowY = (walkingWindowInitialPos.y || 0) - windowOffset;
-                    } else {
-                        windowY = (walkingWindowInitialPos.y || 0) + windowOffset;
-                    }
-                }
-
-                currentVrm.scene.rotation.y = rotY;
-
-                if (window.electronAPI && walkingWindowInitialPos) {
-                    try {
-                        window.electronAPI.setWindowPosition(walkingWindowInitialPos.x, windowY);
-                    } catch (e) {
-                        console.warn('[walk] failed to update window position:', e);
-                    }
-                }
-
-                if (progress < 1) {
-                    requestAnimationFrame(step);
-                } else {
-                    resolve();
-                }
-            }
-
-            step();
-        });
+        console.log('[web] Web version - skipping walk animation:', vrmaUrl);
+        await loadIdleLoop();
     }
 
     // ============================================================
@@ -2224,7 +2057,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
     }
 
     function updateDropdownReferences() {
-        const hasVrm = currentVrm !== undefined;
+        const hasVrm = !!currentVrm;
         if (animationSelect) {
             animationSelect.disabled = !hasVrm;
         }
@@ -2565,14 +2398,14 @@ const WebSocketModule = (() => {
     function handleChatEvent(data) {
       console.log('[ws] Chat event received:', data);
       
-      const runId = data.payload.runId;
+      const runId = data.payload?.runId;
       if (runId && processedRunIds.has(runId)) {
         console.log('[ws] Ignoring duplicate event with runId:', runId);
         return;
       }
       
-      const sessionKey = data.payload.sessionKey || data.sessionKey;
-      const state = data.payload.state;
+      const sessionKey = data.payload?.sessionKey || data.sessionKey;
+      const state = data.payload?.state;
       
       const isValidSession = sessionKey === 'agent:main:main' || sessionKey === 'main';
       
@@ -2586,7 +2419,7 @@ const WebSocketModule = (() => {
         return;
       }
       
-      const messageContent = data.payload.message.content;
+      const messageContent = data.payload?.message?.content;
       if (messageContent && messageContent.length > 0) {
         const textContent = messageContent.find(item => item.type === 'text');
         const rawText = textContent ? textContent.text : null;
@@ -2687,14 +2520,14 @@ const WebSocketModule = (() => {
         console.error('[ws] Error in response:', data);
         const statusDiv = document.getElementById('status');
         if (statusDiv) {
-          statusDiv.textContent = 'Error: ' + (data.payload.error || 'Unknown error');
+          statusDiv.textContent = 'Error: ' + (data.payload?.error || 'Unknown error');
           statusDiv.style.color = '#ff6b6b';
         }
         return;
       }
       
-      if (data.payload.type === 'hello-ok') {
-        console.log('[ws] Connection successful, authenticated as:', data.payload.auth.role);
+      if (data.payload?.type === 'hello-ok') {
+        console.log('[ws] Connection successful, authenticated as:', data.payload.auth?.role);
         const statusDiv = document.getElementById('status');
         if (statusDiv) {
           statusDiv.textContent = 'Connected to OpenClaw';
@@ -2703,18 +2536,18 @@ const WebSocketModule = (() => {
         
         flushMessageQueue();
         
-      } else if (data.payload.result.payloads && data.payload.result.payloads.length > 0) {
-        const runId = data.payload.runId || data.payload.result.meta.systemPromptReport.generatedAt;
+      } else if (data.payload?.result?.payloads && data.payload.result.payloads.length > 0) {
+        const runId = data.payload?.runId || data.payload?.result?.meta?.systemPromptReport?.generatedAt;
         if (runId && processedRunIds.has(runId)) {
           console.log('[ws] Ignoring duplicate res with runId:', runId);
           return;
         }
         
-        const sessionKey = data.payload.result.meta.agentMeta.sessionKey || 
-                       data.payload.result.meta.systemPromptReport.sessionKey ||
-                       data.payload.result.sessionKey || 
+        const sessionKey = data.payload?.result?.meta?.agentMeta?.sessionKey || 
+                       data.payload?.result?.meta?.systemPromptReport?.sessionKey ||
+                       data.payload?.result?.sessionKey || 
                        data.sessionKey;
-        const state = data.payload.result.state;
+        const state = data.payload?.result?.state;
         
         const isValidSession = sessionKey === 'agent:main:main' || sessionKey === 'main';
         
@@ -2723,7 +2556,7 @@ const WebSocketModule = (() => {
           return;
         }
         
-        const replyText = data.payload.result.payloads[0].text;
+        const replyText = data.payload.result.payloads[0]?.text;
         if (replyText) {
           console.log('[ws] AI reply from main agent:', replyText);
           
@@ -2758,7 +2591,7 @@ const WebSocketModule = (() => {
           }
         }
         
-      } else if (data.payload.status === 'accepted') {
+      } else if (data.payload?.status === 'accepted') {
         console.log('[ws] Request accepted, waiting for reply...');
         
         const statusDiv = document.getElementById('status');
@@ -3010,13 +2843,13 @@ const WebSocketModule = (() => {
       
       if (!data.ok) {
         console.error('[ws] ERROR: Response not OK');
-        console.error('[ws] Error details:', data.payload.error || data);
+        console.error('[ws] Error details:', data.payload?.error || data);
         return;
       }
       
-      const messages = data.payload.messages || [];
-      const totalCount = data.payload.totalCount || 0;
-      const hasMore = data.payload.hasMore || false;
+      const messages = data.payload?.messages || [];
+      const totalCount = data.payload?.totalCount || 0;
+      const hasMore = data.payload?.hasMore || false;
       
       console.log('\n[ws] HISTORY METADATA:');
       console.log('  Messages in this batch:', messages.length);
@@ -3201,7 +3034,7 @@ const HistoryModule = (() => {
         
         const header = document.createElement('div');
         header.style.padding = '12px 16px';
-        header.style.borderBottom = '1px solid rgba(255,255,255,0.1)';
+        header.style.borderBottom = '1px solid rgba(255, 255, 255, 0.1)';
         header.style.display = 'flex';
         header.style.justifyContent = 'space-between';
         header.style.alignItems = 'center';
@@ -3259,6 +3092,7 @@ const HistoryModule = (() => {
                     messagesContainer.scrollTop = messagesContainer.scrollHeight;
                     console.log('[history] Scrolled to bottom (latest messages)');
                 }
+            }
         }
     }
 
@@ -3420,9 +3254,22 @@ const HistoryModule = (() => {
                 text.includes('RESPONSE FORMAT') ||
                 text.includes('TIMING OPTIONS') ||
                 text.includes('IMPORTANT:')) {
-                console.log('  REJECTED: System instruction message');
-                rejectedCount++;
-                return;
+                
+                if (msg.role === 'user' && text.includes('===== USER MESSAGE =====') && text.includes('===== SYSTEM INSTRUCTIONS =====')) {
+                    const userMessageMatch = text.match(/===== USER MESSAGE =====\s*([\s\S]*?)\s*===== SYSTEM INSTRUCTIONS =====/);
+                    if (userMessageMatch && userMessageMatch[1]) {
+                        text = userMessageMatch[1].trim();
+                        console.log('  Extracted user message from system block:', text.substring(0, 100) + '...');
+                    } else {
+                        console.log('  REJECTED: System instruction block (could not extract user message)');
+                        rejectedCount++;
+                        return;
+                    }
+                } else {
+                    console.log('  REJECTED: System instruction block');
+                    rejectedCount++;
+                    return;
+                }
             }
             console.log('  Not a system instruction block');
             
@@ -3431,7 +3278,8 @@ const HistoryModule = (() => {
                 /^User (?:clicked|tapped|pressed) \w+$/i,
                 /^User (?:said|typed|entered) \w+$/i,
                 /^(?:Touch|Click|Tap|Press) \w+$/i,
-                /^System: /i
+                /^System: /i,
+                /^🎵 /,
             ];
             
             const isSystemPrompt = systemPromptPatterns.some(pattern => pattern.test(text.trim()));
@@ -3464,13 +3312,35 @@ const HistoryModule = (() => {
                 } catch (e1) {
                     console.log('  Standard JSON parse failed, trying direct text extraction');
                     try {
-                        const textMatch = text.match(/'text'\s*:\s*'([^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[^']*(?:\\'[:';
-                console.log('  ❌ REJECTED: User touched (?:your|the) \w+$/i,');
+                        const textMatch = text.match(/'text'\s*:\s*'([^']*(?:\\'[^']*)*)'/);
+                        if (textMatch && textMatch[1]) {
+                            text = textMatch[1]
+                                .replace(/\\'/g, "'")
+                                .replace(/\\"/g, '"')
+                                .replace(/\\n/g, '\n')
+                                .replace(/\\r/g, '\r')
+                                .replace(/\\t/g, '\t');
+                            console.log('  Extracted text from JSON (single-quote):', text.substring(0, 100) + '...');
+                        } else {
+                            console.log('  Not valid JSON, using text as-is');
+                        }
+                    } catch (e2) {
+                        console.log('  Not valid JSON, using text as-is');
+                    }
+                }
+            }
+            
+            if (displayedTimestamps.has(msg.timestamp)) {
+                console.log('  REJECTED: Duplicate message (timestamp already displayed)');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Passed all filters');
-            console.log('  ✅ ACCEPTED: All filters passed');
+            console.log('  Not a duplicate message');
+            
+            displayedTimestamps.add(msg.timestamp);
+            console.log('  Timestamp added to displayedTimestamps');
+            
+            console.log('  ACCEPTED: All filters passed');
             acceptedCount++;
             addMessageToHistory(msg, text);
             historyMessages.push(msg);
@@ -3509,7 +3379,7 @@ const HistoryModule = (() => {
         const beforeBracketRemoval = displayText;
         displayText = displayText.replace(/\[.*?\]/g, '').trim();
         if (beforeBracketRemoval !== displayText) {
-            console.log('[history] Removed bracket content, result:', displayText.substring(0, 100) + (displayText.length > 100 ? '...' : ''));
+            console.log('[history] Removed bracket content, result:', displayText.substring(0, 100) + '...');
         }
         
         if (!displayText || displayText.trim() === '') {
@@ -3588,7 +3458,9 @@ const HistoryModule = (() => {
             currentOffset = 0;
             hasMoreMessages = false;
             displayedTimestamps.clear();
+            
             console.log('[history] History cleared');
+        }
     }
 
     function hideAllPanels() {
@@ -3806,7 +3678,7 @@ function setupUIEventListeners() {
 ${text}
 
 ===== SYSTEM INSTRUCTIONS =====
-You are communicating through a VRM (Virtual Reality Model)3D character viewer.
+You are communicating through a VRM (Virtual Reality Model) 3D character viewer.
 
 AVAILABLE ANIMATIONS (and what they do):
 - idle_loop: Continuous idle animation (default state)
@@ -3847,6 +3719,8 @@ Please respond with a JSON object containing:
 }
 
 TIMING OPTIONS:
+- 'before': play animation/expression BEFORE speaking
+- 'during': play animation/expression WHILE speaking
 - 'after': play animation/expression AFTER speaking completes
 - null: no animation/expression needed (use defaults)
 
@@ -3878,6 +3752,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
                 }
             });
         }
+    }
     
     // Expression select
     const expressionSelect = document.getElementById('expressionSelect');
@@ -3934,7 +3809,7 @@ function setupLightControls() {
                 window[id].intensity = value;
                 valueSpan.textContent = value.toFixed(1);
             });
-        });
+        }
     });
 }
 
@@ -3942,12 +3817,6 @@ function setupLightControls() {
  * Setup toggle buttons
  */
 function setupToggleButtons() {
-    // Set background to loading.gif
-    document.body.style.backgroundImage = 'url(../assets/loading.gif)';
-    document.body.style.backgroundSize = 'cover';
-    document.body.style.backgroundPosition = 'center';
-    document.body.style.backgroundRepeat = 'no-repeat';
-    
     // Add CSS for toggle buttons (invisible until hovered, like Electron)
     const style = document.createElement('style');
     style.textContent = `
@@ -3995,7 +3864,7 @@ function setupToggleButtons() {
     });
     document.body.appendChild(toggleSettingsBtn);
 
-    // History panel toggle button (bottom-left - messaging button removed)
+    // History panel toggle button (bottom-left)
     const toggleHistoryBtn = document.createElement('button');
     toggleHistoryBtn.className = 'toggle-btn';
     toggleHistoryBtn.textContent = 'Hikari';
@@ -4082,6 +3951,7 @@ function setupWebSocketUrlInput() {
             });
         }
     }
+}
 
 /**
  * Setup token configuration dialog
@@ -4170,6 +4040,7 @@ function displayConnectionStatus() {
             // Fade out after 5 seconds if still connected
             if (fadeOutTimeout) {
                 clearTimeout(fadeOutTimeout);
+            }
             fadeOutTimeout = setTimeout(() => {
                 if (WebSocketModule.isWebSocketConnected()) {
                     statusIndicator.style.opacity = '0';
@@ -4261,6 +4132,9 @@ async function initWebApp() {
     try {
         // Show device info
         showDeviceInfo();
+        
+        // Setup toggle buttons
+        setupToggleButtons();
         
         // Initialize core functionality
         await CoreModule.init();
