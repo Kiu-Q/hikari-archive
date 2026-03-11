@@ -2,6 +2,7 @@ module.exports = {
   packagerConfig: {
     name: 'Hikari',
     executableName: 'hikari',
+    icon: './favicon.ico',
     asar: true,
   },
   rebuildConfig: {},
@@ -12,6 +13,7 @@ module.exports = {
         name: 'Hikari',
         authors: 'Your Name',
         description: 'Hikari VRM Viewer',
+        setupIcon: './favicon.ico'
       },
     },
     {
