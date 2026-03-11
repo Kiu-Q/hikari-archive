@@ -11,13 +11,15 @@
     "dev": "vite --mode electron",
     "dev:electron": "vite --mode electron",
     "dev:web": "vite --mode web --open /web/index.html",
-    "build": "vite build --mode electron",
-    "build:electron": "vite build --mode electron",
+    "build": "vite build --mode electron && xcopy /E /I /Y electron\\index.html dist\\index.html && xcopy /E /I /Y electron\\assets dist\\assets",
+    "build:electron": "vite build --mode electron && xcopy /E /I /Y electron\\index.html dist\\index.html && xcopy /E /I /Y electron\\assets dist\\assets",
     "build:web": "vite build --mode web",
     "start": "npm run build && npx electron .",
     "start:electron": "npm run build && npx electron .",
     "start:web": "vite preview --port 3000",
-    "preview": "vite preview --port 3000"
+    "preview": "vite preview --port 3000",
+    "package": "npm run build && npx electron-forge package",
+    "make": "npm run build && npx electron-forge make"
   },
   "keywords": [],
   "author": "",

@@ -8,7 +8,7 @@ const __dirname = path.dirname(__filename);
 
 // Check if we're in development mode
 const isDev = process.env.NODE_ENV === 'development' || 
-              !existsSync(path.join(__dirname, '../renderer/dist/index.html'));
+              !existsSync(path.join(__dirname, '../dist/index.html'));
 
 let mainWindow = null;
 
@@ -36,7 +36,7 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   } else {
     // In production, load from built files
-    mainWindow.loadFile(path.join(__dirname, '../renderer/dist/index.html'));
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 }
 

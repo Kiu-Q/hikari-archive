@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import electron from 'vite-plugin-electron';
 import electronRenderer from 'vite-plugin-electron-renderer';
+import path from 'path';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd());
@@ -16,7 +17,7 @@ export default defineConfig(({ mode }) => {
       ...(isWeb ? [] : [
         electron([
           {
-            entry: 'electron/main.js',
+            entry: './main.js',
             vite: {
               build: {
                 outDir: 'dist-electron',
@@ -30,10 +31,10 @@ export default defineConfig(({ mode }) => {
         electronRenderer()
       ])
     ],
-    root: isWeb ? 'web' : '.',
-    publicDir: isWeb ? 'assets' : 'assets',
+    root: isWeb ? 'web' : 'electron',
+    publicDir: isWeb ? 'assets' : '../assets',
     build: {
-      outDir: isWeb ? '../dist' : 'dist',
+      outDir: isWeb ? '../dist' : '../dist',
       emptyOutDir: true,
       copyPublicDir: true,
       assetsInlineLimit: 4096,
@@ -42,7 +43,13 @@ export default defineConfig(({ mode }) => {
         output: {
           assetFileNames: 'assets/[name]-[hash][extname]',
           chunkFileNames: 'assets/[name]-[hash].js',
-          entryFileNames: 'assets/[name]-[hash].js'
+          entryFileNames: (chunkInfo) => {
+            // Keep app.js name for main entry, hash others
+            if (chunkInfo.name === 'index') {
+              return 'app.js';
+            }
+            return 'assets/[name]-[hash].js';
+          }
         }
       }
     },
