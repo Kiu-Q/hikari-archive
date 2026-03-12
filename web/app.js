@@ -1,14 +1,3 @@
-/**
- * Hikari Electron - Consolidated Application
- * Desktop version with window dragging and Electron-specific features
- * 
- * Merged modules:
- * - core.js: Three.js/VRM core logic
- * - websocket.js: WebSocket client
- * - conversation-history.js: Conversation history panel
- * - Electron-specific features: Window dragging, horizontal walking
- */
-
 console.log('[electron] Hikari Electron version starting');
 
 // ============================================================
@@ -30,6 +19,7 @@ const CONFIG = {
     BUFFER_TIME: 0.5,
     TRANSITION_TIME: 0.5,
     T_OFFSET: 0.5,
+    BLEND_DURATION: 0.3,
     
     // Walk sequence configuration
     WALK_PATH_DISTANCE: 2.0,
@@ -43,6 +33,70 @@ const CONFIG = {
     // Random idle configuration
     RANDOM_IDLE_MIN_DELAY: 20000,
     RANDOM_IDLE_MAX_DELAY: 30000,
+    
+    // Timing constants
+    SHORT_DELAY: 100,
+    MEDIUM_DELAY: 500,
+    LONG_DELAY: 3000,
+    MIN_WAIT_BEFORE_AFTER_ANIM: 5000,
+    MIN_LOADING_TIME: 4000,
+    TRANSITION_COMPLETE_DELAY: 300,
+    
+    // Animation timing
+    SPEECH_UNIT_DELAY: 50,
+    SPEECH_BASE_DURATION: 80,
+    SPEECH_LINE_PAUSE: 500,
+    BLINK_DURATION: 0.2,
+    BLINK_RESET_DELAY: 200,
+    EXPRESSION_DECAY_MULTIPLIER: 4,
+    
+    // Camera settings
+    CAMERA_FOV: 30.0,
+    CAMERA_NEAR: 0.1,
+    CAMERA_FAR: 20.0,
+    DEFAULT_CAMERA_POS: { x: 0.0, y: 1.0, z: 4.5 },
+    CONTROLS_TARGET: { x: 0.0, y: 1.0, z: 0.0 },
+    
+    // Lighting
+    KEY_LIGHT_INTENSITY: 1,
+    FILL_LIGHT_INTENSITY: 0.5,
+    RIM_LIGHT_INTENSITY: 1,
+    TOP_LIGHT_INTENSITY: 0.5,
+    AMBIENT_LIGHT_INTENSITY: 0,
+    KEY_LIGHT_POS: { x: 3.0, y: 4.0, z: 5.0 },
+    FILL_LIGHT_POS: { x: -3.0, y: 3.0, z: 4.0 },
+    RIM_LIGHT_POS: { x: 0.0, y: 2.0, z: -5.0 },
+    TOP_LIGHT_POS: { x: 0.0, y: 5.0, z: 0.0 },
+    
+    // Speaking bubble
+    BUBBLE_MAX_WIDTH: 300,
+    BUBBLE_MARGIN_TOP: 80,
+    BUBBLE_PADDING: 12,
+    BUBBLE_SHADOW_BLUR: 12,
+    BUBBLE_SHADOW_OFFSET: 4,
+    BUBBLE_HIDE_DELAY: 3000,
+    
+    // Body part detection thresholds
+    HEAD_THRESHOLD: 1.4,
+    CHEST_THRESHOLD: 1.1,
+    HIP_THRESHOLD: 0.7,
+    
+    // WebSocket
+    DEFAULT_WS_PORT: 18789,
+    HISTORY_BATCH_SIZE: 100,
+    MAX_MESSAGE_QUEUE: 50,
+    WS_RECONNECT_INTERVAL: 3000,
+    MAX_WS_RECONNECT_ATTEMPTS: 10,
+    
+    // Animation
+    DEFAULT_MAX_WAIT: 15000,
+    ANIMATION_TRACKS_TO_KEEP: 6,
+    LIP_SYNC_CHECK_COUNT: 10,
+    LIP_SYNC_CHECK_INTERVAL: 100,
+    
+    // Touch detection
+    TOUCH_DEBOUNCE_MS: 1000,
+    TOUCH_RESPONSE_DURATION: 3000,
 };
 
 // ============================================================
@@ -71,15 +125,6 @@ let currentIdleTimeout = null;
 let activeFacialExpression = null;
 let blinkSystemEnabled = true;
 let isSitAnimationActive = false;
-let isDragging = false;
-let dragStartPosition = new THREE.Vector2();
-let currentDragPosition = new THREE.Vector2();
-let mouseInWindow = false;
-let mousePosition = new THREE.Vector2();
-let initialModelRotationX = 0;
-let isSitAnimationPlaying = false;
-let isWindowDragging = false;
-let windowDragOffset = { x: 0, y: 0 };
 
 // ============================================================
 // DOM ELEMENTS
@@ -100,7 +145,6 @@ let clock = new THREE.Clock();
 let raycaster, mouse;
 let isTouchEnabled = true;
 let lastTouchTime = 0;
-const TOUCH_DEBOUNCE_MS = 1000;
 
 // ============================================================
 // WEBSOCKET STATE
@@ -112,12 +156,6 @@ let messageQueue = [];
 let processedRunIds = new Set();
 let currentWebSocketUrl = null;
 let reconnectAttempts = 0;
-
-const WS_CONFIG = {
-    token: 'YOUR_TOKEN_HERE',
-    reconnectInterval: 3000,
-    maxReconnectAttempts: 10
-};
 
 // ============================================================
 // CONVERSATION HISTORY STATE
@@ -174,12 +212,12 @@ export function initThreeJS() {
     document.body.appendChild(renderer.domElement);
 
     camera = new THREE.PerspectiveCamera(
-        30.0,
+        CONFIG.CAMERA_FOV,
         window.innerWidth / window.innerHeight,
-        0.1,
-        20.0
+        CONFIG.CAMERA_NEAR,
+        CONFIG.CAMERA_FAR
     );
-    camera.position.set(0.0, 1.0, 4.5);
+    camera.position.set(CONFIG.DEFAULT_CAMERA_POS.x, CONFIG.DEFAULT_CAMERA_POS.y, CONFIG.DEFAULT_CAMERA_POS.z);
 
     controls = new OrbitControls(camera, renderer.domElement);
     controls.screenSpacePanning = true;
@@ -188,7 +226,7 @@ export function initThreeJS() {
         MIDDLE: THREE.MOUSE.DOLLY,
         RIGHT: THREE.MOUSE.ROTATE
     };
-    controls.target.set(0.0, 1.0, 0.0);
+    controls.target.set(CONFIG.CONTROLS_TARGET.x, CONFIG.CONTROLS_TARGET.y, CONFIG.CONTROLS_TARGET.z);
     controls.update();
     
     window.camera = camera;
@@ -198,23 +236,23 @@ export function initThreeJS() {
     scene = new THREE.Scene();
     scene.background = null;
 
-    keyLight = new THREE.DirectionalLight(0xffffff, 1);
-    keyLight.position.set(3.0, 4.0, 5.0).normalize();
+    keyLight = new THREE.DirectionalLight(0xffffff, CONFIG.KEY_LIGHT_INTENSITY);
+    keyLight.position.set(CONFIG.KEY_LIGHT_POS.x, CONFIG.KEY_LIGHT_POS.y, CONFIG.KEY_LIGHT_POS.z).normalize();
     scene.add(keyLight);
 
-    fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    fillLight.position.set(-3.0, 3.0, 4.0).normalize();
+    fillLight = new THREE.DirectionalLight(0xffffff, CONFIG.FILL_LIGHT_INTENSITY);
+    fillLight.position.set(CONFIG.FILL_LIGHT_POS.x, CONFIG.FILL_LIGHT_POS.y, CONFIG.FILL_LIGHT_POS.z).normalize();
     scene.add(fillLight);
 
-    rimLight = new THREE.DirectionalLight(0xffffff, 1);
-    rimLight.position.set(0.0, 2.0, -5.0).normalize();
+    rimLight = new THREE.DirectionalLight(0xffffff, CONFIG.RIM_LIGHT_INTENSITY);
+    rimLight.position.set(CONFIG.RIM_LIGHT_POS.x, CONFIG.RIM_LIGHT_POS.y, CONFIG.RIM_LIGHT_POS.z).normalize();
     scene.add(rimLight);
 
-    topLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    topLight.position.set(0.0, 5.0, 0.0).normalize();
+    topLight = new THREE.DirectionalLight(0xffffff, CONFIG.TOP_LIGHT_INTENSITY);
+    topLight.position.set(CONFIG.TOP_LIGHT_POS.x, CONFIG.TOP_LIGHT_POS.y, CONFIG.TOP_LIGHT_POS.z).normalize();
     scene.add(topLight);
 
-    ambientLight = new THREE.AmbientLight(0xffffff, 0);
+    ambientLight = new THREE.AmbientLight(0xffffff, CONFIG.AMBIENT_LIGHT_INTENSITY);
     scene.add(ambientLight);
 
     raycaster = new THREE.Raycaster();
@@ -554,7 +592,7 @@ export function createLipSyncSystem() {
                 totalShapes += shapes.length;
             });
             
-            const speakingDuration = (totalShapes * 80) + (units.length * 50);
+            const speakingDuration = (totalShapes * CONFIG.SPEECH_BASE_DURATION) + (units.length * CONFIG.SPEECH_UNIT_DELAY);
             const maxDuration = speakingDuration / speakingSpeedMultiplier;
             
             console.log('[lip] units for speech', units, 'total shapes:', totalShapes, 'duration:', speakingDuration, 'max duration:', maxDuration);
@@ -589,7 +627,7 @@ export function createLipSyncSystem() {
 
                 if (mouthShapes.length === 0) {
                     currentUnitIndex++;
-                    setTimeout(processNextUnit, 400 / speakingSpeedMultiplier);
+                    setTimeout(processNextUnit, CONFIG.SHORT_DELAY * 4 / speakingSpeedMultiplier);
                     return;
                 }
 
@@ -599,7 +637,7 @@ export function createLipSyncSystem() {
                     if (shapeIndex >= mouthShapes.length) {
                         currentUnitIndex++;
                         updateDebugDisplay(text, -1);
-                        setTimeout(processNextUnit, 50 / speakingSpeedMultiplier);
+                        setTimeout(processNextUnit, CONFIG.SPEECH_UNIT_DELAY / speakingSpeedMultiplier);
                         return;
                     }
 
@@ -613,8 +651,7 @@ export function createLipSyncSystem() {
                     
                     displayCharacterAtIndex(Math.min(charIndex, text.length - 1));
 
-                    const baseDuration = 80;
-                    const shapeDuration = baseDuration / speakingSpeedMultiplier;
+                    const shapeDuration = CONFIG.SPEECH_BASE_DURATION / speakingSpeedMultiplier;
                     setTimeout(processNextShape, shapeDuration);
                 }
 
@@ -703,7 +740,6 @@ export function createBlinkSystem() {
     let blinkProgress = 0;
     let timeSinceLastBlink = 0;
 
-    const BLINK_DURATION = 0.2;
     const MIN_BLINK_INTERVAL = 1;
     const MAX_BLINK_INTERVAL = 6;
 
@@ -742,7 +778,7 @@ export function createBlinkSystem() {
         }
 
         if (isBlinking) {
-            blinkProgress += delta / BLINK_DURATION;
+            blinkProgress += delta / CONFIG.BLINK_DURATION;
 
             const blinkValue = Math.sin(Math.PI * blinkProgress);
             vrm.expressionManager.setValue('blink', blinkValue);
@@ -1029,7 +1065,7 @@ export async function loadVRM(url) {
 // ============================================================
 // ANIMATION SYSTEM
 // ============================================================
-export function waitForActionEnd(action, maxWait = 15000, resetPose = false) {
+export function waitForActionEnd(action, maxWait = CONFIG.DEFAULT_MAX_WAIT, resetPose = false) {
     return new Promise(resolve => {
         let finished = false;
         
@@ -1452,7 +1488,6 @@ export function animate() {
 // ============================================================
 let loadingGif = null;
 let loadingStartTime = 0;
-const MIN_LOADING_TIME = 4000;
 
 function showLoadingGif() {
     if (loadingGif && loadingGif.parentElement) {
@@ -1491,7 +1526,7 @@ function showLoadingGif() {
 
 function hideLoadingGif() {
     const elapsed = performance.now() - loadingStartTime;
-    const remainingTime = Math.max(0, MIN_LOADING_TIME - elapsed);
+    const remainingTime = Math.max(0, CONFIG.MIN_LOADING_TIME - elapsed);
     
     setTimeout(() => {
         if (loadingGif) {
@@ -2027,7 +2062,7 @@ export function setupTouchDetection() {
         mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
         
         const now = Date.now();
-        if (now - lastTouchTime < TOUCH_DEBOUNCE_MS) {
+        if (now - lastTouchTime < CONFIG.TOUCH_DEBOUNCE_MS) {
             return;
         }
         
@@ -2083,9 +2118,9 @@ function identifyBodyPart(intersection) {
     
     const y = localPoint.y;
     
-    const HEAD_THRESHOLD = 1.4;
-    const CHEST_THRESHOLD = 1.1;
-    const HIP_THRESHOLD = 0.7;
+    const HEAD_THRESHOLD = CONFIG.HEAD_THRESHOLD;
+    const CHEST_THRESHOLD = CONFIG.CHEST_THRESHOLD;
+    const HIP_THRESHOLD = CONFIG.HIP_THRESHOLD;
     
     const x = localPoint.x;
     const isLeftSide = x < 0;
@@ -2112,7 +2147,7 @@ async function handleTouchEvent(intersection) {
     if (!currentVrm) return;
     
     const now = Date.now();
-    if (now - lastTouchTime < TOUCH_DEBOUNCE_MS) {
+    if (now - lastTouchTime < CONFIG.TOUCH_DEBOUNCE_MS) {
         console.log('[touch] Touch event debounced');
         return;
     }
@@ -2134,7 +2169,7 @@ async function handleTouchEvent(intersection) {
         
         if (touchAction) {
             console.log('[touch] Touch animation playing');
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            await new Promise(resolve => setTimeout(resolve, CONFIG.TOUCH_RESPONSE_DURATION));
             console.log('[touch] Touch animation completed');
         }
         
@@ -2657,7 +2692,6 @@ export function initWebSocket() {
 
     const savedToken = localStorage.getItem('openclaw_token');
     if (savedToken && savedToken.trim() !== '') {
-        WS_CONFIG.token = savedToken;
         console.log('[ws] Using token from localStorage (first 8 chars:', savedToken.substring(0, 8) + '...)');
     } else {
         console.error('[ws] No token configured. Please set openclaw_token in localStorage.');
@@ -2739,6 +2773,7 @@ function handleEvent(data) {
         case 'connect.challenge':
             console.log('[ws] Connection challenge received, sending auth request');
             
+            const savedToken = localStorage.getItem('openclaw_token');
             const connectParams = {
                 minProtocol: 3,
                 maxProtocol: 3,
@@ -2750,7 +2785,7 @@ function handleEvent(data) {
                 },
                 role: 'operator',
                 auth: {
-                    token: WS_CONFIG.token
+                    token: savedToken
                 }
             };
             
@@ -3082,12 +3117,12 @@ async function executeAgentCommand(command) {
         if (window.startSmoothTransition) {
             const action = await window.startSmoothTransition(
                 `${ASSET_BASE_URL}VRMA/${command.animation.file}`,
-                { loopMode: 2200 }
+                { loopMode: THREE.LoopOnce }
             );
             console.log('[ws] Before animation started, action:', action);
             
             console.log('[ws] Waiting minimum 5 seconds for before animation...');
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await new Promise(resolve => setTimeout(resolve, CONFIG.MIN_WAIT_BEFORE_AFTER_ANIM));
             
             if (action && window.waitForActionEnd) {
                 try {
@@ -3099,7 +3134,7 @@ async function executeAgentCommand(command) {
             }
             
             console.log('[ws] Additional 3 second delay for before animation...');
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            await new Promise(resolve => setTimeout(resolve, CONFIG.LONG_DELAY));
             console.log('[ws] Before animation fully complete, proceeding to speech');
         }
     }
@@ -3172,12 +3207,12 @@ async function executeAgentCommand(command) {
         if (window.startSmoothTransition) {
             const action = await window.startSmoothTransition(
                 `${ASSET_BASE_URL}VRMA/${command.animation.file}`,
-                { loopMode: 2200 }
+                { loopMode: THREE.LoopOnce }
             );
             console.log('[ws] After animation started, action:', action);
             
             console.log('[ws] Waiting minimum 5 seconds for after animation...');
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await new Promise(resolve => setTimeout(resolve, CONFIG.MIN_WAIT_BEFORE_AFTER_ANIM));
             
             if (action && window.waitForActionEnd) {
                 try {
@@ -3189,7 +3224,7 @@ async function executeAgentCommand(command) {
             }
             
             console.log('[ws] Additional 3 second delay for after animation...');
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            await new Promise(resolve => setTimeout(resolve, CONFIG.LONG_DELAY));
             console.log('[ws] After animation fully complete');
         }
     }
@@ -3205,7 +3240,7 @@ async function executeAgentCommand(command) {
             if (window.resetExpressionToNeutral) {
                 window.resetExpressionToNeutral();
             }
-        }, 2000);
+        }, CONFIG.LONG_DELAY * 2);
     }
     
     console.log('[ws] Returning to idle loop with neutral expression');
@@ -3300,7 +3335,7 @@ function handleClose(event) {
     console.log('[ws] WebSocket closed:', event.code, event.reason);
     isConnected = false;
     
-    if (reconnectAttempts < WS_CONFIG.maxReconnectAttempts) {
+    if (reconnectAttempts < CONFIG.MAX_WS_RECONNECT_ATTEMPTS) {
         scheduleReconnect();
     } else {
         console.error('[ws] Max reconnection attempts reached');
@@ -3313,11 +3348,11 @@ function scheduleReconnect() {
     }
     
     reconnectAttempts++;
-    console.log(`[ws] Scheduling reconnect attempt ${reconnectAttempts}/${WS_CONFIG.maxReconnectAttempts} in ${WS_CONFIG.reconnectInterval}ms`);
+    console.log(`[ws] Scheduling reconnect attempt ${reconnectAttempts}/${CONFIG.MAX_WS_RECONNECT_ATTEMPTS} in ${CONFIG.WS_RECONNECT_INTERVAL}ms`);
     
     reconnectTimer = setTimeout(() => {
         initWebSocket();
-    }, WS_CONFIG.reconnectInterval);
+    }, CONFIG.WS_RECONNECT_INTERVAL);
 }
 
 export function sendMessage(data) {
@@ -3339,7 +3374,7 @@ export function sendMessage(data) {
 
 function queueMessage(data) {
     messageQueue.push(data);
-    if (messageQueue.length > 50) {
+    if (messageQueue.length > CONFIG.MAX_MESSAGE_QUEUE) {
         messageQueue.shift();
     }
 }
