@@ -13,7 +13,7 @@
     "dev:web": "vite --mode web --open /web/index.html",
     "build": "vite build --mode electron && copyfiles electron/index.html dist && copyfiles -u 1 electron/assets/** dist",
     "build:electron": "vite build --mode electron && copyfiles electron/index.html dist && copyfiles -u 1 electron/assets/** dist",
-    "build:web": "vite build --mode web && copyfiles -u 1 web/assets/** dist",
+    "build:web": "vite build --mode web && copyfiles -u 1 web/assets/** dist && copyfiles web/assets/loading.gif dist && xcopy /E /I /Y web\\assets\\VRM dist\\assets\\VRM && xcopy /E /I /Y web\\assets\\VRMA dist\\assets\\VRMA",
     "start": "npm run build && npx electron .",
     "start:electron": "npm run build && npx electron .",
     "start:web": "vite preview --port 3000",

@@ -10,7 +10,8 @@ export default defineConfig(({ mode, command }) => {
   const isProduction = command === 'build';
   
   // Set base path for GitHub Pages deployment
-  const base = isWeb && env.VITE_BASE_URL ? env.VITE_BASE_URL : '/';
+  // For web mode in production, use VITE_BASE_URL if set, otherwise '/'
+  const base = isWeb && isProduction && env.VITE_BASE_URL ? env.VITE_BASE_URL : '/';
   
   // Determine asset base URL
   // In dev: files served at root from publicDir (http://)
