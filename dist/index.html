@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>VRM Viewer - Web/Mobile App</title>
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <link rel="icon" type="image/x-icon" href="/assets/favicon-DvfshNse.ico" />
+    
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            background: #1a1a1a;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* Main settings panel (top-left) - responsive design */
+        .controls {
+            position: absolute;
+            top: 10px;
+            left: 100px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            z-index: 100;
+            display: none;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            max-width: 95vw;
+        }
+        .controls > div {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+        }
+        .controls label {
+            min-width: 90px;
+            font-weight: 500;
+            color: #e0e0e0;
+            font-size: 13px;
+        }
+        .status-message {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 8px 0;
+            font-size: 12px;
+            color: #ccc;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            margin-top: 8px;
+        }
+
+        /* Button styles - green buttons */
+        .controls button {
+            flex: 1;
+            min-width: 80px;
+            padding: 10px 15px;
+            background: linear-gradient(145deg, #4CAF50, #2e8b57);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s ease, transform 0.1s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .controls button:hover:not(:disabled) {
+            background: linear-gradient(145deg, #45a049, #228b22);
+            transform: translateY(-2px);
+        }
+        .controls button:active {
+            transform: translateY(0);
+        }
+        .controls button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        /* Dropdown styles */
+        .controls select {
+            padding: 8px 12px;
+            background: #1a1a1a !important;
+            color: #ffffff !important;
+            border: 1px solid #888 !important;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            min-width: 200px;
+            max-width: 90vw;
+            appearance: auto !important;
+            -webkit-appearance: auto !important;
+            -moz-appearance: auto !important;
+        }
+        .controls select:hover {
+            background: #2a2a2a !important;
+            border-color: #aaa !important;
+        }
+        .controls select:disabled {
+            background: #444 !important;
+            color: #ccc !important;
+            cursor: not-allowed;
+            opacity: 0.8;
+            border-color: #555 !important;
+        }
+        .controls select option {
+            background: #2a2a2a !important;
+            color: #ffffff !important;
+            padding: 8px;
+        }
+        .controls select option:checked {
+            background: #4CAF50 !important;
+            font-weight: bold;
+        }
+
+        /* Status display */
+        .status {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #ccc;
+            text-align: center;
+        }
+
+        /* Lip sync panel - bottom-left, mobile-responsive */
+        .settings-panel {
+            position: absolute;
+            bottom: 10px;
+            left: 100px;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            min-width: 300px;
+            max-width: 95vw;
+        }
+        .settings-panel div {
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+        }
+        .settings-panel input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #555;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 14px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .settings-panel button {
+            padding: 8px 12px;
+            min-width: 60px;
+            background: linear-gradient(145deg, #4CAF50, #2e8b57);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            flex-shrink: 0;
+        }
+        .settings-panel input:focus {
+            outline: none;
+            border-color: #4CAF50;
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .settings-panel input::placeholder {
+            color: #aaa;
+        }
+        .settings-panel button:hover:not(:disabled) {
+            background: linear-gradient(145deg, #45a049, #228b22);
+            transform: translateY(-2px);
+        }
+        .settings-panel button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+        #speakBtnPanel {
+            opacity: 0.5;
+        }
+
+        /* Facial expressions section */
+        .facial-expressions {
+            margin-top: 15px;
+        }
+        .facial-expressions label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        .expression-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .expr-btn {
+            padding: 6px 12px;
+            background: linear-gradient(145deg, #2196F3, #1976D2);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+        .expr-btn:hover:not(:disabled) {
+            background: linear-gradient(145deg, #1976D2, #1565C0);
+            transform: translateY(-2px);
+        }
+        .expr-btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .expr-btn.active {
+            background: linear-gradient(145deg, #FF9800, #F57C00);
+        }
+
+        /* Toggle button styles - invisible until hovered */
+        .toggle-btn {
+            position: absolute;
+            width: 75px;
+            height: 75px;
+            border-radius: 8px;
+            background: transparent;
+            color: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            z-index: 200;
+            opacity: 0;
+            -webkit-app-region: no-drag;
+        }
+        .toggle-btn:hover {
+            background: linear-gradient(145deg, #4CAF50, #2e8b57);
+            color: white;
+            opacity: 0.4;
+            transform: translateY(-2px);
+        }
+        .toggle-btn:active {
+            transform: translateY(0);
+        }
+        .controls {
+            opacity: 0.5;
+        }
+        .settings-panel {
+            opacity: 0.5;
+        }
+        .toggle-btn:hover + .controls,
+        .toggle-btn:hover + .settings-panel {
+            opacity: 1;
+        }
+
+        /* Light control sliders */
+        .light-control {
+            margin-top: 8px;
+        }
+        .light-control label {
+            display: block;
+            font-size: 12px;
+            color: #e0e0e0;
+            margin-bottom: 4px;
+        }
+        .light-control input[type="range"] {
+            width: 100%;
+            max-width: 70vw;
+            cursor: pointer;
+        }
+
+        /* Glass overlay - covers everything */
+        #glassOverlay {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            z-index: 9999 !important;
+            background: rgba(0, 0, 0, 1) !important;
+            backdrop-filter: blur(15px) !important;
+            -webkit-backdrop-filter: blur(15px) !important;
+            display: none;
+        }
+
+        /* Loading info - appears on top of glass overlay */
+        #loadingInfo {
+            position: fixed !important;
+            top: 50% !important;
+            left: 50% !important;
+            transform: translate(-50%, -50%) !important;
+            z-index: 10000 !important;
+            text-align: center;
+            pointer-events: none;
+            display: none;
+        }
+        .loading-text {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #2e8b57;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+        }
+        .loading-percentage {
+            font-size: 48px;
+            font-weight: bold;
+            color: #4CAF50;
+            margin-bottom: 20px;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+        }
+        .loading-bar {
+            width: 300px;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 0 auto;
+        }
+        .loading-progress {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #2e8b57);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        /* Hide drag elements for web */
+        .drag-btn-wrapper {
+            display: none;
+        }
+
+        /* Camera zoom on mobile tap */
+        #camera-zoom-indicator {
+            position: fixed;
+            top: 50%;
+            right: 20px;
+            transform: translateY(-50%);
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            z-index: 100;
+            display: none;
+            font-size: 14px;
+            pointer-events: none;
+        }
+    </style>
+  <script type="module" crossorigin src="/app.js"></script>
+</head>
+<body>
+    <!-- Glass Overlay for Loading State -->
+    <div id="glassOverlay"></div>
+    
+    <!-- Loading GIF is created dynamically in JavaScript -->
+    
+    <!-- Main Settings Panel (can be toggled with ⚙️ button) -->
+    <div class="controls" id="settingsPanel" style="display: none;">
+        <!-- Column 1 -->
+        <div>
+            <label>WebSocket URL:</label>
+            <input type="text" id="websocketUrlInput" 
+                placeholder="ws://localhost:18789" 
+                style="flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
+            <button id="connectWsBtn" style="min-width: 80px;">Connect</button>
+        </div>
+        <div>
+            <label>OpenClaw Token:</label>
+            <input type="password" id="tokenInput" 
+                placeholder="Enter token..." 
+                style="flex: 1; min-width: 200px; max-width: 90vw; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
+            <button id="saveTokenBtn" style="min-width: 80px;">Save</button>
+        </div>
+        
+        <!-- Column 2 -->
+        <div>
+            <label>Animation:</label>
+            <select id="animationSelect" disabled>
+                <option value="">Select Animation</option>
+            </select>
+        </div>
+        <div>
+            <label>Expression:</label>
+            <select id="expressionSelect" disabled>
+                <option value="">Select Expression</option>
+                <option value="neutral">Neutral</option>
+                <option value="happy">Happy</option>
+                <option value="sad">Sad</option>
+                <option value="angry">Angry</option>
+                <option value="surprised">Surprised</option>
+                <option value="blink">Blink</option>
+            </select>
+        </div>
+        <div class="light-control">
+            <label>Speaking Speed: <span id="speakingSpeedValue">1.0x</span></label>
+            <input type="range" id="speakingSpeedSlider" min="0.5" max="2.0" step="0.1" value="1" style="flex: 1; max-width: 70vw;" />
+        </div>
+        <div>
+            <button id="resetCameraBtn">Reset Camera</button>
+        </div>
+        
+        <!-- Status message (full width) -->
+        <div class="status-message" id="status">Loading VRM model...</div>
+    </div>
+    
+    <!-- Lip Sync Panel (bottom-left, can be toggled with 💬 button) -->
+    <div class="settings-panel" id="lipSyncPanel" style="display: none;">
+        <div>
+            <input type="text" id="textInputPanel"
+                placeholder="Message" 
+                style="flex: 1; min-width: 200px; max-width: 70vw; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
+            <button id="speakBtnPanel" disabled>➤</button>
+        </div>
+    </div>
+
+    <!-- Toggle Buttons (⚙️ and 💬) -->
+    <button class="toggle-btn" id="toggleSettingsBtn" style="top: 10px; left: 10px;">⚙️</button>
+    <button class="toggle-btn" id="toggleLipSyncBtn" style="bottom: 10px; left: 10px;">💬</button>
+
+</body>
+</html>
