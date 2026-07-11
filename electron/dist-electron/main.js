@@ -1,4 +1,4 @@
-import { ipcMain, app, BrowserWindow } from "electron";
+import { ipcMain, app, session, BrowserWindow } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
@@ -55,6 +55,19 @@ ipcMain.handle("set-window-bounds", (event, x, y, width, height) => {
   return true;
 });
 app.whenReady().then(() => {
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ["ws://*/*", "wss://*/*"] },
+    (details, callback) => {
+      if (details.requestHeaders) {
+        try {
+          const url = new URL(details.url);
+          details.requestHeaders["Origin"] = `${url.protocol}//${url.host}`;
+        } catch (e) {
+        }
+      }
+      callback({ requestHeaders: details.requestHeaders });
+    }
+  );
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

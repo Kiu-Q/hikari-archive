@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, session } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
@@ -73,6 +73,27 @@ ipcMain.handle('set-window-bounds', (event, x, y, width, height) => {
 
 // App lifecycle
 app.whenReady().then(() => {
+  // Override the Origin header for WebSocket connections so the OpenClaw gateway
+  // doesn't reject the connection as an unauthorized origin.
+  // The Electron renderer's origin is the dev server URL (e.g. http://localhost:5174)
+  // in dev, or the file:// protocol in production — neither of which is on the gateway's
+  // allowed-origins list by default.
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['ws://*/*', 'wss://*/*'] },
+    (details, callback) => {
+      // Set Origin to match the WebSocket server's host, which the gateway accepts
+      if (details.requestHeaders) {
+        try {
+          const url = new URL(details.url);
+          details.requestHeaders['Origin'] = `${url.protocol}//${url.host}`;
+        } catch (e) {
+          // ignore malformed URLs
+        }
+      }
+      callback({ requestHeaders: details.requestHeaders });
+    }
+  );
+
   createWindow();
 
   app.on('activate', () => {

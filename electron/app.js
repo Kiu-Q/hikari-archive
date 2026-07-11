@@ -4082,64 +4082,72 @@ function setupToggleButtons() {
  * Setup WebSocket URL input
  */
 function setupWebSocketUrlInput() {
-    console.log('[electron] Setting up WebSocket URL input');
+    console.log('[electron] Setting up WebSocket URL input + Save & Connect button');
     
     const wsUrlInput = document.getElementById('websocketUrlInput');
-    const connectWsBtn = document.getElementById('connectWsBtn');
+    const tokenInput = document.getElementById('tokenInput');
+    // Use the actual button ID from the HTML (id="saveConnectBtn")
+    const saveConnectBtn = document.getElementById('saveConnectBtn');
     
-    // Load saved WebSocket URL
+    // Load saved WebSocket URL and token into inputs
     const savedWsUrl = localStorage.getItem('websocket_url');
     if (wsUrlInput) {
         wsUrlInput.value = savedWsUrl || '';
     }
+    if (tokenInput) {
+        tokenInput.value = localStorage.getItem('openclaw_token') || '';
+    }
     
-    if (connectWsBtn) {
-        connectWsBtn.addEventListener('click', () => {
-            const url = wsUrlInput.value.trim();
+    if (saveConnectBtn) {
+        saveConnectBtn.addEventListener('click', () => {
+            // 1. Save WebSocket URL
+            const url = wsUrlInput ? wsUrlInput.value.trim() : '';
             if (url) {
-                // Save to localStorage
                 localStorage.setItem('websocket_url', url);
                 console.log('[electron] WebSocket URL saved:', url);
-                
-                // Show status message
-                const statusDiv = document.getElementById('status');
-                if (statusDiv) {
-                    statusDiv.textContent = 'WebSocket URL updated! Reconnecting...';
-                    statusDiv.style.color = '#4CAF50';
-                }
-                
-                // Reconnect with new URL
-                WebSocketModule.closeWebSocket();
-                setTimeout(() => {
-                    WebSocketModule.initWebSocket();
-                }, 500);
             } else {
-                // Clear the URL setting
                 localStorage.removeItem('websocket_url');
                 console.log('[electron] WebSocket URL cleared');
-                
-                const statusDiv = document.getElementById('status');
-                if (statusDiv) {
-                    statusDiv.textContent = 'WebSocket URL cleared. Reconnecting...';
-                    statusDiv.style.color = '#4CAF50';
-                }
-                
-                // Reconnect with default URL
-                WebSocketModule.closeWebSocket();
-                setTimeout(() => {
-                    WebSocketModule.initWebSocket();
-                }, 500);
             }
+            
+            // 2. Save OpenClaw token
+            const token = tokenInput ? tokenInput.value.trim() : '';
+            if (token) {
+                localStorage.setItem('openclaw_token', token);
+                console.log('[electron] Token saved (length:', token.length + ')');
+            } else {
+                localStorage.removeItem('openclaw_token');
+                console.log('[electron] Token cleared');
+            }
+            
+            // 3. Show status message
+            const statusDiv = document.getElementById('status');
+            if (statusDiv) {
+                statusDiv.textContent = 'Settings saved! Reconnecting...';
+                statusDiv.style.color = '#4CAF50';
+            }
+            
+            // 4. Reconnect with new URL + token
+            WebSocketModule.closeWebSocket();
+            setTimeout(() => {
+                WebSocketModule.initWebSocket();
+            }, 500);
         });
         
-        // Allow Enter key to trigger connect
+        // Allow Enter key to trigger connect from either input
+        const triggerSave = (e) => {
+            if (e.key === 'Enter') {
+                saveConnectBtn.click();
+            }
+        };
         if (wsUrlInput) {
-            wsUrlInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    connectWsBtn.click();
-                }
-            });
+            wsUrlInput.addEventListener('keypress', triggerSave);
         }
+        if (tokenInput) {
+            tokenInput.addEventListener('keypress', triggerSave);
+        }
+    } else {
+        console.warn('[electron] Save & Connect button (#saveConnectBtn) not found in DOM');
     }
 }
 
