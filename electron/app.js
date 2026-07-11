@@ -2628,6 +2628,7 @@ const WebSocketModule = (() => {
               mode: 'cli'
             },
             role: 'operator',
+            scopes: ['operator.read', 'operator.write', 'chat.read', 'chat.write', 'agent'],
             auth: {
               token: CONFIG.token
             }
@@ -2649,10 +2650,8 @@ const WebSocketModule = (() => {
           break;
         
         case 'tick':
-          console.log('[ws] Tick event received, updating conversation history');
-          if (window.fetchConversationHistory) {
-            window.fetchConversationHistory(0);
-          }
+          // Skip history fetch on tick if we don't have operator.read scope
+          // History is optional - messaging works without it
           break;
         
         case 'agent':
@@ -3104,16 +3103,18 @@ const WebSocketModule = (() => {
     }
 
     function handleHistoryResponse(data) {
-      console.log('\n========== WEBSOCKET HISTORY RESPONSE START ==========');
-      console.log('[ws] History response received');
-      console.log('[ws] Response OK:', data.ok);
-      console.log('[ws] Response ID:', data.id);
-      
       if (!data.ok) {
-        console.error('[ws] ERROR: Response not OK');
-        console.error('[ws] Error details:', data.payload?.error || data);
+        // Gracefully handle permission errors (e.g. missing operator.read scope)
+        const errorCode = data.payload?.error?.code || data.error?.code || '';
+        if (errorCode === 'INVALID_REQUEST' || errorCode.includes('scope')) {
+          console.warn('[ws] History not available (insufficient permissions:', errorCode + ')');
+        } else {
+          console.warn('[ws] History response error:', data.payload?.error || data.error || data);
+        }
         return;
       }
+      
+      console.log('[ws] History response received, OK:', data.ok, 'ID:', data.id);
       
       const messages = data.payload?.messages || [];
       const totalCount = data.payload?.totalCount || 0;
