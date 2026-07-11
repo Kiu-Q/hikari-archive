@@ -47,41 +47,61 @@
             left: 100px;
             background: rgba(0, 0, 0, 0.6);
             color: white;
-            padding: 20px;
+            padding: 24px;
             border-radius: 12px;
             z-index: 100;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
+            width: 360px;
+            box-sizing: border-box;
         }
         .controls > div {
             display: flex;
-            flex-wrap: wrap;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
         }
         .controls label {
-            min-width: 90px;
+            min-width: 110px;
             font-weight: 500;
             color: #e0e0e0;
             font-size: 13px;
         }
+        .controls input[type="text"],
+        .controls input[type="password"] {
+            flex: 1;
+            min-width: 0;
+            padding: 10px 14px;
+            border: 1px solid #555;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        .controls input[type="text"]::placeholder,
+        .controls input[type="password"]::placeholder {
+            color: #aaa;
+        }
+        .controls input[type="text"]:focus,
+        .controls input[type="password"]:focus {
+            outline: none;
+            border-color: #4CAF50;
+            background: rgba(255, 255, 255, 0.2);
+        }
         .status-message {
-            grid-column: 1 / -1;
             text-align: center;
             padding: 8px 0;
             font-size: 12px;
             color: #ccc;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
-            margin-top: 8px;
+            margin-top: 4px;
         }
 
         /* Button styles - green buttons */
         .controls button {
-            flex: 1;
-            min-width: 80px;
             padding: 10px 15px;
             background: linear-gradient(145deg, #4CAF50, #2e8b57);
             color: white;
@@ -105,36 +125,10 @@
             cursor: not-allowed;
             opacity: 0.5;
         }
-
-        /* Dropdown styles */
-        .controls select {
-            padding: 8px 12px;
-            background: #1a1a1a !important;
-            color: #ffffff !important;
-            border: 1px solid #888 !important;
-            border-radius: 6px;
-            cursor: pointer;
+        .controls .full-width-btn {
+            width: 100%;
+            padding: 12px 15px;
             font-size: 14px;
-            min-width: 200px;
-            appearance: auto !important;
-            -webkit-appearance: auto !important;
-            -moz-appearance: auto !important;
-        }
-        .controls select:hover {
-            background: #2a2a2a !important;
-            border-color: #aaa !important;
-        }
-        .controls select:disabled {
-            background: #444 !important;
-            color: #ccc !important;
-            cursor: not-allowed;
-            opacity: 0.8;
-            border-color: #555 !important;
-        }
-        .controls select option {
-            background: #2a2a2a !important;
-            color: #ffffff !important;
-            padding: 8px;
         }
 
         /* Status display */
@@ -212,11 +206,6 @@
             background: #666;
             cursor: not-allowed;
             transform: none;
-        }
-
-        /* Speak button - lower transparency */
-        #speakBtnPanel {
-            opacity: 0.5;
         }
 
         /* Facial expressions section */
@@ -417,49 +406,22 @@
     
     <!-- Main Settings Panel (can be toggled with ⚙️ button) -->
     <div class="controls" id="settingsPanel" style="display: none;">
-        <!-- Column 1 -->
         <div>
             <label>WebSocket URL:</label>
-            <input type="text" id="websocketUrlInput" 
-                placeholder="ws://localhost:18789" 
-                style="flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
-            <button id="connectWsBtn" style="min-width: 80px;">Connect</button>
+            <input type="text" id="websocketUrlInput"
+                placeholder="ws://localhost:18789" />
         </div>
         <div>
             <label>OpenClaw Token:</label>
-            <input type="password" id="tokenInput" 
-                placeholder="Enter token..." 
-                style="flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
-            <button id="saveTokenBtn" style="min-width: 80px;">Save</button>
-        </div>
-        
-        <!-- Column 2 -->
-        <div>
-            <label>Animation:</label>
-            <select id="animationSelect" disabled>
-                <option value="">Select Animation</option>
-            </select>
-        </div>
-        <div>
-            <label>Expression:</label>
-            <select id="expressionSelect" disabled>
-                <option value="">Select Expression</option>
-                <option value="neutral">Neutral</option>
-                <option value="happy">Happy</option>
-                <option value="sad">Sad</option>
-                <option value="angry">Angry</option>
-                <option value="surprised">Surprised</option>
-                <option value="blink">Blink</option>
-            </select>
+            <input type="password" id="tokenInput"
+                placeholder="Enter token..." />
         </div>
         <div class="light-control">
             <label>Speaking Speed: <span id="speakingSpeedValue">1.0x</span></label>
             <input type="range" id="speakingSpeedSlider" min="0.5" max="2.0" step="0.1" value="1" style="flex: 1;" />
         </div>
-        <div>
-            <button id="resetCameraBtn">Reset Camera</button>
-        </div>
-        
+        <button id="saveConnectBtn" class="full-width-btn">Save & Connect</button>
+
         <!-- Status message (full width) -->
         <div class="status-message" id="status">Loading VRM model...</div>
     </div>

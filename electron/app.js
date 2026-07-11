@@ -3224,6 +3224,8 @@ const HistoryModule = (() => {
         historyPanel.style.flexDirection = 'column';
         historyPanel.style.gap = '12px';
         historyPanel.style.overflow = 'hidden';
+        historyPanel.style.backdropFilter = 'blur(10px)';
+        historyPanel.style.webkitBackdropFilter = 'blur(10px)';
         
         const header = document.createElement('div');
         header.style.padding = '12px 16px';
@@ -3820,21 +3822,8 @@ function setupWindowDragging() {
 function setupUIEventListeners() {
     console.log('[electron] Setting up UI event listeners');
     
-    // WebSocket URL configuration
+    // WebSocket URL + Token configuration (combined button)
     setupWebSocketUrlInput();
-    
-    // Reset camera button
-    const resetCameraBtn = document.getElementById('resetCameraBtn');
-    if (resetCameraBtn) {
-        resetCameraBtn.addEventListener('click', () => {
-            if (window.camera && window.controls) {
-                window.camera.position.set(0.0, 1.0, 4.5);
-                window.controls.target.set(0.0, 1.0, 0.0);
-                window.controls.update();
-                console.log('[electron] Camera reset');
-            }
-        });
-    }
     
     // Lip sync panel
     const textInputPanel = document.getElementById('textInputPanel');
@@ -3935,19 +3924,6 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
         textInputPanel.addEventListener('keypress', (event) => {
             if (event.key === 'Enter' && speakBtnPanel && !speakBtnPanel.disabled) {
                 speakBtnPanel.click();
-            }
-        });
-    }
-    
-    // Expression select
-    const expressionSelect = document.getElementById('expressionSelect');
-    if (expressionSelect) {
-        expressionSelect.addEventListener('change', () => {
-            if (window.applyFacialExpression) {
-                const expression = expressionSelect.value;
-                if (expression) {
-                    window.applyFacialExpression(expression);
-                }
             }
         });
     }
@@ -4108,29 +4084,6 @@ function setupTokenDialog() {
     const tokenInput = document.getElementById('tokenInput');
     if (tokenInput) {
         tokenInput.value = savedToken || '';
-    }
-    
-    // Handle save button
-    const saveTokenBtn = document.getElementById('saveTokenBtn');
-    if (saveTokenBtn) {
-        saveTokenBtn.addEventListener('click', () => {
-            const token = tokenInput ? tokenInput.value.trim() : '';
-            if (token) {
-                localStorage.setItem('openclaw_token', token);
-                console.log('[electron] Token saved to localStorage');
-                
-                // Show success message
-                const statusDiv = document.getElementById('status');
-                if (statusDiv) {
-                    statusDiv.textContent = 'Token saved! Reconnecting...';
-                    statusDiv.style.color = '#4CAF50';
-                }
-                
-                // Reconnect WebSocket with new token
-                WebSocketModule.closeWebSocket();
-                WebSocketModule.initWebSocket();
-            }
-        });
     }
     
     if (!savedToken) {
