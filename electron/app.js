@@ -304,7 +304,13 @@ const CoreModule = (() => {
                 const newX = Math.round(currentCenterX - newWidth / 2);
                 const newY = Math.round(currentCenterY - newHeight / 2);
 
-                window.electronAPI.setWindowBounds(newX, newY, newWidth, newHeight);
+                await window.electronAPI.setWindowBounds(newX, newY, newWidth, newHeight);
+
+                // Explicitly update the renderer/camera to fill the new window size.
+                // The resize event can fire at an unreliable time, so we force it here.
+                camera.aspect = newWidth / newHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(newWidth, newHeight);
 
                 console.log('[zoom] zoomScale:', zoomScale.toFixed(2), 'window:', newWidth + 'x' + newHeight, 'camera dist:', newDistance.toFixed(2), 'deltaY:', event.deltaY);
             } catch (e) {
@@ -3829,27 +3835,30 @@ function initElectronFeatures() {
  * Setup window dragging functionality
  */
 function setupWindowDragging() {
-    console.log('[electron] Setting up window dragging');
+    console.log('[electron] Setting up whole-window dragging');
     
-    const dragButton = document.querySelector('.drag-btn-wrapper');
-    if (dragButton) {
-        dragButton.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            if (window.electronAPI) {
-                window.isWindowDragging = true;
-                dragButton.style.transition = 'none';
-                dragButton.style.transform = 'translateY(0)';
-                
-                window.electronAPI.getWindowPosition().then((pos) => {
-                    window.windowDragOffset = window.windowDragOffset || { x: 0, y: 0 };
-                    window.windowDragOffset.x = e.screenX - pos.x;
-                    window.windowDragOffset.y = e.screenY - pos.y;
-                }).catch(err => {
-                    console.warn('[electron] failed to get window position:', err);
-                });
-            }
-        });
-    }
+    // Allow dragging from anywhere on the window (except interactive controls)
+    document.addEventListener('mousedown', (e) => {
+        // Only left-click initiates window drag
+        if (e.button !== 0) return;
+
+        // Don't start drag when clicking on interactive UI elements
+        if (e.target.closest('input, button, select, .controls, .settings-panel, .toggle-btn, .history-message')) {
+            return;
+        }
+
+        if (window.electronAPI) {
+            window.isWindowDragging = true;
+
+            window.electronAPI.getWindowPosition().then((pos) => {
+                window.windowDragOffset = window.windowDragOffset || { x: 0, y: 0 };
+                window.windowDragOffset.x = e.screenX - pos.x;
+                window.windowDragOffset.y = e.screenY - pos.y;
+            }).catch(err => {
+                console.warn('[electron] failed to get window position:', err);
+            });
+        }
+    });
 
     document.addEventListener('mousemove', (e) => {
         if (window.isWindowDragging && window.electronAPI) {
@@ -3867,20 +3876,12 @@ function setupWindowDragging() {
     document.addEventListener('mouseup', () => {
         if (window.isWindowDragging) {
             window.isWindowDragging = false;
-            const dragButton = document.querySelector('.drag-btn-wrapper');
-            if (dragButton) {
-                dragButton.style.transition = 'all 0.3s ease';
-            }
         }
     });
 
     document.addEventListener('mouseleave', () => {
         if (window.isWindowDragging) {
             window.isWindowDragging = false;
-            const dragButton = document.querySelector('.drag-btn-wrapper');
-            if (dragButton) {
-                dragButton.style.transition = 'all 0.3s ease';
-            }
         }
     });
 }

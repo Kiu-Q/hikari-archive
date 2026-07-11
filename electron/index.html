@@ -16,28 +16,20 @@
     ============================================================ -->
     <style>
         /* Base styles */
-        body {
+        html, body {
             margin: 0;
+            padding: 0;
             font-family: 'Inter', sans-serif;
             overflow: hidden;
             background: transparent;
-            /* Prevent body from resizing */
-            min-width: 600px;
-            min-height: 900px;
-            max-width: 600px;
-            max-height: 900px;
-            width: 600px;
-            height: 900px;
+            width: 100vw;
+            height: 100vh;
         }
         canvas {
             display: block;
-            /* Fixed canvas size */
-            width: 600px !important;
-            height: 900px !important;
-            min-width: 600px;
-            min-height: 900px;
-            max-width: 600px;
-            max-height: 900px;
+            /* Canvas fills the viewport; size is controlled by renderer.setSize() */
+            width: 100% !important;
+            height: 100% !important;
         }
 
         /* Main settings panel (top-left) - moved further right to avoid button overlap */
@@ -279,45 +271,7 @@
             transform: translateY(0);
         }
 
-        /* Drag button wrapper - enables dragging and handles hover */
-        .drag-btn-wrapper {
-            position: fixed;
-            top: 10px;
-            left: 45%;
-            transform: translateX(-50%);
-            width: 60px;
-            height: 60px;
-            z-index: 200;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(76, 175, 80, 0);
-            border-radius: 8px;
-            cursor: move;
-            transition: all 0.3s ease;
-            color: rgba(255, 255, 255, 0);
-            font-size: 20px;
-            border: 2px solid rgba(76, 175, 80, 0);
-        }
-        .drag-btn-wrapper:hover {
-            background: linear-gradient(145deg, #4CAF50, #2e8b57);
-            color: white;
-            transform: translateX(-50%);
-        }
-        .drag-btn-wrapper:active {
-            transform: translateX(-50%);
-        }
-
-        /* Drag button - just holds content */
-        .drag-btn {
-            background: transparent;
-            color: transparent;
-            border: none;
-            pointer-events: none;
-            -webkit-app-region: no-drag;
-        }
-
-        /* Light control sliders */
+       /* Light control sliders */
         .light-control {
             margin-top: 8px;
         }
@@ -434,12 +388,6 @@
             <button id="speakBtnPanel" disabled>➤</button>
         </div>
     </div>
-
-    <!-- ============================================================
-         DRAG BUTTON
-         Bottom-right draggable handle (invisible until hovered)
-    ============================================================ -->
-    <div class="drag-btn-wrapper" title="Drag to move window">⬍</div>
 
     <!-- ============================================================
          JAVASCRIPT ENTRY POINT
