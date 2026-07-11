@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWindowPosition: () => ipcRenderer.invoke('get-window-position'),
   setWindowPosition: (x, y) => ipcRenderer.invoke('set-window-position', x, y),
   getWindowBounds: () => ipcRenderer.invoke('get-window-bounds'),
+  setWindowBounds: (x, y, width, height) => ipcRenderer.invoke('set-window-bounds', x, y, width, height),
 });

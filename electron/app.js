@@ -78,6 +78,14 @@ const CoreModule = (() => {
     let isWindowDragging = false;
     let windowDragOffset = { x: 0, y: 0 };
 
+    // Zoom control state
+    const BASE_WINDOW_WIDTH = 600;
+    const BASE_WINDOW_HEIGHT = 900;
+    const BASE_CAMERA_DISTANCE = 4.5;
+    const MIN_ZOOM = 0.5;
+    const MAX_ZOOM = 2.5;
+    let zoomScale = 1.0;
+
     // ============================================================
     // DOM ELEMENTS
     // ============================================================
@@ -120,14 +128,16 @@ const CoreModule = (() => {
             0.1,
             20.0
         );
-        camera.position.set(0.0, 1.0, 4.5);
+        camera.position.set(0.0, 1.0, BASE_CAMERA_DISTANCE);
 
         // Initialize orbit controls
         controls = new OrbitControls(camera, renderer.domElement);
         controls.screenSpacePanning = true;
+        // Disable default zoom - we handle wheel events customly to also resize the window
+        controls.enableZoom = false;
         controls.mouseButtons = {
             LEFT: null,
-            MIDDLE: THREE.MOUSE.DOLLY,
+            MIDDLE: null,
             RIGHT: THREE.MOUSE.ROTATE
         };
         controls.target.set(0.0, 1.0, 0.0);
@@ -247,6 +257,62 @@ const CoreModule = (() => {
         });
         
         console.log('[touch] Touch detection initialized');
+    }
+
+    /**
+     * Setup custom zoom control that dollies the camera AND resizes the Electron window.
+     * Scrolling up zooms in (camera closer + larger window), scrolling down zooms out.
+     */
+    function setupZoomControl() {
+        if (!renderer) return;
+
+        console.log('[zoom] Setting up custom zoom control');
+
+        renderer.domElement.addEventListener('wheel', async (event) => {
+            // Only handle zoom when running in Electron
+            if (!window.electronAPI) return;
+
+            event.preventDefault();
+
+            // deltaY < 0 = scroll up = zoom in; deltaY > 0 = scroll down = zoom out
+            // Larger step for faster zoom; scale by deltaY magnitude for trackpad smoothness
+            const baseStep = 0.15;
+            const intensity = Math.min(2, Math.abs(event.deltaY) / 100);
+            const delta = (event.deltaY < 0 ? 1 : -1) * baseStep * intensity;
+            const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomScale + delta));
+
+            if (Math.abs(newZoom - zoomScale) < 0.001) return;
+            zoomScale = newZoom;
+
+            // 1. Dolly the camera closer/further
+            const newDistance = BASE_CAMERA_DISTANCE / zoomScale;
+            const dir = new THREE.Vector3();
+            camera.getWorldDirection(dir);
+            camera.position.copy(controls.target).addScaledVector(dir, -newDistance);
+            controls.update();
+
+            // 2. Resize the Electron window proportionally, keeping aspect ratio, anchored on center
+            try {
+                const bounds = await window.electronAPI.getWindowBounds();
+                const currentCenterX = bounds.x + bounds.width / 2;
+                const currentCenterY = bounds.y + bounds.height / 2;
+
+                // Preserve exact 2:3 aspect ratio (600:900) — round height, derive width from it
+                const newHeight = Math.round(BASE_WINDOW_HEIGHT * zoomScale);
+                const aspectRatio = BASE_WINDOW_WIDTH / BASE_WINDOW_HEIGHT; // 0.6667
+                const newWidth = Math.round(newHeight * aspectRatio);
+                const newX = Math.round(currentCenterX - newWidth / 2);
+                const newY = Math.round(currentCenterY - newHeight / 2);
+
+                window.electronAPI.setWindowBounds(newX, newY, newWidth, newHeight);
+
+                console.log('[zoom] zoomScale:', zoomScale.toFixed(2), 'window:', newWidth + 'x' + newHeight, 'camera dist:', newDistance.toFixed(2), 'deltaY:', event.deltaY);
+            } catch (e) {
+                console.warn('[zoom] failed to resize window:', e);
+            }
+        }, { passive: false });
+
+        console.log('[zoom] Custom zoom control initialized');
     }
 
     /**
@@ -2370,6 +2436,9 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
         
         // Setup touch detection for model interaction
         setupTouchDetection();
+
+        // Setup custom zoom control (camera dolly + window resize)
+        setupZoomControl();
         
         // Load VRM model
         await loadVRM(VRM_MODEL_URL);

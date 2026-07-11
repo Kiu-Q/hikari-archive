@@ -13,7 +13,7 @@ function createWindow() {
     transparent: true,
     frame: false,
     alwaysOnTop: true,
-    resizable: false,
+    resizable: true,
     webPreferences: {
       preload: path.join(__dirname$1, "preload.js"),
       contextIsolation: true,
@@ -36,13 +36,23 @@ ipcMain.handle("get-window-position", () => {
 });
 ipcMain.handle("set-window-position", (event, x, y) => {
   if (!mainWindow) return false;
-  mainWindow.setBounds({ x, y, width: 600, height: 900 });
+  mainWindow.setPosition(Math.round(x), Math.round(y));
   return true;
 });
 ipcMain.handle("get-window-bounds", () => {
   if (!mainWindow) return { width: 0, height: 0, x: 0, y: 0 };
   const bounds = mainWindow.getBounds();
   return bounds;
+});
+ipcMain.handle("set-window-bounds", (event, x, y, width, height) => {
+  if (!mainWindow) return false;
+  mainWindow.setBounds({
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.max(200, Math.round(width)),
+    height: Math.max(300, Math.round(height))
+  });
+  return true;
 });
 app.whenReady().then(() => {
   createWindow();
