@@ -104,7 +104,7 @@ const CoreModule = (() => {
     let raycaster, mouse;
     let isTouchEnabled = true;
     let lastTouchTime = 0;
-    const TOUCH_DEBOUNCE_MS = 1000;
+    const TOUCH_DEBOUNCE_MS = 200;
 
     /**
      * Initialize Three.js scene
@@ -196,64 +196,61 @@ const CoreModule = (() => {
     function setupTouchDetection() {
         if (!renderer) return;
         
-        console.log('[touch] Setting up touch detection');
+        console.log('[touch] Setting up touch detection (mouseup trigger)');
         
-        let isMouseDown = false;
-        let isTouching = false;
+        let mouseDownPos = null;
         
-        // Mouse move handler - update raycaster
-        renderer.domElement.addEventListener('mousemove', (event) => {
-            if (!isTouchEnabled) return;
+        // Mouse down handler — record position
+        renderer.domElement.addEventListener('mousedown', (event) => {
+            if (event.button === 0) {
+                mouseDownPos = { x: event.clientX, y: event.clientY };
+            }
+        });
+        
+        // Mouse up handler — trigger touch if mouse stayed inside canvas and didn't drag
+        renderer.domElement.addEventListener('mouseup', (event) => {
+            if (event.button !== 0 || !mouseDownPos) return;
             
-            // Calculate mouse position in normalized device coordinates (-1 to +1)
+            // Check if drag transitioned to window (set by setupWindowDragging)
+            if (window.isWindowDragging || window._dragTransitionedToWindow) {
+                mouseDownPos = null;
+                return;
+            }
+            
+            // Calculate mouse position in normalized device coordinates
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
             
             // Check debounce
             const now = Date.now();
             if (now - lastTouchTime < TOUCH_DEBOUNCE_MS) {
+                mouseDownPos = null;
                 return;
             }
             
-            // Only trigger if left mouse button is down
-            if (isMouseDown && currentVrm) {
-                // Raycast from camera
+            // Only trigger if VRM is loaded
+            if (currentVrm) {
                 raycaster.setFromCamera(mouse, camera);
-                
-                // Check for intersections with VRM model
                 const intersects = raycaster.intersectObject(currentVrm.scene, true);
                 
                 if (intersects.length > 0) {
-                    // User is touching the model
-                    if (!isTouching) {
-                        isTouching = true;
-                        handleTouchEvent(intersects[0]);
+                    // Check that mouse didn't move much (it's a click, not a drag)
+                    const dx = event.clientX - mouseDownPos.x;
+                    const dy = event.clientY - mouseDownPos.y;
+                    const moveDistance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (moveDistance < 10) { // Less than 10px movement = click/touch
+                        handleTouchEvent(intersects[0]);  // lastTouchTime is set inside handleTouchEvent
                     }
-                } else {
-                    isTouching = false;
                 }
             }
-        });
-        
-        // Mouse down handler
-        renderer.domElement.addEventListener('mousedown', (event) => {
-            if (event.button === 0) { // Left mouse button
-                isMouseDown = true;
-            }
-        });
-        
-        // Mouse up handler
-        renderer.domElement.addEventListener('mouseup', (event) => {
-            if (event.button === 0) {
-                isMouseDown = false;
-                isTouching = false;
-            }
+            
+            mouseDownPos = null;
         });
         
         // Mouse leave handler
         renderer.domElement.addEventListener('mouseleave', () => {
-            isMouseDown = false;
-            isTouching = false;
+            mouseDownPos = null;
         });
         
         console.log('[touch] Touch detection initialized');
@@ -373,6 +370,7 @@ const CoreModule = (() => {
     async function handleTouchEvent(intersection) {
         if (!currentVrm) return;
         
+        // Touch works during any animation state — no blocking
         const now = Date.now();
         if (now - lastTouchTime < TOUCH_DEBOUNCE_MS) {
             console.log('[touch] Touch event debounced');
@@ -380,119 +378,35 @@ const CoreModule = (() => {
         }
         
         lastTouchTime = now;
-        console.log('[touch] Touch event triggered on model');
+        console.log('[touch] Touch event triggered on model (works during any animation)');
+        
+        // Interrupt any running sequence to allow touch response
+        if (isSitAnimationActive) {
+            isSitAnimationActive = false;
+        }
         
         try {
             // Identify which body part was touched
             const bodyPart = identifyBodyPart(intersection);
             console.log('[touch] Touched body part:', bodyPart);
             
-            // Step 1: Play touch animation
-            console.log('[touch] Playing touch animation...');
-            statusDiv.textContent = 'Touch response...';
-            
-            // Load and play sit animation for touch response
-            const touchAction = await startSmoothTransition(
-                `${ASSET_BASE_URL}VRMA/sit.vrma`,
-                { loopMode: THREE.LoopRepeat }
-            );
-            
-            if (touchAction) {
-                console.log('[touch] Touch animation playing');
-                // Wait for animation to complete
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                console.log('[touch] Touch animation completed');
-            }
-            
-            // Step 2: Send message to agent
+            // Send message to agent directly (no pre-animation)
             const touchMessage = `User touched your ${bodyPart}`;
             console.log('[touch] Sending message to agent:', touchMessage);
+            statusDiv.textContent = 'Touch response...';
             
-            if (window.sendMessage) {
-                // Disable messaging controls and set to thinking state
-                if (window.disableMessaging) {
-                    window.disableMessaging();
-                }
-                if (window.setMessagingThinking) {
-                    window.setMessagingThinking();
-                }
-                
-                // Generate unique request ID
-                const requestId = 'touch-' + Date.now();
-                const idempotencyKey = 'touch-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
-                
-                // Construct full message with touch context
-                const fullMessage = `===== USER MESSAGE =====
-${touchMessage}
-
-===== SYSTEM INSTRUCTIONS =====
-The user has just touched your ${bodyPart}. Respond naturally to this interaction.
-
-AVAILABLE ANIMATIONS (and what they do):
-- idle_loop: Continuous idle animation (default state)
-- idle_airplane: Make airplane gesture with arm
-- idle_shoot: Make shooting gesture with hand
-- idle_sport: Do sports movements/stretching
-- idle_stretch: Stretch body and limbs
-- idle_vSign: Make V-sign with hand
-- sit: Sit down on ground
-- sitWave: Sit and wave to greet
-- start_1standUp: Stand up from sitting position
-- start_2turnAround: Turn around to face camera
-- walk: Walk forward, gesture, walk back
-- wave_both: Wave with both hands
-- wave_left: Wave with left hand
-- wave_right: Wave with right hand
-
-AVAILABLE EXPRESSIONS:
-- neutral (default state)
-- happy
-- sad
-- angry
-- surprised
-- blink (single blink, then neutral)
-
-RESPONSE FORMAT (JSON):
-Please respond with a JSON object containing:
-{
-  'text': 'Your spoken response here',
-  'animation': {
-    'file': 'idle_loop.vrma',  // or null for no animation
-    'timing': 'before'            // 'before', 'during', 'after', or null
-  },
-  'expression': {
-    'name': 'happy',             // or null for no expression
-    'timing': 'during'            // 'before', 'during', 'after', or null
-  }
-}
-
-TIMING OPTIONS:
-- 'before': play animation/expression BEFORE speaking
-- 'during': play animation/expression WHILE speaking
-- 'after': play animation/expression AFTER speaking completes
-- null: no animation/expression needed (use defaults)
-
-IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JSON response. Just provide the raw JSON object directly.`;
-                
-                // Send request to OpenClaw agent
-                window.sendMessage({
-                    type: 'req',
-                    id: requestId,
-                    method: 'agent',
-                    params: {
-                        message: fullMessage,
-                        sessionKey: 'main',
-                        timeout: 60,
-                        idempotencyKey: idempotencyKey
-                    }
-                });
-                
-                console.log('[touch] Touch message sent to agent:', requestId);
+            if (window.disableMessaging) {
+                window.disableMessaging();
+            }
+            if (window.setMessagingThinking) {
+                window.setMessagingThinking();
             }
             
-            // Step 3: Return to idle loop after animation
-            console.log('[touch] Returning to idle loop');
-            await loadIdleLoop();
+            // Send only the user message — system instructions were sent once at session start
+            if (window.sendAgentMessage) {
+                window.sendAgentMessage(touchMessage);
+                console.log('[touch] Touch message sent to agent via HTTP');
+            }
             
         } catch (error) {
             console.error('[touch] Error handling touch event:', error);
@@ -591,6 +505,7 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
     const VRMA_ANIMATION_URLS = [
         `${ASSET_BASE_URL}VRMA/idle_loop.vrma`,
         `${ASSET_BASE_URL}VRMA/idle_airplane.vrma`,
+        `${ASSET_BASE_URL}VRMA/idle_look.vrma`,
         `${ASSET_BASE_URL}VRMA/idle_shoot.vrma`,
         `${ASSET_BASE_URL}VRMA/idle_sport.vrma`,
         `${ASSET_BASE_URL}VRMA/idle_stretch.vrma`,
@@ -600,9 +515,15 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
         `${ASSET_BASE_URL}VRMA/start_1standUp.vrma`,
         `${ASSET_BASE_URL}VRMA/start_2turnAround.vrma`,
         `${ASSET_BASE_URL}VRMA/walk.vrma`,
+        `${ASSET_BASE_URL}VRMA/walk_left.vrma`,
+        `${ASSET_BASE_URL}VRMA/walk_right.vrma`,
         `${ASSET_BASE_URL}VRMA/wave_both.vrma`,
+        `${ASSET_BASE_URL}VRMA/wave_fast.vrma`,
         `${ASSET_BASE_URL}VRMA/wave_left.vrma`,
-        `${ASSET_BASE_URL}VRMA/wave_right.vrma`
+        `${ASSET_BASE_URL}VRMA/wave_right.vrma`,
+        `${ASSET_BASE_URL}VRMA/sit_down.vrma`,
+        `${ASSET_BASE_URL}VRMA/sit_up.vrma`,
+        `${ASSET_BASE_URL}VRMA/hang.vrma`
     ];
 
     window.VRMA_ANIMATION_URLS = VRMA_ANIMATION_URLS;
@@ -1297,6 +1218,14 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
         speakingBubble.style.left = '50%';
         speakingBubble.style.top = '40%';
         
+        // Lock the width: pre-measure the full text, then set fixed width for this sentence
+        speakingBubble.style.width = 'auto';
+        speakingBubble.textContent = text;  // Temporarily set full text to measure
+        const measuredWidth = speakingBubble.offsetWidth;
+        speakingBubble.textContent = '';     // Clear back
+        // Set locked width (add padding consideration — offsetWidth includes padding)
+        speakingBubble.style.width = measuredWidth + 'px';
+        
         updateSpeakingBubblePosition();
         
         // Fade in effect
@@ -1988,51 +1917,51 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
             console.log('[walk-electron] waiting before starting clip...');
             await new Promise(resolve => setTimeout(resolve, CONFIG.WALK_START_DELAY * 1000));
 
-            console.log('[walk-electron] turning to face', walkingDirection, ', duration (ms)', turn * 1000);
-            let action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
-            if (action) {
-                try {
-                    if (typeof action.setEffectiveTimeScale === 'function') {
-                        action.setEffectiveTimeScale(walkTimeScale);
-                    } else {
-                        action.timeScale = walkTimeScale;
-                    }
-                } catch (e) {
-                    console.warn('[walk-electron] failed to set time scale for initial turn', e);
-                }
+            // Phase 1: Turn to face direction (reversed: walk_left.vrma turns right, walk_right.vrma turns left)
+            const turnUrl = `${ASSET_BASE_URL}VRMA/walk_${walkingDirection === 'right' ? 'left' : 'right'}.vrma`;
+            console.log('[walk-electron] Phase 1: turning with', turnUrl);
+            const turnAction = await startSmoothTransition(turnUrl, { loopMode: THREE.LoopOnce, transitionTime: 0.5 });
+            if (turnAction) {
+                await waitForActionEnd(turnAction, 5000, false);
             }
-            await animateElectronWalkPhase(0, turn, 'initial_turn', walkingDirection);
 
-            console.log('[walk-electron] starting', walkingDirection, 'walk clip (LoopRepeat)');
-            action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
-            if (action) {
-                try {
-                    if (typeof action.setEffectiveTimeScale === 'function') {
-                        action.setEffectiveTimeScale(walkTimeScale);
-                    } else {
-                        action.timeScale = walkTimeScale;
-                    }
-                } catch (e) {
-                    console.warn('[walk-electron] failed to set time scale for walk leg', e);
-                }
+            // Set model rotation to face walking direction (walk.vrma faces forward, so rotate model)
+            const targetRotY = walkingDirection === 'right' ? walkingInitialRotY + Math.PI / 2 : walkingInitialRotY - Math.PI / 2;
+            console.log('[walk-electron] Setting model rotation to face', walkingDirection, 'rotY:', targetRotY);
+            if (currentVrm) {
+                currentVrm.scene.rotation.y = targetRotY;
             }
-            console.log('[walk-electron]', walkingDirection, 'leg duration (ms)', leg * 1000);
-            await animateElectronWalkPhase(turn, turn + leg, 'walk', walkingDirection);
 
-            console.log('[walk-electron] turning to face forward, duration (ms)', turn * 1000);
-            action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
-            if (action) {
+            // Phase 2: Walk forward (loop walk.vrma while moving window horizontally)
+            const walkUrl = `${ASSET_BASE_URL}VRMA/walk.vrma`;
+            console.log('[walk-electron] Phase 2: walking with', walkUrl);
+            let walkAction = await startSmoothTransition(walkUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
+            if (walkAction) {
                 try {
-                    if (typeof action.setEffectiveTimeScale === 'function') {
-                        action.setEffectiveTimeScale(walkTimeScale);
+                    if (typeof walkAction.setEffectiveTimeScale === 'function') {
+                        walkAction.setEffectiveTimeScale(walkTimeScale);
                     } else {
-                        action.timeScale = walkTimeScale;
+                        walkAction.timeScale = walkTimeScale;
                     }
                 } catch (e) {
-                    console.warn('[walk-electron] failed to set time scale for turn to forward', e);
+                    console.warn('[walk-electron] failed to set time scale for walk', e);
                 }
             }
-            await animateElectronWalkPhase(turn + leg, turn + leg + turn, 'turn_to_forward', walkingDirection);
+            console.log('[walk-electron] walk duration (ms)', leg * 1000);
+            await animateElectronWalkPhase(0, leg, 'walk_sideways', walkingDirection);
+
+            // Reset model rotation to face forward before turn-back animation
+            if (currentVrm) {
+                currentVrm.scene.rotation.y = walkingInitialRotY;
+            }
+
+            // Phase 3: Turn back to face forward (reversed: use opposite of Phase 1)
+            const turnBackUrl = `${ASSET_BASE_URL}VRMA/walk_${walkingDirection}.vrma`;
+            console.log('[walk-electron] Phase 3: turning back with', turnBackUrl);
+            const turnBackAction = await startSmoothTransition(turnBackUrl, { loopMode: THREE.LoopOnce, transitionTime: 0.5 });
+            if (turnBackAction) {
+                await waitForActionEnd(turnBackAction, 5000, false);
+            }
 
             walkingPathActive = false;
             console.log('[walk-electron] finished, keeping current position and rotation');
@@ -2056,7 +1985,6 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
 
             function step() {
                 const elapsed = performance.now() - startTime;
-                const elapsedSec = elapsed / 1000;
                 const progress = Math.min(1, elapsed / durationMs);
 
                 if (!currentVrm) {
@@ -2067,7 +1995,15 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
                 let rotY = walkingInitialRotY;
                 let windowX = walkingWindowInitialPos.x;
 
-                if (phaseType === 'initial_turn') {
+                if (phaseType === 'walk_sideways') {
+                    // Keep rotation as-is (set before this phase starts) — don't override
+                    rotY = currentVrm.scene.rotation.y;
+                    if (direction === 'right') {
+                        windowX = walkingWindowInitialPos.x + Math.round(windowOffset * progress);
+                    } else {
+                        windowX = walkingWindowInitialPos.x - Math.round(windowOffset * progress);
+                    }
+                } else if (phaseType === 'initial_turn') {
                     if (direction === 'right') {
                         rotY = walkingInitialRotY + (Math.PI / 2) * progress;
                     } else {
@@ -2242,7 +2178,7 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
                 const name = url.split('/').pop();
                 return name.startsWith('idle_') && name !== 'idle_loop.vrma' || 
                        name === 'walk.vrma' || 
-                       name === 'start_1standUp.vrma' || 
+                       name === 'sit.vrma' || 
                        name === 'start_2turnAround.vrma';
             });
 
@@ -2251,7 +2187,7 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
                 console.log('[idle] selected random idle', randomFile);
                 statusDiv.textContent = `Playing random idle: ${randomFile}`;
 
-                if (randomFile.includes('walk.vrma')) {
+                if (randomFile.includes('walk.vrma') && !randomFile.includes('walk_left') && !randomFile.includes('walk_right')) {
                     if (window.electronAPI) {
                         await runElectronWalkSequence(randomFile);
                     } else {
@@ -2259,9 +2195,31 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
                         await loadIdleLoop();
                     }
                 }
-                else if (randomFile.includes('start_1standUp.vrma')) {
-                    await runStart1Sequence();
-                } 
+                else if (randomFile.includes('sit.vrma') && !randomFile.includes('sitWave')) {
+                    // Sit sequence: sit_down → sit loop → sit_up
+                    console.log('[idle] Running sit sequence (sit_down → sit loop → sit_up)');
+                    statusDiv.textContent = 'Sitting sequence...';
+                    
+                    // 1. Play sit_down
+                    const sitDownAction = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/sit_down.vrma`, { loopMode: THREE.LoopOnce });
+                    if (sitDownAction) {
+                        await waitForActionEnd(sitDownAction, 15000, false);
+                    }
+                    
+                    // 2. Loop sit for random duration
+                    const sitDuration = Math.random() * (CONFIG.RANDOM_IDLE_MAX_DELAY - CONFIG.RANDOM_IDLE_MIN_DELAY) + CONFIG.RANDOM_IDLE_MIN_DELAY;
+                    console.log('[idle] Sitting for', (sitDuration / 1000).toFixed(1), 'seconds');
+                    const sitAction = await startSmoothTransition(randomFile, { loopMode: THREE.LoopRepeat });
+                    if (sitAction) {
+                        await new Promise(resolve => setTimeout(resolve, sitDuration));
+                    }
+                    
+                    // 3. Play sit_up (startSmoothTransition crossfades from sit → sit_up smoothly)
+                    const sitUpAction = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/sit_up.vrma`, { loopMode: THREE.LoopOnce });
+                    if (sitUpAction) {
+                        await waitForActionEnd(sitUpAction, 15000, true);
+                    }
+                }
                 else {
                     const action = await startSmoothTransition(randomFile, { loopMode: THREE.LoopOnce });
                     if (action) {
@@ -2405,20 +2363,36 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
                 }
                 
                 isSitAnimationActive = true;
-                console.log('[sit] Sit animation started, both panels hidden, restoration prevented');
+                console.log('[sit] Sit sequence started (sit_down → sit loop → sit_up)');
                 
-                const action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat });
-                if (action) {
-                    await waitForActionEnd(action, 15000, true);
-                    action.stop();
-                    currentMixer.uncacheAction(action.getClip());
-                    currentAction = null;
-                    if (currentVrm) currentVrm.humanoid.resetNormalizedPose();
+                // 1. Play sit_down first (transition to sitting)
+                const sitDownAction = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/sit_down.vrma`, { loopMode: THREE.LoopOnce });
+                if (sitDownAction) {
+                    await waitForActionEnd(sitDownAction, 15000, false);
                 }
                 
+                // 2. Loop sit animation for a random duration
+                const sitDuration = Math.random() * (CONFIG.RANDOM_IDLE_MAX_DELAY - CONFIG.RANDOM_IDLE_MIN_DELAY) + CONFIG.RANDOM_IDLE_MIN_DELAY;
+                console.log('[sit] Sitting for', (sitDuration / 1000).toFixed(1), 'seconds');
+                statusDiv.textContent = `Sitting for ${(sitDuration/1000).toFixed(1)}s...`;
+                
+                const sitAction = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat });
+                if (sitAction) {
+                    await new Promise(resolve => setTimeout(resolve, sitDuration));
+                    sitAction.stop();
+                    currentMixer.uncacheAction(sitAction.getClip());
+                }
+                
+                // 3. Play sit_up (stand back up)
+                const sitUpAction = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/sit_up.vrma`, { loopMode: THREE.LoopOnce });
+                if (sitUpAction) {
+                    await waitForActionEnd(sitUpAction, 15000, true);
+                }
+                
+                if (currentVrm) currentVrm.humanoid.resetNormalizedPose();
                 await loadIdleLoop();
                 
-                console.log('[sit] Sit animation complete, panels remain hidden until user interaction');
+                console.log('[sit] Sit sequence complete, panels remain hidden until user interaction');
             } else {
                 await startSmoothTransition(vrmaUrl);
             }
@@ -2523,6 +2497,201 @@ const WebSocketModule = (() => {
       const defaultUrl = 'ws://localhost:18789';
       console.log('[ws] Using default WebSocket URL:', defaultUrl);
       return defaultUrl;
+    }
+
+    function getHttpBaseUrl() {
+      const wsUrl = getWebSocketUrl();
+      return wsUrl.replace(/^ws/, 'http');
+    }
+
+    const SYSTEM_INSTRUCTIONS = `===== SYSTEM INSTRUCTIONS =====
+You are communicating through a VRM (Virtual Reality Model) 3D character viewer.
+
+AVAILABLE ANIMATIONS (and what they do):
+- idle_airplane: Make airplane gesture with arm
+- idle_look: Look around
+- idle_shoot: Make shooting gesture with hand
+- idle_sport: Do sports movements/stretching
+- idle_stretch: Stretch body and limbs
+- idle_vSign: Make V-sign with hand
+- wave_both: Wave with both hands
+- wave_fast: Wave quickly with one hand
+- wave_left: Wave with left hand
+- wave_right: Wave with right hand
+
+AVAILABLE EXPRESSIONS (always applied during speaking):
+- neutral (default state)
+- happy
+- sad
+- angry
+- surprised
+
+RESPONSE FORMAT (JSON):
+Please respond with a JSON object containing:
+{
+  'text': 'Your spoken response here',
+  'animation': {
+    'file': 'idle_airplane.vrma',  // or null for no animation
+    'timing': 'during'             // 'during' or 'after' only
+  },
+  'expression': {
+    'name': 'happy'                // or null for no expression (always applied during speaking)
+  }
+}
+
+ANIMATION TIMING OPTIONS:
+- 'during': play animation WHILE speaking
+- 'after': play animation AFTER speaking completes
+- null: no animation needed (use defaults)
+
+NOTE: Expression timing is always 'during' (applied while speaking). Do not set expression timing.
+NOTE: The 'before' timing option is NOT available for animations. Use 'during' or 'after' only.
+
+IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JSON response. Just provide the raw JSON object directly.
+Note: Animations play fully before proceeding. Expression resets to 'neutral' when returning to idle_loop.`;
+
+    let sessionStarted = false;
+    let conversationHistory = [];
+
+    async function sendAgentViaHttp(message, addToHistory = true) {
+      const baseUrl = getHttpBaseUrl();
+      const token = localStorage.getItem('openclaw_token') || CONFIG.token;
+      
+      const url = `${baseUrl}/v1/chat/completions`;
+      console.log('[http] Sending agent request to:', url);
+      
+      if (addToHistory) {
+        conversationHistory.push({ role: 'user', content: message });
+      }
+      const messagesToSend = addToHistory ? conversationHistory : [{ role: 'user', content: message }];
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          model: 'openclaw',
+          messages: messagesToSend,
+          max_tokens: 4096
+        })
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[http] Error response:', response.status, errorText);
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+      
+      const data = await response.json();
+      const replyText = data.choices?.[0]?.message?.content;
+      
+      if (!replyText) {
+        throw new Error('No content in HTTP response');
+      }
+      
+      console.log('[http] Agent reply:', replyText);
+      
+      if (addToHistory) {
+        conversationHistory.push({ role: 'assistant', content: replyText });
+      }
+      
+      return replyText;
+    }
+
+    async function startSession() {
+      if (sessionStarted) return;
+      console.log('[session] Starting new OpenClaw session...');
+
+      try {
+        // 1. Reset the session (ignore the reply) — don't add to history
+        conversationHistory = [];
+        await sendAgentViaHttp('/new', false);
+        console.log('[session] Session reset (reply ignored)');
+
+        // 2. Send system instructions once
+        const reply = await sendAgentViaHttp(SYSTEM_INSTRUCTIONS);
+        console.log('[session] System instructions sent, processing reply as normal message...');
+
+        sessionStarted = true;
+
+        // 3. Treat the reply as a normal agent message — parse, speak, animate
+        if (reply) {
+          // Add agent reply to local history
+          if (window.addLocalHistoryMessage) {
+            const parsed = parseAgentResponse(reply);
+            const displayText = parsed?.text || reply;
+            window.addLocalHistoryMessage('agent', displayText);
+          }
+
+          const parsedResponse = parseAgentResponse(reply);
+
+          if (parsedResponse && parsedResponse.text) {
+            await executeAgentCommand(parsedResponse);
+          } else {
+            // Not JSON — just speak it as plain text
+            if (window.lipSyncSystem) {
+              window.lipSyncSystem.startSpeaking(reply);
+              const statusDiv = document.getElementById('status');
+              if (statusDiv) {
+                const displayText = reply.length > 50 ? reply.substring(0, 50) + '...' : reply;
+                statusDiv.textContent = 'Speaking: ' + displayText;
+              }
+            }
+          }
+        }
+
+        console.log('[session] Session ready');
+      } catch (error) {
+        console.error('[session] Failed to start session:', error);
+      }
+    }
+
+    async function sendAgentMessage(message) {
+      try {
+        // Only send the user message — system instructions were sent once at session start
+        const replyText = await sendAgentViaHttp(message);
+
+        // Add user message to local history — but filter out system-generated touch messages
+        if (window.addLocalHistoryMessage) {
+          if (!message.startsWith('User touched your ')) {
+            window.addLocalHistoryMessage('user', message);
+          }
+        }
+
+        // Ignore non-JSON replies (e.g., "No response from OpenClaw")
+        if (replyText.includes('No response from OpenClaw') || replyText.trim().length < 2) {
+          console.log('[http] Ignoring non-JSON reply:', replyText.substring(0, 50));
+          if (window.enableMessaging) window.enableMessaging();
+          if (window.resetMessagingPanel) window.resetMessagingPanel();
+          return;
+        }
+
+        const parsedResponse = parseAgentResponse(replyText);
+        
+        if (parsedResponse && parsedResponse.text) {
+          // Add agent reply to local history
+          if (window.addLocalHistoryMessage) {
+            window.addLocalHistoryMessage('agent', parsedResponse.text);
+          }
+          await executeAgentCommand(parsedResponse);
+        } else {
+          // Not valid JSON — ignore it
+          console.log('[http] Reply does not match required JSON format, ignoring:', replyText.substring(0, 50));
+          if (window.enableMessaging) window.enableMessaging();
+          if (window.resetMessagingPanel) window.resetMessagingPanel();
+        }
+      } catch (error) {
+        console.error('[http] Agent request failed:', error);
+        const statusDiv = document.getElementById('status');
+        if (statusDiv) {
+          statusDiv.textContent = 'Error: ' + error.message;
+          statusDiv.style.color = '#ff6b6b';
+        }
+        if (window.enableMessaging) window.enableMessaging();
+        if (window.resetMessagingPanel) window.resetMessagingPanel();
+      }
     }
 
     let reconnectAttempts = 0;
@@ -2890,37 +3059,38 @@ const WebSocketModule = (() => {
         
         if (parsed.animation && parsed.animation.file) {
           const validAnimations = [
-            'idle_loop.vrma', 'idle_airplane.vrma', 'idle_shoot.vrma', 
+            'idle_loop.vrma', 'idle_airplane.vrma', 'idle_look.vrma', 'idle_shoot.vrma', 
             'idle_sport.vrma', 'idle_stretch.vrma', 'idle_vSign.vrma',
             'sit.vrma', 'sitWave.vrma', 'start_1standUp.vrma', 
-            'start_2turnAround.vrma', 'walk.vrma',
-            'wave_both.vrma', 'wave_left.vrma', 'wave_right.vrma'
+            'start_2turnAround.vrma', 'walk.vrma', 'walk_left.vrma', 'walk_right.vrma',
+            'wave_both.vrma', 'wave_fast.vrma', 'wave_left.vrma', 'wave_right.vrma'
           ];
           
           if (!validAnimations.includes(parsed.animation.file)) {
             console.warn('[ws] Invalid animation:', parsed.animation.file);
-            parsed.animation = { file: 'idle_loop.vrma', timing: 'during' };
+            parsed.animation = null;
           }
         }
         
         if (parsed.expression && parsed.expression.name) {
-          const validExpressions = ['neutral', 'happy', 'sad', 'angry', 'surprised', 'blink'];
+          const validExpressions = ['neutral', 'happy', 'sad', 'angry', 'surprised'];
           
           if (!validExpressions.includes(parsed.expression.name)) {
             console.warn('[ws] Invalid expression:', parsed.expression.name);
-            parsed.expression = { name: 'neutral', timing: 'during' };
+            parsed.expression = null;
           }
         }
         
-        const validTimings = ['before', 'during', 'after', null];
+        // Animation timing: only 'during' or 'after' allowed (no 'before')
+        const validTimings = ['during', 'after', null];
         
         if (parsed.animation && !validTimings.includes(parsed.animation.timing)) {
-          console.warn('[ws] Invalid animation timing:', parsed.animation.timing);
+          console.warn('[ws] Invalid animation timing (before is not allowed):', parsed.animation.timing);
           parsed.animation.timing = 'during';
         }
         
-        if (parsed.expression && !validTimings.includes(parsed.expression.timing)) {
-          console.warn('[ws] Invalid expression timing:', parsed.expression.timing);
+        // Expression timing is always forced to 'during'
+        if (parsed.expression) {
           parsed.expression.timing = 'during';
         }
         
@@ -2952,56 +3122,20 @@ const WebSocketModule = (() => {
       
       const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
       
-      if (command.animation && command.animation.timing === 'before') {
-        console.log('[ws] Playing animation BEFORE speaking:', command.animation.file);
-        if (statusDiv) {
-          statusDiv.textContent = 'Playing animation before speaking...';
-        }
-        
-        if (window.startSmoothTransition) {
-          const action = await window.startSmoothTransition(
-            `${ASSET_BASE_URL}VRMA/${command.animation.file}`,
-            { loopMode: 2200 }
-          );
-          console.log('[ws] Before animation started, action:', action);
-          
-          console.log('[ws] Waiting minimum 5 seconds for before animation...');
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          
-          if (action && window.waitForActionEnd) {
-            try {
-              await window.waitForActionEnd(action, 60000, false);
-              console.log('[ws] Before animation finished event received');
-            } catch (e) {
-              console.warn('[ws] Before animation wait timed out or failed (this is OK):', e);
-            }
-          }
-          
-          console.log('[ws] Additional 3 second delay for before animation...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          console.log('[ws] Before animation fully complete, proceeding to speech');
-        }
-      }
-      
-      if (command.expression && command.expression.timing === 'before') {
-        console.log('[ws] Applying expression BEFORE speaking:', command.expression.name);
+      // Expression is always applied DURING speaking (forced)
+      if (command.expression && command.expression.name) {
+        console.log('[ws] Applying expression (always during):', command.expression.name);
         if (window.applyFacialExpression) {
           window.applyFacialExpression(command.expression.name);
         }
       }
       
+      // Animation: only 'during' or 'after' (no 'before')
       if (command.animation && command.animation.timing === 'during') {
-        console.log('[ws] Playing animation DURING speaking:', command.animation.file);
+        console.log('[ws] Playing animation DURING speaking (LoopOnce):', command.animation.file);
         if (window.startSmoothTransition) {
-          await window.startSmoothTransition(`${ASSET_BASE_URL}VRMA/${command.animation.file}`);
+          await window.startSmoothTransition(`${ASSET_BASE_URL}VRMA/${command.animation.file}`, { loopMode: THREE.LoopOnce });
           await new Promise(resolve => setTimeout(resolve, 500));
-        }
-      }
-      
-      if (command.expression && command.expression.timing === 'during') {
-        console.log('[ws] Applying expression DURING speaking:', command.expression.name);
-        if (window.applyFacialExpression) {
-          window.applyFacialExpression(command.expression.name);
         }
       }
       
@@ -3261,7 +3395,9 @@ const WebSocketModule = (() => {
       initWebSocket,
       sendMessage,
       isWebSocketConnected,
-      closeWebSocket
+      closeWebSocket,
+      sendAgentMessage,
+      startSession
     };
 })();
 
@@ -3355,14 +3491,10 @@ const HistoryModule = (() => {
                 window.showMessagingPanel();
             }
             
-            if (historyMessages.length === 0) {
-                fetchConversationHistory(0);
-            } else {
-                const messagesContainer = document.getElementById('history-messages');
-                if (messagesContainer) {
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                    console.log('[history] Scrolled to bottom (latest messages)');
-                }
+            // No server fetch — history is tracked locally from this session only
+            const messagesContainer = document.getElementById('history-messages');
+            if (messagesContainer) {
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
             }
         }
     }
@@ -3794,6 +3926,17 @@ const HistoryModule = (() => {
         }
     }
 
+    function addLocalHistoryMessage(role, text) {
+        const messagesContainer = document.getElementById('history-messages');
+        if (!messagesContainer) return;
+
+        const msg = { role: role, timestamp: new Date().toISOString() };
+        addMessageToHistory(msg, text);
+        historyMessages.push(msg);
+
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
     return {
         initHistoryPanel,
         showHistoryPanel,
@@ -3803,7 +3946,8 @@ const HistoryModule = (() => {
         loadMoreMessages,
         displayHistoryMessages,
         hideAllPanels,
-        restorePanels
+        restorePanels,
+        addLocalHistoryMessage
     };
 })();
 
@@ -3834,57 +3978,136 @@ function initElectronFeatures() {
 
 /**
  * Setup window dragging functionality
+ * 
+ * New logic:
+ * 1. mousedown → start tracking mouse position
+ * 2. If mouse stays inside canvas until mouseup → touch event (no pre-animation)
+ * 3. If mouse leaves canvas while button down → window drag (play hang.vrma first half)
+ * 4. mouseup during drag → play remaining hang.vrma half
  */
 function setupWindowDragging() {
-    console.log('[electron] Setting up whole-window dragging');
+    console.log('[electron] Setting up drag/touch tracking');
     
-    // Allow dragging from anywhere on the window (except interactive controls)
+    let mouseDownActive = false;
+    let dragTransitionedToWindow = false;
+    let hangAction = null;
+    
+    const ASSET_BASE_URL_DRAG = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
+    
+    function isInsideCanvas(clientX, clientY) {
+        const canvas = document.querySelector('canvas');
+        if (!canvas) return false;
+        const rect = canvas.getBoundingClientRect();
+        return clientX >= rect.left && clientX <= rect.right &&
+               clientY >= rect.top && clientY <= rect.bottom;
+    }
+    
     document.addEventListener('mousedown', (e) => {
-        // Only left-click initiates window drag
         if (e.button !== 0) return;
-
-        // Don't start drag when clicking on interactive UI elements
+        
+        // Don't track when clicking on interactive UI elements
         if (e.target.closest('input, button, select, .controls, .settings-panel, .toggle-btn, .history-message')) {
             return;
         }
-
+        
+        // Start tracking mouse
+        mouseDownActive = true;
+        dragTransitionedToWindow = false;
+        hangAction = null;
+        
+        // Pre-fetch window position for potential drag
         if (window.electronAPI) {
-            window.isWindowDragging = true;
-
             window.electronAPI.getWindowPosition().then((pos) => {
-                window.windowDragOffset = window.windowDragOffset || { x: 0, y: 0 };
-                window.windowDragOffset.x = e.screenX - pos.x;
-                window.windowDragOffset.y = e.screenY - pos.y;
-            }).catch(err => {
-                console.warn('[electron] failed to get window position:', err);
-            });
+                window.windowDragOffset = {
+                    x: e.screenX - pos.x,
+                    y: e.screenY - pos.y
+                };
+            }).catch(() => {});
         }
     });
-
+    
     document.addEventListener('mousemove', (e) => {
-        if (window.isWindowDragging && window.electronAPI) {
-            e.preventDefault();
-            const newX = e.screenX - (window.windowDragOffset?.x || 0);
-            const newY = e.screenY - (window.windowDragOffset?.y || 0);
-            try {
-                window.electronAPI.setWindowPosition(newX, newY);
-            } catch (err) {
-                console.warn('[electron] failed to update window position:', err);
+        if (!mouseDownActive) return;
+        
+        if (dragTransitionedToWindow) {
+            // Already in drag mode — keep character's right hand at mouse position
+            if (window.electronAPI) {
+                e.preventDefault();
+                // The offset was calculated at mousedown: screenX - window.x
+                // So we move window so that the grab point follows the mouse
+                // To keep right hand at mouse: window position = mouse screen pos - initial offset
+                const newX = e.screenX - (window.windowDragOffset?.x || 0);
+                const newY = e.screenY - (window.windowDragOffset?.y || 0);
+                try {
+                    window.electronAPI.setWindowPosition(newX, newY);
+                } catch (err) {
+                    console.warn('[electron] failed to update window position:', err);
+                }
+            }
+            return;
+        }
+        
+        // Check if mouse has left the canvas while button is down
+        if (!isInsideCanvas(e.clientX, e.clientY)) {
+            // Mouse left canvas → switch to window drag mode
+            dragTransitionedToWindow = true;
+            window.isWindowDragging = true;
+            console.log('[drag] Mouse left canvas, starting window drag');
+            
+            // Play first half of hang.vrma
+            if (window.startSmoothTransition) {
+                window.startSmoothTransition(`${ASSET_BASE_URL_DRAG}VRMA/hang.vrma`, { 
+                    loopMode: THREE.LoopOnce, 
+                    startOffset: 0 
+                })
+                .then((action) => {
+                    hangAction = action;
+                    if (action && action.getClip()) {
+                        const halfDuration = action.getClip().duration / 2;
+                        setTimeout(() => {
+                            if (action && dragTransitionedToWindow) {
+                                action.paused = true;
+                            }
+                        }, halfDuration * 1000);
+                    }
+                })
+                .catch(() => {});
             }
         }
+        // If still inside canvas, touch detection on renderer handles it — do nothing here
     });
-
+    
     document.addEventListener('mouseup', () => {
-        if (window.isWindowDragging) {
+        if (!mouseDownActive) return;
+        mouseDownActive = false;
+        
+        if (dragTransitionedToWindow) {
             window.isWindowDragging = false;
+            console.log('[drag] Mouse up, ending window drag');
+            
+            // Play remaining half of hang.vrma
+            if (hangAction && hangAction.paused) {
+                hangAction.paused = false;
+                if (window.waitForActionEnd) {
+                    window.waitForActionEnd(hangAction, 5000, false)
+                        .then(() => {
+                            if (window.loadIdleLoop) window.loadIdleLoop();
+                        })
+                        .catch(() => {
+                            if (window.loadIdleLoop) window.loadIdleLoop();
+                        });
+                }
+            } else {
+                // Fallback: just return to idle
+                if (window.loadIdleLoop) window.loadIdleLoop();
+            }
+            hangAction = null;
+            dragTransitionedToWindow = false;
         }
+        // If mouse stayed inside canvas → touch event already handled by renderer
     });
-
-    document.addEventListener('mouseleave', () => {
-        if (window.isWindowDragging) {
-            window.isWindowDragging = false;
-        }
-    });
+    
+    // Note: Don't reset on mouseleave — allow tracking even when mouse goes outside window bounds
 }
 
 /**
@@ -3926,17 +4149,11 @@ ${text}
 You are communicating through a VRM (Virtual Reality Model) 3D character viewer.
 
 AVAILABLE ANIMATIONS (and what they do):
-- idle_loop: Continuous idle animation (default state)
 - idle_airplane: Make airplane gesture with arm
 - idle_shoot: Make shooting gesture with hand
 - idle_sport: Do sports movements/stretching
 - idle_stretch: Stretch body and limbs
 - idle_vSign: Make V-sign with hand
-- sit: Sit down on ground
-- sitWave: Sit and wave to greet
-- start_1standUp: Stand up from sitting position
-- start_2turnAround: Turn around to face camera
-- walk: Walk forward, gesture, walk back
 - wave_both: Wave with both hands
 - wave_left: Wave with left hand
 - wave_right: Wave with right hand
@@ -3947,7 +4164,6 @@ AVAILABLE EXPRESSIONS:
 - sad
 - angry
 - surprised
-- blink (single blink, then neutral)
 
 RESPONSE FORMAT (JSON):
 Please respond with a JSON object containing:
@@ -3972,20 +4188,11 @@ TIMING OPTIONS:
 IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JSON response. Just provide the raw JSON object directly.
 Note: Animations play fully before proceeding. Expression resets to 'neutral' when returning to idle_loop.`;
                     
-                    // Send request to OpenClaw agent with full context
-                    WebSocketModule.sendMessage({
-                        type: 'req',
-                        id: requestId,
-                        method: 'agent',
-                        params: {
-                            message: fullMessage,
-                            sessionKey: 'main',
-                            timeout: 60,
-                            idempotencyKey: idempotencyKey
-                        }
-                    });
-                    
-                    console.log('[electron] Sent request to OpenClaw:', requestId);
+                    // Send only the user message — system instructions were sent once at session start
+                    if (window.sendAgentMessage) {
+                        window.sendAgentMessage(text);
+                        console.log('[electron] Sent user message to OpenClaw via HTTP API');
+                    }
                 }
             }
         });
@@ -4243,12 +4450,25 @@ async function initElectronApp() {
         
         // Expose WebSocket sendMessage function for conversation history
         window.sendMessage = WebSocketModule.sendMessage;
-        console.log('[electron] WebSocket sendMessage exposed to window');
+        // Expose HTTP-based agent messaging (bypasses WS scope issue)
+        window.sendAgentMessage = WebSocketModule.sendAgentMessage;
+        // Expose local history function
+        window.addLocalHistoryMessage = HistoryModule.addLocalHistoryMessage;
+        // Expose startSession function
+        window.startSession = WebSocketModule.startSession;
+        console.log('[electron] WebSocket sendMessage + sendAgentMessage + startSession exposed to window');
         
         console.log('[electron] History functions exposed to window');
         
         // Initialize WebSocket connection
         initWebSocket();
+        
+        // Start OpenClaw session (reset + send system instructions once)
+        setTimeout(() => {
+            if (window.startSession) {
+                window.startSession();
+            }
+        }, 3000);
         
         console.log('[electron] Hikari Electron App initialized successfully');
         
