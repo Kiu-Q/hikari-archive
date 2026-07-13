@@ -319,6 +319,75 @@ const CoreModule = (() => {
     }
 
     /**
+     * Setup dynamic click-through: transparent areas let clicks pass through to windows behind,
+     * but the avatar and UI panels still capture mouse events.
+     */
+    function setupClickThrough() {
+        if (!window.electronAPI || !window.electronAPI.setIgnoreMouseEvents) return;
+
+        console.log('[click-through] Setting up dynamic click-through');
+
+        let isCurrentlyIgnoring = false;
+        let lastCheckTime = 0;
+        const CHECK_INTERVAL_MS = 50; // Throttle to ~20fps
+
+        function isOverInteractiveElement(clientX, clientY) {
+            // Check if mouse is over any visible UI element
+            const elements = document.elementsFromPoint(clientX, clientY);
+            for (const el of elements) {
+                if (el.id === 'speakingBubble' && el.style.display !== 'none') return true;
+                if (el.closest && el.closest('.controls:not([style*="display: none"]), .settings-panel:not([style*="display: none"]), .toggle-btn, #history-panel:not([style*="display: none"]), .history-message')) {
+                    return true;
+                }
+                // Check if it's the canvas (avatar area)
+                if (el.tagName === 'CANVAS') {
+                    // Raycast to check if mouse is actually over the VRM model
+                    if (currentVrm && renderer && camera) {
+                        const mouse = new THREE.Vector2(
+                            (clientX / window.innerWidth) * 2 - 1,
+                            -(clientY / window.innerHeight) * 2 + 1
+                        );
+                        const raycaster = new THREE.Raycaster();
+                        raycaster.setFromCamera(mouse, camera);
+                        const intersects = raycaster.intersectObject(currentVrm.scene, true);
+                        if (intersects.length > 0) return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        document.addEventListener('mousemove', (e) => {
+            // Don't interfere during window dragging
+            if (window.isWindowDragging) return;
+
+            // Throttle checks
+            const now = performance.now();
+            if (now - lastCheckTime < CHECK_INTERVAL_MS) return;
+            lastCheckTime = now;
+
+            const isOverInteractive = isOverInteractiveElement(e.clientX, e.clientY);
+
+            if (isOverInteractive && isCurrentlyIgnoring) {
+                // Mouse entered avatar/UI area → capture events
+                window.electronAPI.setIgnoreMouseEvents(false);
+                isCurrentlyIgnoring = false;
+                console.log('[click-through] Capturing mouse events');
+            } else if (!isOverInteractive && !isCurrentlyIgnoring) {
+                // Mouse left avatar/UI area → pass through
+                window.electronAPI.setIgnoreMouseEvents(true, true);
+                isCurrentlyIgnoring = true;
+                console.log('[click-through] Passing mouse events through');
+            }
+        });
+
+        // Start in click-through mode (will switch to capture when mouse is over avatar)
+        window.electronAPI.setIgnoreMouseEvents(true, true);
+        isCurrentlyIgnoring = true;
+        console.log('[click-through] Initialized as click-through');
+    }
+
+    /**
      * Identify body part using spatial analysis of VRM humanoid bones
      */
     function identifyBodyPart(intersection) {
@@ -369,6 +438,12 @@ const CoreModule = (() => {
      */
     async function handleTouchEvent(intersection) {
         if (!currentVrm) return;
+
+        // Check if touch interaction is enabled
+        if (window.isAnimationEnabled && !window.isAnimationEnabled('touch')) {
+            console.log('[touch] Touch interaction is disabled in settings');
+            return;
+        }
         
         // Touch works during any animation state — no blocking
         const now = Date.now();
@@ -781,8 +856,9 @@ const CoreModule = (() => {
             const expressionName = shapeToExpression[shape] || 'neutral';
             const intensity = expressionName === 'neutral' ? 0 : 0.5;
 
-            const allExpressions = ['aa', 'ee', 'ih', 'oh', 'oo', 'b', 'p', 'm', 'f', 'v', 't', 'd', 'n', 's', 'z', 'sh', 'th', 'l', 'r'];
-            allExpressions.forEach(expr => {
+            // Only reset mouth shape expressions, NOT facial expressions (happy, sad, angry, etc.)
+            const mouthExpressions = ['aa', 'ee', 'ih', 'oh', 'oo', 'b', 'p', 'm', 'f', 'v', 't', 'd', 'n', 's', 'z', 'sh', 'th', 'l', 'r'];
+            mouthExpressions.forEach(expr => {
                 vrm.expressionManager.setValue(expr, 0);
             });
 
@@ -1633,7 +1709,18 @@ const CoreModule = (() => {
     function applyFacialExpression(expression) {
         if (!currentVrm?.expressionManager) return;
 
-        if (expression === 'neutral') {
+        // Map agent's expression choices to actual VRM expressions
+        const expressionMap = {
+            'neutral': 'surprised',   // agent says neutral -> VRM shows surprised
+            'shy': 'angry',           // agent says shy -> VRM shows angry
+            'surprised': 'sad',       // agent says surprised -> VRM shows sad
+            'shocked': 'relaxed',     // agent says shocked -> VRM shows relaxed
+            'blink': 'blink'
+        };
+
+        const vrmExpression = expressionMap[expression];
+
+        if (expression === 'neutral' || expression === 'blink') {
             activeFacialExpression = null;
             blinkSystemEnabled = true;
         } else {
@@ -1658,7 +1745,8 @@ const CoreModule = (() => {
         const allExpressions = [
             'aa', 'ee', 'ih', 'oh', 'oo', 'b', 'p', 'm', 'f', 'v', 't', 'd', 'n', 's', 'z', 'sh', 'th', 'l', 'r',
             'neutral', 'happy', 'sad', 'angry', 'surprised', 'blink',
-            'joy', 'fun', 'worry', 'aoi', 'blinkLeft', 'blinkRight', 'lookUp', 'lookDown', 'lookLeft', 'lookRight'
+            'joy', 'fun', 'worry', 'aoi', 'blinkLeft', 'blinkRight', 'lookUp', 'lookDown', 'lookLeft', 'lookRight',
+            'relaxed'
         ];
 
         allExpressions.forEach(expr => {
@@ -1666,17 +1754,6 @@ const CoreModule = (() => {
                 currentVrm.expressionManager.setValue(expr, 0);
             } catch (e) {}
         });
-
-        const expressionMap = {
-            'neutral': 'neutral',
-            'happy': 'happy',
-            'sad': 'sad',
-            'angry': 'angry',
-            'surprised': 'surprised',
-            'blink': 'blink'
-        };
-
-        const vrmExpression = expressionMap[expression];
 
         if (vrmExpression) {
             if (expression === 'blink') {
@@ -1917,51 +1994,51 @@ const CoreModule = (() => {
             console.log('[walk-electron] waiting before starting clip...');
             await new Promise(resolve => setTimeout(resolve, CONFIG.WALK_START_DELAY * 1000));
 
-            // Phase 1: Turn to face direction (reversed: walk_left.vrma turns right, walk_right.vrma turns left)
-            const turnUrl = `${ASSET_BASE_URL}VRMA/walk_${walkingDirection === 'right' ? 'left' : 'right'}.vrma`;
-            console.log('[walk-electron] Phase 1: turning with', turnUrl);
-            const turnAction = await startSmoothTransition(turnUrl, { loopMode: THREE.LoopOnce, transitionTime: 0.5 });
-            if (turnAction) {
-                await waitForActionEnd(turnAction, 5000, false);
-            }
-
-            // Set model rotation to face walking direction (walk.vrma faces forward, so rotate model)
-            const targetRotY = walkingDirection === 'right' ? walkingInitialRotY + Math.PI / 2 : walkingInitialRotY - Math.PI / 2;
-            console.log('[walk-electron] Setting model rotation to face', walkingDirection, 'rotY:', targetRotY);
-            if (currentVrm) {
-                currentVrm.scene.rotation.y = targetRotY;
-            }
-
-            // Phase 2: Walk forward (loop walk.vrma while moving window horizontally)
-            const walkUrl = `${ASSET_BASE_URL}VRMA/walk.vrma`;
-            console.log('[walk-electron] Phase 2: walking with', walkUrl);
-            let walkAction = await startSmoothTransition(walkUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
-            if (walkAction) {
+            console.log('[walk-electron] turning to face', walkingDirection, ', duration (ms)', turn * 1000);
+            let action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
+            if (action) {
                 try {
-                    if (typeof walkAction.setEffectiveTimeScale === 'function') {
-                        walkAction.setEffectiveTimeScale(walkTimeScale);
+                    if (typeof action.setEffectiveTimeScale === 'function') {
+                        action.setEffectiveTimeScale(walkTimeScale);
                     } else {
-                        walkAction.timeScale = walkTimeScale;
+                        action.timeScale = walkTimeScale;
                     }
                 } catch (e) {
-                    console.warn('[walk-electron] failed to set time scale for walk', e);
+                    console.warn('[walk-electron] failed to set time scale for initial turn', e);
                 }
             }
-            console.log('[walk-electron] walk duration (ms)', leg * 1000);
-            await animateElectronWalkPhase(0, leg, 'walk_sideways', walkingDirection);
+            await animateElectronWalkPhase(0, turn, 'initial_turn', walkingDirection);
 
-            // Reset model rotation to face forward before turn-back animation
-            if (currentVrm) {
-                currentVrm.scene.rotation.y = walkingInitialRotY;
+            console.log('[walk-electron] starting', walkingDirection, 'walk clip (LoopRepeat)');
+            action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
+            if (action) {
+                try {
+                    if (typeof action.setEffectiveTimeScale === 'function') {
+                        action.setEffectiveTimeScale(walkTimeScale);
+                    } else {
+                        action.timeScale = walkTimeScale;
+                    }
+                } catch (e) {
+                    console.warn('[walk-electron] failed to set time scale for walk leg', e);
+                }
             }
+            console.log('[walk-electron]', walkingDirection, 'leg duration (ms)', leg * 1000);
+            await animateElectronWalkPhase(turn, turn + leg, 'walk', walkingDirection);
 
-            // Phase 3: Turn back to face forward (reversed: use opposite of Phase 1)
-            const turnBackUrl = `${ASSET_BASE_URL}VRMA/walk_${walkingDirection}.vrma`;
-            console.log('[walk-electron] Phase 3: turning back with', turnBackUrl);
-            const turnBackAction = await startSmoothTransition(turnBackUrl, { loopMode: THREE.LoopOnce, transitionTime: 0.5 });
-            if (turnBackAction) {
-                await waitForActionEnd(turnBackAction, 5000, false);
+            console.log('[walk-electron] turning to face forward, duration (ms)', turn * 1000);
+            action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
+            if (action) {
+                try {
+                    if (typeof action.setEffectiveTimeScale === 'function') {
+                        action.setEffectiveTimeScale(walkTimeScale);
+                    } else {
+                        action.timeScale = walkTimeScale;
+                    }
+                } catch (e) {
+                    console.warn('[walk-electron] failed to set time scale for turn to forward', e);
+                }
             }
+            await animateElectronWalkPhase(turn + leg, turn + leg + turn, 'turn_to_forward', walkingDirection);
 
             walkingPathActive = false;
             console.log('[walk-electron] finished, keeping current position and rotation');
@@ -1995,15 +2072,7 @@ const CoreModule = (() => {
                 let rotY = walkingInitialRotY;
                 let windowX = walkingWindowInitialPos.x;
 
-                if (phaseType === 'walk_sideways') {
-                    // Keep rotation as-is (set before this phase starts) — don't override
-                    rotY = currentVrm.scene.rotation.y;
-                    if (direction === 'right') {
-                        windowX = walkingWindowInitialPos.x + Math.round(windowOffset * progress);
-                    } else {
-                        windowX = walkingWindowInitialPos.x - Math.round(windowOffset * progress);
-                    }
-                } else if (phaseType === 'initial_turn') {
+                if (phaseType === 'initial_turn') {
                     if (direction === 'right') {
                         rotY = walkingInitialRotY + (Math.PI / 2) * progress;
                     } else {
@@ -2176,9 +2245,13 @@ const CoreModule = (() => {
         try {
             const idleFiles = VRMA_ANIMATION_URLS.filter(url => {
                 const name = url.split('/').pop();
-                return name.startsWith('idle_') && name !== 'idle_loop.vrma' || 
-                       name === 'walk.vrma' || 
-                       name === 'sit.vrma' || 
+                // Filter out disabled animations
+                if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(url)) {
+                    return false;
+                }
+                return name.startsWith('idle_') && name !== 'idle_loop.vrma' ||
+                       name === 'walk.vrma' ||
+                       name === 'sit.vrma' ||
                        name === 'start_2turnAround.vrma';
             });
 
@@ -2419,6 +2492,9 @@ const CoreModule = (() => {
 
         // Setup custom zoom control (camera dolly + window resize)
         setupZoomControl();
+
+        // Setup dynamic click-through (transparent areas let clicks pass through)
+        setupClickThrough();
         
         // Load VRM model
         await loadVRM(VRM_MODEL_URL);
@@ -2505,26 +2581,25 @@ const WebSocketModule = (() => {
     }
 
     const SYSTEM_INSTRUCTIONS = `===== SYSTEM INSTRUCTIONS =====
-You are communicating through a VRM (Virtual Reality Model) 3D character viewer.
+You are communicating through a VRM (Virtual Reality Model) 3D character viewer. 
+However, act as a real human being having a natural conversation. Do not talk like a bot or mention that you are in a 3D model or virtual environment. 
+Just speak naturally like a real person.
 
 AVAILABLE ANIMATIONS (and what they do):
 - idle_airplane: Make airplane gesture with arm
 - idle_look: Look around
 - idle_shoot: Make shooting gesture with hand
 - idle_sport: Do sports movements/stretching
-- idle_stretch: Stretch body and limbs
 - idle_vSign: Make V-sign with hand
-- wave_both: Wave with both hands
 - wave_fast: Wave quickly with one hand
 - wave_left: Wave with left hand
 - wave_right: Wave with right hand
 
 AVAILABLE EXPRESSIONS (always applied during speaking):
-- neutral (default state)
-- happy
-- sad
-- angry
-- surprised
+- neutral (maps to VRM: surprised)
+- shy (maps to VRM: angry)
+- surprised (maps to VRM: sad)
+- shocked (maps to VRM: relaxed)
 
 RESPONSE FORMAT (JSON):
 Please respond with a JSON object containing:
@@ -2544,11 +2619,9 @@ ANIMATION TIMING OPTIONS:
 - 'after': play animation AFTER speaking completes
 - null: no animation needed (use defaults)
 
-NOTE: Expression timing is always 'during' (applied while speaking). Do not set expression timing.
-NOTE: The 'before' timing option is NOT available for animations. Use 'during' or 'after' only.
-
-IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JSON response. Just provide the raw JSON object directly.
-Note: Animations play fully before proceeding. Expression resets to 'neutral' when returning to idle_loop.`;
+IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JSON response. 
+Do NOT include any extra text or explanations.
+Just provide the raw JSON object directly. Separate your sentences with line breaks.`;
 
     let sessionStarted = false;
     let conversationHistory = [];
@@ -2605,12 +2678,10 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
       console.log('[session] Starting new OpenClaw session...');
 
       try {
-        // 1. Reset the session (ignore the reply) — don't add to history
+        // Each HTTP request is already a new session, so no need to send /new
         conversationHistory = [];
-        await sendAgentViaHttp('/new', false);
-        console.log('[session] Session reset (reply ignored)');
 
-        // 2. Send system instructions once
+        // Send system instructions as the first message
         const reply = await sendAgentViaHttp(SYSTEM_INSTRUCTIONS);
         console.log('[session] System instructions sent, processing reply as normal message...');
 
@@ -3073,7 +3144,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
         }
         
         if (parsed.expression && parsed.expression.name) {
-          const validExpressions = ['neutral', 'happy', 'sad', 'angry', 'surprised'];
+          const validExpressions = ['neutral', 'happy', 'sad', 'angry', 'surprised', 'shy', 'shocked', 'blink'];
           
           if (!validExpressions.includes(parsed.expression.name)) {
             console.warn('[ws] Invalid expression:', parsed.expression.name);
@@ -3132,10 +3203,15 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
       
       // Animation: only 'during' or 'after' (no 'before')
       if (command.animation && command.animation.timing === 'during') {
-        console.log('[ws] Playing animation DURING speaking (LoopOnce):', command.animation.file);
-        if (window.startSmoothTransition) {
-          await window.startSmoothTransition(`${ASSET_BASE_URL}VRMA/${command.animation.file}`, { loopMode: THREE.LoopOnce });
-          await new Promise(resolve => setTimeout(resolve, 500));
+        // Check if this animation is enabled in settings
+        if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(`${ASSET_BASE_URL}VRMA/${command.animation.file}`)) {
+          console.log('[ws] Animation disabled in settings, skipping:', command.animation.file);
+        } else {
+          console.log('[ws] Playing animation DURING speaking (LoopOnce):', command.animation.file);
+          if (window.startSmoothTransition) {
+            await window.startSmoothTransition(`${ASSET_BASE_URL}VRMA/${command.animation.file}`, { loopMode: THREE.LoopOnce });
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
         }
       }
       
@@ -3177,12 +3253,16 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
       }
       
       if (command.animation && command.animation.timing === 'after') {
-        console.log('[ws] Playing animation AFTER speaking:', command.animation.file);
-        if (statusDiv) {
-          statusDiv.textContent = 'Playing animation after speaking...';
-        }
-        
-        if (window.startSmoothTransition) {
+        // Check if this animation is enabled in settings
+        if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(`${ASSET_BASE_URL}VRMA/${command.animation.file}`)) {
+          console.log('[ws] Animation disabled in settings, skipping (after):', command.animation.file);
+        } else {
+          console.log('[ws] Playing animation AFTER speaking:', command.animation.file);
+          if (statusDiv) {
+            statusDiv.textContent = 'Playing animation after speaking...';
+          }
+          
+          if (window.startSmoothTransition) {
           const action = await window.startSmoothTransition(
             `${ASSET_BASE_URL}VRMA/${command.animation.file}`,
             { loopMode: 2200 }
@@ -3204,6 +3284,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
           console.log('[ws] Additional 3 second delay for after animation...');
           await new Promise(resolve => setTimeout(resolve, 3000));
           console.log('[ws] After animation fully complete');
+          }
         }
       }
       
@@ -4016,13 +4097,31 @@ function setupWindowDragging() {
         hangAction = null;
         
         // Pre-fetch window position for potential drag
+        // Calculate offset from canvas top-left to window position
         if (window.electronAPI) {
-            window.electronAPI.getWindowPosition().then((pos) => {
-                window.windowDragOffset = {
-                    x: e.screenX - pos.x,
-                    y: e.screenY - pos.y
-                };
-            }).catch(() => {});
+            const canvas = document.querySelector('canvas');
+            if (canvas) {
+                const canvasRect = canvas.getBoundingClientRect();
+                // Canvas top-left in screen coordinates
+                const canvasScreenX = window.screenX + canvasRect.left;
+                const canvasScreenY = window.screenY + canvasRect.top;
+                
+                window.electronAPI.getWindowPosition().then((pos) => {
+                    // Offset from window position to canvas top-left
+                    window.windowDragOffset = {
+                        x: canvasScreenX - pos.x,
+                        y: canvasScreenY - pos.y
+                    };
+                }).catch(() => {});
+            } else {
+                // Fallback to mouse position if no canvas
+                window.electronAPI.getWindowPosition().then((pos) => {
+                    window.windowDragOffset = {
+                        x: e.screenX - pos.x,
+                        y: e.screenY - pos.y
+                    };
+                }).catch(() => {});
+            }
         }
     });
     
@@ -4052,6 +4151,10 @@ function setupWindowDragging() {
             // Mouse left canvas → switch to window drag mode
             dragTransitionedToWindow = true;
             window.isWindowDragging = true;
+            // Ensure window captures all mouse events during drag
+            if (window.electronAPI?.setIgnoreMouseEvents) {
+                window.electronAPI.setIgnoreMouseEvents(false);
+            }
             console.log('[drag] Mouse left canvas, starting window drag');
             
             // Play first half of hang.vrma
@@ -4088,15 +4191,29 @@ function setupWindowDragging() {
             // Play remaining half of hang.vrma
             if (hangAction && hangAction.paused) {
                 hangAction.paused = false;
+                let idleLoopCalled = false;
+                
+                const callIdleLoop = () => {
+                    if (!idleLoopCalled && window.loadIdleLoop) {
+                        idleLoopCalled = true;
+                        window.loadIdleLoop();
+                    }
+                };
+                
                 if (window.waitForActionEnd) {
                     window.waitForActionEnd(hangAction, 5000, false)
                         .then(() => {
-                            if (window.loadIdleLoop) window.loadIdleLoop();
+                            callIdleLoop();
                         })
                         .catch(() => {
-                            if (window.loadIdleLoop) window.loadIdleLoop();
+                            callIdleLoop();
                         });
+                } else {
+                    callIdleLoop();
                 }
+                
+                // Fallback timeout: ensure idle loop is called even if waitForActionEnd hangs
+                setTimeout(callIdleLoop, 6000);
             } else {
                 // Fallback: just return to idle
                 if (window.loadIdleLoop) window.loadIdleLoop();
@@ -4113,9 +4230,111 @@ function setupWindowDragging() {
 /**
  * Setup UI event listeners
  */
+// ============================================================
+// ANIMATION TOGGLE SETTINGS
+// ============================================================
+const animationToggleKeys = [
+    'walk', 'touch', 'sit',
+    'idle_airplane', 'idle_look', 'idle_loop', 'idle_shoot',
+    'idle_sport', 'idle_stretch', 'idle_vSign',
+    'wave_both', 'wave_fast', 'wave_left', 'wave_right',
+    'start_2turnAround'
+];
+
+const animationToggleDefaults = {};
+animationToggleKeys.forEach(k => animationToggleDefaults[k] = true);
+
+let animationSettings = { ...animationToggleDefaults };
+
+function loadAnimationSettings() {
+    try {
+        const saved = localStorage.getItem('animation_settings');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            animationToggleKeys.forEach(k => {
+                if (typeof parsed[k] === 'boolean') {
+                    animationSettings[k] = parsed[k];
+                }
+            });
+        }
+    } catch (e) {
+        console.warn('[anim-settings] Failed to load settings:', e);
+    }
+    console.log('[anim-settings] Loaded:', animationSettings);
+}
+
+function saveAnimationSettings() {
+    try {
+        localStorage.setItem('animation_settings', JSON.stringify(animationSettings));
+        console.log('[anim-settings] Saved:', animationSettings);
+    } catch (e) {
+        console.warn('[anim-settings] Failed to save settings:', e);
+    }
+}
+
+function isAnimationEnabled(key) {
+    return animationSettings[key] !== false;
+}
+
+/**
+ * Extract the animation name (without .vrma) from a full URL or filename.
+ * e.g. "http://.../VRMA/idle_airplane.vrma" → "idle_airplane"
+ */
+function getAnimNameFromUrl(url) {
+    const filename = url.split('/').pop().replace('.vrma', '');
+    return filename;
+}
+
+/**
+ * Check if an animation file (by URL or filename) is enabled.
+ * Maps filename to the toggle key.
+ */
+function isAnimationUrlEnabled(url) {
+    const name = getAnimNameFromUrl(url);
+    // Direct match (e.g. "idle_airplane", "wave_both", "start_2turnAround")
+    if (animationToggleKeys.includes(name)) {
+        return isAnimationEnabled(name);
+    }
+    // Category matches
+    if (name === 'walk' || name === 'walk_left' || name === 'walk_right') {
+        return isAnimationEnabled('walk');
+    }
+    if (name === 'sit' || name === 'sitWave' || name === 'sit_down' || name === 'sit_up') {
+        return isAnimationEnabled('sit');
+    }
+    // Default: enabled
+    return true;
+}
+
+function setupAnimationToggles() {
+    loadAnimationSettings();
+
+    animationToggleKeys.forEach(key => {
+        const checkbox = document.getElementById(`anim-${key}`);
+        if (checkbox) {
+            checkbox.checked = animationSettings[key] !== false;
+            checkbox.addEventListener('change', () => {
+                animationSettings[key] = checkbox.checked;
+                saveAnimationSettings();
+                console.log(`[anim-settings] ${key} = ${checkbox.checked}`);
+            });
+        }
+    });
+
+    console.log('[anim-settings] Toggle UI initialized');
+}
+
+// Expose globally so CoreModule can access
+window.animationSettings = animationSettings;
+window.isAnimationEnabled = isAnimationEnabled;
+window.isAnimationUrlEnabled = isAnimationUrlEnabled;
+
 function setupUIEventListeners() {
-    console.log('[electron] Setting up UI event listeners');
-    
+console.log('[electron] Setting up UI event listeners');
+
+    // Animation toggle settings
+    setupAnimationToggles();
+
     // WebSocket URL + Token configuration (combined button)
     setupWebSocketUrlInput();
     

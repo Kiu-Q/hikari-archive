@@ -286,6 +286,43 @@
             cursor: pointer;
         }
 
+        /* Animation toggles section */
+        .anim-toggles {
+            margin-top: 8px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            padding-top: 12px;
+        }
+        .anim-toggles .anim-section-label {
+            font-size: 12px;
+            font-weight: bold;
+            color: #e0e0e0;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .anim-toggles .anim-checkbox-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 12px;
+        }
+        .anim-toggles .anim-checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 12px;
+            color: #ccc;
+            cursor: pointer;
+        }
+        .anim-toggles .anim-checkbox-item input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: #4CAF50;
+        }
+        .anim-toggles .anim-category {
+            margin-bottom: 8px;
+        }
+
         /* Glass overlay - covers everything */
         #glassOverlay {
             position: fixed !important;
@@ -375,6 +412,34 @@
             <input type="range" id="speakingSpeedSlider" min="0.5" max="2.0" step="0.1" value="1" style="flex: 1;" />
         </div>
         <button id="saveConnectBtn" class="full-width-btn">Save & Connect</button>
+
+        <!-- Animation Toggles -->
+        <div class="anim-toggles">
+            <div class="anim-section-label">Animation Toggles</div>
+            <div class="anim-category">
+                <div class="anim-checkbox-grid">
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-walk" checked> Walk</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-touch" checked> Touch</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-sit" checked> Sit</label>
+                </div>
+            </div>
+            <div class="anim-category">
+                <div class="anim-checkbox-grid">
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_airplane" checked> Airplane</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_look" checked> Look</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_loop" checked> Idle Loop</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_shoot" checked> Shoot</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_sport" checked> Sport</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_stretch" checked> Stretch</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_vSign" checked> V-Sign</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_both" checked> Wave Both</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_fast" checked> Wave Fast</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_left" checked> Wave Left</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_right" checked> Wave Right</label>
+                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-start_2turnAround" checked> Turn Around</label>
+                </div>
+            </div>
+        </div>
 
         <!-- Status message (full width) -->
         <div class="status-message" id="status">Loading VRM model...</div>

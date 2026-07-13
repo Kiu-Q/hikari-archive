@@ -71,6 +71,13 @@ ipcMain.handle('set-window-bounds', (event, x, y, width, height) => {
   return true;
 });
 
+// IPC handler for dynamic click-through (transparent areas let clicks pass through)
+ipcMain.handle('set-ignore-mouse-events', (event, ignore, forward) => {
+  if (!mainWindow) return false;
+  mainWindow.setIgnoreMouseEvents(ignore, { forward: forward !== false });
+  return true;
+});
+
 // App lifecycle
 app.whenReady().then(() => {
   // Override the Origin header for WebSocket connections so the OpenClaw gateway
