@@ -15,6 +15,97 @@ import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation';
 
 // ============================================================
+// EVENT-TO-AGENT SYSTEM
+// ============================================================
+
+/**
+ * Queue for agent event requests - prevents concurrent requests.
+ * Only one request is sent at a time; subsequent requests wait until the current one completes.
+ */
+let agentRequestQueue = [];
+let isAgentRequestInProgress = false;
+
+/**
+ * Send an event notification to the agent and display the reply.
+ * Requests are queued: if a request is already in progress, this one waits.
+ * Used for: animation toggles, panel show/hide, window drag, character walk, character sit.
+ * @param {string} eventType - Type of event (e.g., 'action_toggle', 'panel_toggle', 'window_drag', 'character_walk', 'character_sit')
+ * @param {string} message - The message to send to the agent
+ */
+async function sendEventToAgent(eventType, message) {
+    // Queue the request
+    return new Promise((resolve, reject) => {
+        agentRequestQueue.push({ eventType, message, resolve, reject });
+        processAgentRequestQueue();
+    });
+}
+
+// Expose on window so it's accessible from within module IIFEs
+window.sendEventToAgent = sendEventToAgent;
+
+async function processAgentRequestQueue() {
+    if (isAgentRequestInProgress || agentRequestQueue.length === 0) return;
+    
+    isAgentRequestInProgress = true;
+    const { eventType, message, resolve, reject } = agentRequestQueue.shift();
+    
+    if (!window.sendAgentMessage) {
+        console.warn(`[event] Cannot send ${eventType} event - sendAgentMessage not available`);
+        isAgentRequestInProgress = false;
+        resolve();
+        processAgentRequestQueue();
+        return;
+    }
+    
+    console.log(`[event] Sending ${eventType} event to agent:`, message);
+    
+    // Set flag to prevent new animations from playing while waiting for reply
+    // Keep idle_loop looping; if an animation is already playing, let it continue
+    window._agentRequestPending = true;
+    
+    try {
+        // Send message to agent (without adding to conversation history to keep it clean)
+        const replyText = await WebSocketModule.sendAgentMessageRaw(message);
+        
+        // Clear pending flag
+        window._agentRequestPending = false;
+        
+        if (replyText && window.lipSyncSystem) {
+            // Parse the reply for any JSON commands
+            const parsedResponse = WebSocketModule.parseAgentResponse(replyText);
+            
+            if (parsedResponse && parsedResponse.text) {
+                // Add agent reply to local history
+                if (window.addLocalHistoryMessage) {
+                    window.addLocalHistoryMessage('agent', parsedResponse.text);
+                }
+                // Execute the agent command (speak + animate)
+                await WebSocketModule.executeAgentCommand(parsedResponse);
+            } else if (replyText.trim().length > 0) {
+                // Plain text reply - just speak it
+                if (window.addLocalHistoryMessage) {
+                    window.addLocalHistoryMessage('agent', replyText);
+                }
+                window.lipSyncSystem.startSpeaking(replyText);
+                const statusDiv = document.getElementById('status');
+                if (statusDiv) {
+                    const displayText = replyText.length > 50 ? replyText.substring(0, 50) + '...' : replyText;
+                    statusDiv.textContent = 'Speaking: ' + displayText;
+                }
+            }
+        }
+    } catch (error) {
+        console.error(`[event] Error sending ${eventType} event:`, error);
+        window._agentRequestPending = false;
+    }
+    
+    isAgentRequestInProgress = false;
+    resolve();
+    // Process next queued request
+    processAgentRequestQueue();
+}
+
+// ============================================================
 // CORE MODULE - Three.js, VRM, Animation, Lip Sync
 // ============================================================
 const CoreModule = (() => {
@@ -454,6 +545,14 @@ const CoreModule = (() => {
         
         lastTouchTime = now;
         console.log('[touch] Touch event triggered on model (works during any animation)');
+        
+        // Immediately change facial expression to 'shy' or 'shocked' randomly
+        // 'shy' maps to 'angry' in VRM, 'shocked' maps to 'relaxed' in VRM
+        // This expression persists until the OpenClaw agent replies
+        const touchExpressions = ['shy', 'shocked'];
+        const chosenExpression = touchExpressions[Math.floor(Math.random() * touchExpressions.length)];
+        applyFacialExpression(chosenExpression);
+        console.log('[touch] Set expression to', chosenExpression, 'until agent replies');
         
         // Interrupt any running sequence to allow touch response
         if (isSitAnimationActive) {
@@ -1711,11 +1810,9 @@ const CoreModule = (() => {
 
         // Map agent's expression choices to actual VRM expressions
         const expressionMap = {
-            'neutral': 'surprised',   // agent says neutral -> VRM shows surprised
-            'shy': 'angry',           // agent says shy -> VRM shows angry
-            'surprised': 'sad',       // agent says surprised -> VRM shows sad
-            'shocked': 'relaxed',     // agent says shocked -> VRM shows relaxed
-            'blink': 'blink'
+            'shock': 'sad',           // agent says shock -> VRM shows sad
+            'surprised': 'relaxed',   // agent says surprised -> VRM shows relaxed
+            'shy': 'angry'            // agent says shy -> VRM shows angry
         };
 
         const vrmExpression = expressionMap[expression];
@@ -2043,6 +2140,17 @@ const CoreModule = (() => {
             walkingPathActive = false;
             console.log('[walk-electron] finished, keeping current position and rotation');
 
+            // Send walk completion event to agent with original and new position
+            if (window.electronAPI && walkingWindowInitialPos) {
+                try {
+                    const newPos = await window.electronAPI.getWindowPosition();
+                    sendEventToAgent('character_walk', 
+                        `The character has finished walking. Original position: (${walkingWindowInitialPos.x}, ${walkingWindowInitialPos.y}). New position: (${newPos.x}, ${newPos.y}).`);
+                } catch (e) {
+                    console.warn('[walk-electron] Failed to send walk event:', e);
+                }
+            }
+
             console.log('[walk-electron] calling loadIdleLoop at end of sequence');
             await loadIdleLoop();
             
@@ -2241,6 +2349,13 @@ const CoreModule = (() => {
     async function playRandomIdle() {
         console.log('[idle] playRandomIdle called, currentAction=', currentAction, 'isPlayingSequence=', isPlayingSequence, 'isPlayingWalkSequence=', isPlayingWalkSequence);
         if (!currentVrm || isPlayingSequence || isPlayingWalkSequence) return;
+        
+        // Don't start new random idle if agent request is pending - keep idle_loop looping
+        if (window._agentRequestPending) {
+            console.log('[idle] Skipping random idle - agent request pending, keeping idle_loop');
+            scheduleRandomIdle();
+            return;
+        }
 
         try {
             const idleFiles = VRMA_ANIMATION_URLS.filter(url => {
@@ -2399,6 +2514,13 @@ const CoreModule = (() => {
                 return;
             }
 
+            // Don't start new animation if agent request is pending - keep idle_loop looping
+            if (window._agentRequestPending) {
+                console.log('[anim-dropdown] Skipping animation - agent request pending, keeping idle_loop');
+                animationSelect.value = '';
+                return;
+            }
+
             if (currentIdleTimeout) {
                 clearTimeout(currentIdleTimeout);
                 currentIdleTimeout = null;
@@ -2437,6 +2559,9 @@ const CoreModule = (() => {
                 
                 isSitAnimationActive = true;
                 console.log('[sit] Sit sequence started (sit_down → sit loop → sit_up)');
+                
+                // Send sit event to agent
+                sendEventToAgent('character_sit', 'The character has started sitting down.');
                 
                 // 1. Play sit_down first (transition to sitting)
                 const sitDownAction = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/sit_down.vrma`, { loopMode: THREE.LoopOnce });
@@ -2596,23 +2721,20 @@ AVAILABLE ANIMATIONS (and what they do):
 - wave_right: Wave with right hand
 
 AVAILABLE EXPRESSIONS (always applied during speaking):
-- neutral (maps to VRM: surprised)
-- shy (maps to VRM: angry)
-- surprised (maps to VRM: sad)
-- shocked (maps to VRM: relaxed)
+- neutral
+- shy
+- surprised
+- shocked
 
 RESPONSE FORMAT (JSON):
-Please respond with a JSON object containing:
-{
-  'text': 'Your spoken response here',
+For ALL the message in this WHOLE session, please respond with a JSON object containing:
+{ 'text': 'Your spoken response here',
   'animation': {
     'file': 'idle_airplane.vrma',  // or null for no animation
     'timing': 'during'             // 'during' or 'after' only
   },
   'expression': {
-    'name': 'happy'                // or null for no expression (always applied during speaking)
-  }
-}
+    'name': 'neutral'}}                // or null for no expression (always applied during speaking)
 
 ANIMATION TIMING OPTIONS:
 - 'during': play animation WHILE speaking
@@ -3110,23 +3232,99 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       }
     }
 
+    /**
+     * Fallback: extract text, animation, and expression fields from JSON-like text
+     * using regex when JSON.parse fails due to malformed input.
+     */
+    function extractFieldsViaRegex(text) {
+      try {
+        const result = {};
+        
+        // Extract text field - handles both double and single quotes, escaped quotes, and newlines
+        const textMatch = text.match(/(?:'text'|"text")\s*:\s*(?:'([^']*(?:\\'[^']*)*)'|"((?:[^"\\]|\\.)*)")/s);
+        if (textMatch) {
+          result.text = (textMatch[1] || textMatch[2] || '')
+            .replace(/\\'/g, "'")
+            .replace(/\\"/g, '"')
+            .replace(/\\n/g, '\n')
+            .replace(/\\r/g, '\r')
+            .replace(/\\t/g, '\t');
+        }
+        
+        // Extract animation file
+        const animFileMatch = text.match(/(?:'file'|"file")\s*:\s*(?:'([^']*)'|"([^"]*)")/);
+        if (animFileMatch) {
+          result.animation = { file: animFileMatch[1] || animFileMatch[2] || null };
+          // Extract animation timing
+          const animTimingMatch = text.match(/(?:'timing'|"timing")\s*:\s*(?:'([^']*)'|"([^"]*)")/);
+          if (animTimingMatch) {
+            result.animation.timing = animTimingMatch[1] || animTimingMatch[2] || 'during';
+          } else {
+            result.animation.timing = 'during';
+          }
+        }
+        
+        // Extract expression name
+        const exprNameMatch = text.match(/(?:'name'|"name")\s*:\s*(?:'([^']*)'|"([^"]*)")/);
+        if (exprNameMatch) {
+          result.expression = { name: exprNameMatch[1] || exprNameMatch[2] || 'neutral' };
+          result.expression.timing = 'during';
+        }
+        
+        if (result.text) {
+          console.log('[ws] Regex extraction succeeded:', result);
+          return result;
+        }
+        
+        console.warn('[ws] Regex extraction failed to find text field');
+        return null;
+      } catch (e) {
+        console.error('[ws] Regex extraction error:', e);
+        return null;
+      }
+    }
+
     function parseAgentResponse(text) {
       try {
         let parsed;
         try {
-          parsed = JSON.parse(text);
+          // Trim and normalize: replace literal newlines/tabs in the raw text
+          // with their escaped versions so JSON.parse can handle them
+          const sanitized = text
+            .trim()
+            .replace(/\n/g, '\\n')
+            .replace(/\r/g, '\\r')
+            .replace(/\t/g, '\\t');
+          parsed = JSON.parse(sanitized);
         } catch (e1) {
           console.log('[ws] Standard JSON parse failed, trying single quote handling');
           const fixedText = text
+            .trim()
+            .replace(/\n/g, '\\n')
+            .replace(/\r/g, '\\r')
+            .replace(/\t/g, '\\t')
             .replace(/'/g, '"')
             .replace(/""/g, '""');
-          parsed = JSON.parse(fixedText);
+          try {
+            parsed = JSON.parse(fixedText);
+          } catch (e2) {
+            // Last resort: try regex extraction of text, animation, expression fields
+            console.log('[ws] JSON parse failed, trying regex field extraction');
+            parsed = extractFieldsViaRegex(text);
+            if (!parsed) {
+              console.warn('[ws] Failed to parse JSON response:', e2);
+              return null;
+            }
+          }
         }
         
         if (!parsed.text || typeof parsed.text !== 'string') {
           console.warn('[ws] Invalid JSON response: missing or invalid text field');
           return null;
         }
+        
+        // Unescape any \n back to actual newlines in the text field
+        parsed.text = parsed.text.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
         
         if (parsed.animation && parsed.animation.file) {
           const validAnimations = [
@@ -3193,14 +3391,6 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       
       const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
       
-      // Expression is always applied DURING speaking (forced)
-      if (command.expression && command.expression.name) {
-        console.log('[ws] Applying expression (always during):', command.expression.name);
-        if (window.applyFacialExpression) {
-          window.applyFacialExpression(command.expression.name);
-        }
-      }
-      
       // Animation: only 'during' or 'after' (no 'before')
       if (command.animation && command.animation.timing === 'during') {
         // Check if this animation is enabled in settings
@@ -3212,6 +3402,15 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
             await window.startSmoothTransition(`${ASSET_BASE_URL}VRMA/${command.animation.file}`, { loopMode: THREE.LoopOnce });
             await new Promise(resolve => setTimeout(resolve, 500));
           }
+        }
+      }
+      
+      // Expression is always applied DURING speaking (forced)
+      // Apply AFTER animation starts so the animation doesn't override the expression
+      if (command.expression && command.expression.name) {
+        console.log('[ws] Applying expression (always during):', command.expression.name);
+        if (window.applyFacialExpression) {
+          window.applyFacialExpression(command.expression.name);
         }
       }
       
@@ -3472,13 +3671,71 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       reconnectAttempts = 0;
     }
 
+    /**
+     * Send a message to the agent via HTTP and return the raw reply text.
+     * Does NOT add to conversation history, does NOT parse/execute the response.
+     * Used by sendEventToAgent for event notifications.
+     * @param {string} message - The message to send
+     * @returns {Promise<string>} The raw reply text from the agent
+     */
+    async function sendAgentMessageRaw(message) {
+      try {
+        // Send with conversation history context, but don't add the system message or reply to history
+        const baseUrl = getHttpBaseUrl();
+        const token = localStorage.getItem('openclaw_token') || CONFIG.token;
+        const url = `${baseUrl}/v1/chat/completions`;
+        
+        // Build messages: conversation history + the system event message
+        const messagesToSend = [...conversationHistory, { role: 'user', content: message }];
+        
+        console.log('[http] Sending agent request (with history, not persisted):', url);
+        
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            model: 'openclaw',
+            messages: messagesToSend,
+            max_tokens: 4096
+          })
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[http] Error response:', response.status, errorText);
+          throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        
+        const data = await response.json();
+        const replyText = data.choices?.[0]?.message?.content;
+        
+        if (!replyText) {
+          throw new Error('No content in HTTP response');
+        }
+        
+        console.log('[http] Agent reply:', replyText);
+        
+        // Don't add system message or reply to conversationHistory
+        return replyText;
+      } catch (error) {
+        console.error('[http] sendAgentMessageRaw failed:', error);
+        throw error;
+      }
+    }
+
     return {
       initWebSocket,
       sendMessage,
       isWebSocketConnected,
       closeWebSocket,
       sendAgentMessage,
-      startSession
+      sendAgentMessageRaw,
+      startSession,
+      parseAgentResponse,
+      executeAgentCommand
     };
 })();
 
@@ -4107,6 +4364,8 @@ function setupWindowDragging() {
                 const canvasScreenY = window.screenY + canvasRect.top;
                 
                 window.electronAPI.getWindowPosition().then((pos) => {
+                    // Save original position for drag event message
+                    window._dragStartWindowPos = { x: pos.x, y: pos.y };
                     // Offset from window position to canvas top-left
                     window.windowDragOffset = {
                         x: canvasScreenX - pos.x,
@@ -4116,6 +4375,8 @@ function setupWindowDragging() {
             } else {
                 // Fallback to mouse position if no canvas
                 window.electronAPI.getWindowPosition().then((pos) => {
+                    // Save original position for drag event message
+                    window._dragStartWindowPos = { x: pos.x, y: pos.y };
                     window.windowDragOffset = {
                         x: e.screenX - pos.x,
                         y: e.screenY - pos.y
@@ -4187,6 +4448,15 @@ function setupWindowDragging() {
         if (dragTransitionedToWindow) {
             window.isWindowDragging = false;
             console.log('[drag] Mouse up, ending window drag');
+            
+            // Get current window position for the event message
+            if (window.electronAPI) {
+                window.electronAPI.getWindowPosition().then((newPos) => {
+                    const originalPos = window._dragStartWindowPos || { x: 0, y: 0 };
+                    sendEventToAgent('window_drag', 
+                        `The user dragged you from (${originalPos.x}, ${originalPos.y}) to (${newPos.x}, ${newPos.y}) on the screen.`);
+                }).catch(() => {});
+            }
             
             // Play remaining half of hang.vrma
             if (hangAction && hangAction.paused) {
@@ -4483,7 +4753,13 @@ function setupToggleButtons() {
     toggleSettingsBtn.style.left = '10px';
     toggleSettingsBtn.addEventListener('click', () => {
         const panel = document.querySelector('.controls');
-        if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        if (panel) {
+            const wasHidden = panel.style.display === 'none';
+            panel.style.display = wasHidden ? 'block' : 'none';
+            // Send event to agent when settings panel is manually toggled
+            const action = wasHidden ? 'shown' : 'hidden';
+            sendEventToAgent('panel_toggle', `The settings panel has been manually ${action} by the user.`);
+        }
     });
     document.body.appendChild(toggleSettingsBtn);
 
@@ -4495,7 +4771,14 @@ function setupToggleButtons() {
     toggleHistoryBtn.textContent = '💬';
     toggleHistoryBtn.style.bottom = '10px';
     toggleHistoryBtn.style.left = '10px';
-    toggleHistoryBtn.addEventListener('click', HistoryModule.toggleHistoryPanel);
+    toggleHistoryBtn.addEventListener('click', () => {
+        const historyPanel = document.getElementById('history-panel');
+        const wasHidden = !historyPanel || historyPanel.style.display === 'none';
+        HistoryModule.toggleHistoryPanel();
+        // Send event to agent when history panel is manually toggled
+        const action = wasHidden ? 'shown' : 'hidden';
+        sendEventToAgent('panel_toggle', `The conversation history panel has been manually ${action} by the user.`);
+    });
     document.body.appendChild(toggleHistoryBtn);
 
     // Hide lip sync panel by default

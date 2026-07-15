@@ -1364,12 +1364,9 @@ export function applyFacialExpression(expression) {
     });
 
     const expressionMap = {
-        'neutral': 'neutral',
-        'happy': 'happy',
-        'sad': 'sad',
-        'angry': 'angry',
-        'surprised': 'surprised',
-        'blink': 'blink'
+        'shock': 'sad',           // agent says shock -> VRM shows sad
+        'surprised': 'relaxed',   // agent says surprised -> VRM shows relaxed
+        'shy': 'angry'            // agent says shy -> VRM shows angry
     };
 
     const vrmExpression = expressionMap[expression];
@@ -2152,11 +2149,19 @@ async function handleTouchEvent(intersection) {
         return;
     }
     
-    lastTouchTime = now;
-    console.log('[touch] Touch event triggered on model');
-    
-    try {
-        const bodyPart = identifyBodyPart(intersection);
+        lastTouchTime = now;
+        console.log('[touch] Touch event triggered on model');
+        
+        // Immediately change facial expression to 'shy' or 'shocked' randomly
+        // 'shy' maps to 'angry' in VRM, 'shocked' maps to 'relaxed' in VRM
+        // This expression persists until the OpenClaw agent replies
+        const touchExpressions = ['shy', 'shocked'];
+        const chosenExpression = touchExpressions[Math.floor(Math.random() * touchExpressions.length)];
+        applyFacialExpression(chosenExpression);
+        console.log('[touch] Set expression to', chosenExpression, 'until agent replies');
+        
+        try {
+            const bodyPart = identifyBodyPart(intersection);
         console.log('[touch] Touched body part:', bodyPart);
         
         console.log('[touch] Playing touch animation...');
@@ -3154,8 +3159,10 @@ async function executeAgentCommand(command) {
         }
     }
     
-    if (command.expression && command.expression.timing === 'during') {
-        console.log('[ws] Applying expression DURING speaking:', command.expression.name);
+    // Expression is always applied DURING speaking (forced)
+    // Apply AFTER animation starts so the animation doesn't override the expression
+    if (command.expression && command.expression.name) {
+        console.log('[ws] Applying expression (always during):', command.expression.name);
         if (window.applyFacialExpression) {
             window.applyFacialExpression(command.expression.name);
         }
