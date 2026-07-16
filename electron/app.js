@@ -3287,33 +3287,42 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
     function parseAgentResponse(text) {
       try {
         let parsed;
+        let needsUnescape = false;
         try {
-          // Trim and normalize: replace literal newlines/tabs in the raw text
-          // with their escaped versions so JSON.parse can handle them
-          const sanitized = text
-            .trim()
-            .replace(/\n/g, '\\n')
-            .replace(/\r/g, '\\r')
-            .replace(/\t/g, '\\t');
-          parsed = JSON.parse(sanitized);
+          // First attempt: parse raw text as-is (handles properly formatted JSON)
+          parsed = JSON.parse(text.trim());
         } catch (e1) {
-          console.log('[ws] Standard JSON parse failed, trying single quote handling');
-          const fixedText = text
-            .trim()
-            .replace(/\n/g, '\\n')
-            .replace(/\r/g, '\\r')
-            .replace(/\t/g, '\\t')
-            .replace(/'/g, '"')
-            .replace(/""/g, '""');
+          // Second attempt: sanitize literal newlines/tabs in string values
+          // Only do this if the raw parse failed (agent returned malformed JSON)
+          console.log('[ws] Raw JSON parse failed, trying with newline sanitization');
           try {
-            parsed = JSON.parse(fixedText);
+            const sanitized = text
+              .trim()
+              .replace(/\n/g, '\\n')
+              .replace(/\r/g, '\\r')
+              .replace(/\t/g, '\\t');
+            parsed = JSON.parse(sanitized);
+            needsUnescape = true;
           } catch (e2) {
-            // Last resort: try regex extraction of text, animation, expression fields
-            console.log('[ws] JSON parse failed, trying regex field extraction');
-            parsed = extractFieldsViaRegex(text);
-            if (!parsed) {
-              console.warn('[ws] Failed to parse JSON response:', e2);
-              return null;
+            console.log('[ws] Sanitized parse failed, trying single quote handling');
+            const fixedText = text
+              .trim()
+              .replace(/\n/g, '\\n')
+              .replace(/\r/g, '\\r')
+              .replace(/\t/g, '\\t')
+              .replace(/'/g, '"')
+              .replace(/""/g, '""');
+            try {
+              parsed = JSON.parse(fixedText);
+              needsUnescape = true;
+            } catch (e3) {
+              // Last resort: try regex extraction of text, animation, expression fields
+              console.log('[ws] JSON parse failed, trying regex field extraction');
+              parsed = extractFieldsViaRegex(text);
+              if (!parsed) {
+                console.warn('[ws] Failed to parse JSON response:', e3);
+                return null;
+              }
             }
           }
         }
