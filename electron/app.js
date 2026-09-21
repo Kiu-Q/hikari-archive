@@ -3,7 +3,9 @@
  * Contains all application logic with namespace modules
  */
 
-console.log('[electron] Hikari Electron version starting');
+import logger from './logger.js';
+
+logger.info('electron', 'Hikari Electron version starting');
 
 // ============================================================
 // IMPORTS
@@ -50,14 +52,14 @@ async function processAgentRequestQueue() {
     const { eventType, message, resolve, reject } = agentRequestQueue.shift();
     
     if (!window.sendAgentMessage) {
-        console.warn(`[event] Cannot send ${eventType} event - sendAgentMessage not available`);
+        logger.warn('event', `Cannot send ${eventType} event - sendAgentMessage not available`);
         isAgentRequestInProgress = false;
         resolve();
         processAgentRequestQueue();
         return;
     }
     
-    console.log(`[event] Sending ${eventType} event to agent:`, message);
+    logger.info('event', `Sending ${eventType} event to agent:`, message);
     
     // Set flag to prevent new animations from playing while waiting for reply
     // Keep idle_loop looping; if an animation is already playing, let it continue
@@ -95,7 +97,7 @@ async function processAgentRequestQueue() {
             }
         }
     } catch (error) {
-        console.error(`[event] Error sending ${eventType} event:`, error);
+        logger.error('event', `Error sending ${eventType} event:`, error);
         window._agentRequestPending = false;
     }
     
@@ -237,7 +239,7 @@ const CoreModule = (() => {
         // Expose camera and controls to window for web.js access
         window.camera = camera;
         window.controls = controls;
-        console.log('[core] Camera and controls exposed to window');
+        logger.info('core', 'Camera and controls exposed to window');
 
         // Initialize scene
         scene = new THREE.Scene();
@@ -267,7 +269,7 @@ const CoreModule = (() => {
         raycaster = new THREE.Raycaster();
         mouse = new THREE.Vector2();
 
-        console.log('[core] Three.js initialized');
+        logger.info('core', 'Three.js initialized');
     }
 
     /**
@@ -287,7 +289,7 @@ const CoreModule = (() => {
     function setupTouchDetection() {
         if (!renderer) return;
         
-        console.log('[touch] Setting up touch detection (mouseup trigger)');
+        logger.info('touch', 'Setting up touch detection (mouseup trigger)');
         
         let mouseDownPos = null;
         
@@ -343,8 +345,8 @@ const CoreModule = (() => {
         renderer.domElement.addEventListener('mouseleave', () => {
             mouseDownPos = null;
         });
-        
-        console.log('[touch] Touch detection initialized');
+
+        logger.info('touch', 'Touch detection initialized');
     }
 
     /**
@@ -354,7 +356,7 @@ const CoreModule = (() => {
     function setupZoomControl() {
         if (!renderer) return;
 
-        console.log('[zoom] Setting up custom zoom control');
+        logger.info('zoom', 'Setting up custom zoom control');
 
         renderer.domElement.addEventListener('wheel', async (event) => {
             // Only handle zoom when running in Electron
@@ -400,13 +402,13 @@ const CoreModule = (() => {
                 camera.updateProjectionMatrix();
                 renderer.setSize(newWidth, newHeight);
 
-                console.log('[zoom] zoomScale:', zoomScale.toFixed(2), 'window:', newWidth + 'x' + newHeight, 'camera dist:', newDistance.toFixed(2), 'deltaY:', event.deltaY);
+                logger.info('zoom', 'zoomScale:', zoomScale.toFixed(2), 'window:', newWidth + 'x' + newHeight, 'camera dist:', newDistance.toFixed(2), 'deltaY:', event.deltaY);
             } catch (e) {
-                console.warn('[zoom] failed to resize window:', e);
+                logger.warn('zoom', 'failed to resize window:', e);
             }
         }, { passive: false });
 
-        console.log('[zoom] Custom zoom control initialized');
+        logger.info('zoom', 'Custom zoom control initialized');
     }
 
     /**
@@ -416,7 +418,7 @@ const CoreModule = (() => {
     function setupClickThrough() {
         if (!window.electronAPI || !window.electronAPI.setIgnoreMouseEvents) return;
 
-        console.log('[click-through] Setting up dynamic click-through');
+        logger.info('click-through', 'Setting up dynamic click-through');
 
         let isCurrentlyIgnoring = false;
         let lastCheckTime = 0;
@@ -463,19 +465,19 @@ const CoreModule = (() => {
                 // Mouse entered avatar/UI area → capture events
                 window.electronAPI.setIgnoreMouseEvents(false);
                 isCurrentlyIgnoring = false;
-                console.log('[click-through] Capturing mouse events');
+                logger.info('click-through', 'Capturing mouse events');
             } else if (!isOverInteractive && !isCurrentlyIgnoring) {
                 // Mouse left avatar/UI area → pass through
                 window.electronAPI.setIgnoreMouseEvents(true, true);
                 isCurrentlyIgnoring = true;
-                console.log('[click-through] Passing mouse events through');
+                logger.info('click-through', 'Passing mouse events through');
             }
         });
 
         // Start in click-through mode (will switch to capture when mouse is over avatar)
         window.electronAPI.setIgnoreMouseEvents(true, true);
         isCurrentlyIgnoring = true;
-        console.log('[click-through] Initialized as click-through');
+        logger.info('click-through', 'Initialized as click-through');
     }
 
     /**
@@ -488,13 +490,13 @@ const CoreModule = (() => {
         
         // Get the intersection point in world space
         const touchPoint = intersection.point;
-        console.log('[touch] Touch point:', touchPoint);
+        logger.info('touch', 'Touch point:', touchPoint);
         
         // Transform touch point to local space of VRM scene
         const localPoint = touchPoint.clone();
         currentVrm.scene.worldToLocal(localPoint);
         
-        console.log('[touch] Touch point in VRM local space:', localPoint);
+        logger.info('touch', 'Touch point in VRM local space:', localPoint);
         
         // Use Y coordinate (height) to determine body part
         const y = localPoint.y;
@@ -519,7 +521,7 @@ const CoreModule = (() => {
             bodyPart = 'leg';
         }
         
-        console.log('[touch] Identified body part:', bodyPart, '(y:', y.toFixed(2), ', x:', x.toFixed(2), ')');
+        logger.info('touch', 'Identified body part:', bodyPart, '(y:', y.toFixed(2), ', x:', x.toFixed(2), ')');
         
         return bodyPart;
     }
@@ -532,19 +534,19 @@ const CoreModule = (() => {
 
         // Check if touch interaction is enabled
         if (window.isAnimationEnabled && !window.isAnimationEnabled('touch')) {
-            console.log('[touch] Touch interaction is disabled in settings');
+            logger.info('touch', 'Touch interaction is disabled in settings');
             return;
         }
         
         // Touch works during any animation state — no blocking
         const now = Date.now();
         if (now - lastTouchTime < TOUCH_DEBOUNCE_MS) {
-            console.log('[touch] Touch event debounced');
+            logger.info('touch', 'Touch event debounced');
             return;
         }
         
         lastTouchTime = now;
-        console.log('[touch] Touch event triggered on model (works during any animation)');
+        logger.info('touch', 'Touch event triggered on model (works during any animation)');
         
         // Immediately change facial expression to 'shy' or 'shocked' randomly
         // 'shy' maps to 'angry' in VRM, 'shocked' maps to 'relaxed' in VRM
@@ -552,7 +554,7 @@ const CoreModule = (() => {
         const touchExpressions = ['shy', 'shocked'];
         const chosenExpression = touchExpressions[Math.floor(Math.random() * touchExpressions.length)];
         applyFacialExpression(chosenExpression);
-        console.log('[touch] Set expression to', chosenExpression, 'until agent replies');
+        logger.info('touch', 'Set expression to', chosenExpression, 'until agent replies');
         
         // Interrupt any running sequence to allow touch response
         if (isSitAnimationActive) {
@@ -562,11 +564,11 @@ const CoreModule = (() => {
         try {
             // Identify which body part was touched
             const bodyPart = identifyBodyPart(intersection);
-            console.log('[touch] Touched body part:', bodyPart);
+            logger.info('touch', 'Touched body part:', bodyPart);
             
             // Send message to agent directly (no pre-animation)
             const touchMessage = `User touched your ${bodyPart}`;
-            console.log('[touch] Sending message to agent:', touchMessage);
+            logger.info('touch', 'Sending message to agent:', touchMessage);
             statusDiv.textContent = 'Touch response...';
             
             if (window.disableMessaging) {
@@ -579,11 +581,11 @@ const CoreModule = (() => {
             // Send only the user message — system instructions were sent once at session start
             if (window.sendAgentMessage) {
                 window.sendAgentMessage(touchMessage);
-                console.log('[touch] Touch message sent to agent via HTTP');
+                logger.info('touch', 'Touch message sent to agent via HTTP');
             }
             
         } catch (error) {
-            console.error('[touch] Error handling touch event:', error);
+            logger.error('touch', 'Error handling touch event:', error);
             // Return to idle loop on error
             await loadIdleLoop();
         }
@@ -609,7 +611,7 @@ const CoreModule = (() => {
         };
         
         localStorage.setItem('camera_settings', JSON.stringify(settings));
-        console.log('[camera] Camera settings saved:', settings);
+        logger.info('camera', 'Camera settings saved:', settings);
     }
 
     /**
@@ -641,12 +643,12 @@ const CoreModule = (() => {
                     }
                     
                     controls.update();
-                    console.log('[camera] Camera settings loaded:', settings);
+                    logger.info('camera', 'Camera settings loaded:', settings);
                     return true;
                 }
             }
         } catch (error) {
-            console.warn('[camera] Failed to load camera settings:', error);
+            logger.warn('camera', 'Failed to load camera settings:', error);
         }
         return false;
     }
@@ -659,7 +661,7 @@ const CoreModule = (() => {
             camera.position.set(0.0, 1.0, 4.5);
             controls.target.set(0.0, 1.0, 0.0);
             controls.update();
-            console.log('[camera] Camera reset to default');
+            logger.info('camera', 'Camera reset to default');
         }
     }
 
@@ -714,13 +716,13 @@ const CoreModule = (() => {
         lipSyncPanel = document.getElementById('lipSyncPanel');
         historyPanel = document.getElementById('history-panel');
         
-        console.log('[core] DOM elements initialized');
+        logger.info('core', 'DOM elements initialized');
         
         // Add click listener to messaging panel to reset sit animation flag when user interacts
         if (lipSyncPanel) {
             lipSyncPanel.addEventListener('click', () => {
                 if (isSitAnimationActive) {
-                    console.log('[sit] User clicked messaging panel, allowing panels to be shown again');
+                    logger.info('sit', 'User clicked messaging panel, allowing panels to be shown again');
                     isSitAnimationActive = false;
                 }
             });
@@ -729,7 +731,7 @@ const CoreModule = (() => {
             if (textInputPanel) {
                 textInputPanel.addEventListener('focus', () => {
                     if (isSitAnimationActive) {
-                        console.log('[sit] User focused text input, allowing panels to be shown again');
+                        logger.info('sit', 'User focused text input, allowing panels to be shown again');
                         isSitAnimationActive = false;
                     }
                 });
@@ -747,14 +749,14 @@ const CoreModule = (() => {
     function hideMessagingPanel() {
         if (lipSyncPanel) {
             lipSyncPanel.style.display = 'none';
-            console.log('[messaging] Messaging panel hidden');
+            logger.info('messaging', 'Messaging panel hidden');
         }
         
         // Get history panel dynamically from DOM (it's created by HistoryModule)
         const historyPanelElement = document.getElementById('history-panel');
         if (historyPanelElement) {
             historyPanelElement.style.display = 'none';
-            console.log('[messaging] History panel hidden');
+            logger.info('messaging', 'History panel hidden');
         }
     }
 
@@ -764,13 +766,13 @@ const CoreModule = (() => {
     function showMessagingPanel() {
         // Don't show messaging panel if sit animation is active
         if (isSitAnimationActive) {
-            console.log('[messaging] Skipping showMessagingPanel - sit animation is active');
+            logger.info('messaging', 'Skipping showMessagingPanel - sit animation is active');
             return;
         }
         
         if (lipSyncPanel) {
             lipSyncPanel.style.display = 'flex';
-            console.log('[messaging] Panel shown');
+            logger.info('messaging', 'Panel shown');
         }
     }
 
@@ -789,7 +791,7 @@ const CoreModule = (() => {
             speakBtnPanel.style.opacity = '0.5';
             speakBtnPanel.style.cursor = 'not-allowed';
         }
-        console.log('[messaging] Controls disabled');
+        logger.info('messaging', 'Controls disabled');
     }
 
     /**
@@ -798,7 +800,7 @@ const CoreModule = (() => {
     function enableMessaging() {
         // Don't enable messaging if sit animation is active
         if (isSitAnimationActive) {
-            console.log('[messaging] Skipping enableMessaging - sit animation is active');
+            logger.info('messaging', 'Skipping enableMessaging - sit animation is active');
             return;
         }
         
@@ -813,7 +815,7 @@ const CoreModule = (() => {
             speakBtnPanel.style.opacity = '1';
             speakBtnPanel.style.cursor = 'auto';
         }
-        console.log('[messaging] Controls enabled');
+        logger.info('messaging', 'Controls enabled');
     }
 
     /**
@@ -823,7 +825,7 @@ const CoreModule = (() => {
         if (textInputPanel && !isMessagingDisabled) {
             originalMessageText = textInputPanel.value;
             textInputPanel.value = 'Thinking...';
-            console.log('[messaging] Set to thinking state');
+            logger.info('messaging', 'Set to thinking state');
         }
     }
 
@@ -835,7 +837,7 @@ const CoreModule = (() => {
             // Clear the textbox completely
             textInputPanel.value = '';
             originalMessageText = '';
-            console.log('[messaging] Panel reset - textbox cleared');
+            logger.info('messaging', 'Panel reset - textbox cleared');
         }
         
         // Also enable messaging controls after reply
@@ -965,7 +967,7 @@ const CoreModule = (() => {
         }
 
         function startSpeaking(text) {
-            console.log('[lip] startSpeaking', text);
+            logger.info('lip', 'startSpeaking', text);
             isCurrentlyTalking = false;
             mouthTarget = 'neutral';
             updateDebugDisplay(text, 0);
@@ -979,9 +981,9 @@ const CoreModule = (() => {
 
             if (!isAgentCommandActive) {
                 loadIdleLoop().then(() => {
-                    console.log('[lip] idle loop loaded in background');
+                    logger.info('lip', 'idle loop loaded in background');
                 }).catch(err => {
-                    console.warn('[lip] background idle load failed', err);
+                    logger.warn('lip', 'background idle load failed', err);
                 });
             }
 
@@ -991,7 +993,7 @@ const CoreModule = (() => {
 
             // Split text by newlines and process each line separately
             const lines = text.split('\n').filter(line => line.trim() !== '');
-            console.log('[lip] Text split into', lines.length, 'lines');
+            logger.info('lip', 'Text split into', lines.length, 'lines');
             
             // Process lines sequentially with a small pause between them
             processLinesSequentially(lines);
@@ -1002,7 +1004,7 @@ const CoreModule = (() => {
                 const line = lines[i].trim();
                 if (!line) continue;
                 
-                console.log('[lip] Speaking line', i + 1, 'of', lines.length, ':', line);
+                logger.info('lip', 'Speaking line', i + 1, 'of', lines.length, ':', line);
                 
                 // Show this line in the bubble
                 showSpeakingBubble(line);
@@ -1012,7 +1014,7 @@ const CoreModule = (() => {
                 
                 // Small pause between lines (except after the last line)
                 if (i < lines.length - 1) {
-                    console.log('[lip] Pausing between lines...');
+                    logger.info('lip', 'Pausing between lines...');
                     await new Promise(resolve => setTimeout(resolve, 500));
                 }
             }
@@ -1036,7 +1038,7 @@ const CoreModule = (() => {
 
         function speakLine(text) {
             return new Promise((resolve) => {
-                console.log('[lip] Speaking line:', text);
+                logger.info('lip', 'Speaking line:', text);
                 updateDebugDisplay(text, 0);
 
                 const hasChinese = /[\u4e00-\u9fff]/.test(text);
@@ -1062,7 +1064,7 @@ const CoreModule = (() => {
                 const speakingDuration = (totalShapes * 80) + (units.length * 50);
                 const maxDuration = speakingDuration / speakingSpeedMultiplier;
                 
-                console.log('[lip] units for speech', units, 'total shapes:', totalShapes, 'duration:', speakingDuration, 'max duration:', maxDuration);
+                logger.info('lip', 'units for speech', units, 'total shapes:', totalShapes, 'duration:', speakingDuration, 'max duration:', maxDuration);
 
                 function processNextUnit() {
                     if (currentUnitIndex >= units.length) {
@@ -1081,7 +1083,7 @@ const CoreModule = (() => {
                     }
 
                     const unit = units[currentUnitIndex];
-                    console.log('[lip] processing unit', currentUnitIndex, unit);
+                    logger.info('lip', 'processing unit', currentUnitIndex, unit);
 
                     if (hasChinese) {
                         updateDebugDisplay(text, currentUnitIndex, unit);
@@ -1090,7 +1092,7 @@ const CoreModule = (() => {
                     }
 
                     const mouthShapes = unitShapes[currentUnitIndex] || textToMouthShapes(unit);
-                    console.log('[lip] mouthShapes', mouthShapes);
+                    logger.info('lip', 'mouthShapes', mouthShapes);
 
                     if (mouthShapes.length === 0) {
                         currentUnitIndex++;
@@ -1131,7 +1133,7 @@ const CoreModule = (() => {
         }
 
         function setSpeakingSpeed(multiplier) {
-            console.log('[lip] setSpeakingSpeed', multiplier);
+            logger.info('lip', 'setSpeakingSpeed', multiplier);
             speakingSpeedMultiplier = multiplier;
             return speakingSpeedMultiplier;
         }
@@ -1311,7 +1313,7 @@ const CoreModule = (() => {
 
         document.body.appendChild(speakingBubble);
         
-        console.log('[bubble] Bubble added to DOM');
+        logger.info('bubble', 'Bubble added to DOM');
     }
 
     function updateSpeakingBubblePosition() {
@@ -1329,7 +1331,7 @@ const CoreModule = (() => {
                 for (const boneName of possibleBoneNames) {
                     cachedHeadBone = currentVrm.humanoid.getNormalizedBoneNode(boneName);
                     if (cachedHeadBone) {
-                        console.log(`[bubble] Found head bone: ${boneName}`);
+                        logger.info('bubble', `Found head bone: ${boneName}`);
                         break;
                     }
                 }
@@ -1338,15 +1340,15 @@ const CoreModule = (() => {
                     for (const bone of currentVrm.humanoid.bones) {
                         if (bone && (bone.name.toLowerCase().includes('head') || bone.name.toLowerCase().includes('neck'))) {
                             cachedHeadBone = bone;
-                            console.log(`[bubble] Found head bone from humanoid: ${bone.name}`);
+                            logger.info('bubble', `Found head bone from humanoid: ${bone.name}`);
                             break;
                         }
                     }
                 }
 
                 if (!cachedHeadBone && !headBoneWarningLogged) {
-                    console.warn('[bubble] Head bone not found, using default position');
-                    console.log('[bubble] Available bones:', currentVrm.humanoid?.bones?.map(b => b.name));
+                    logger.warn('bubble', 'Head bone not found, using default position');
+                    logger.info('bubble', 'Available bones:', currentVrm.humanoid?.bones?.map(b => b.name));
                     headBoneWarningLogged = true;
                 }
             }
@@ -1368,7 +1370,7 @@ const CoreModule = (() => {
             speakingBubble.style.left = `${x}px`;
             speakingBubble.style.top = `${y}px`;
         } catch (e) {
-            console.error('[bubble] failed to update position:', e);
+            logger.error('bubble', 'failed to update position:', e);
             speakingBubble.style.left = '50%';
             speakingBubble.style.top = '40%';
         }
@@ -1508,13 +1510,13 @@ const CoreModule = (() => {
                             if (typeof currentVrm.springBoneManager.setDragForceFactor === 'function') {
                                 currentVrm.springBoneManager.setDragForceFactor(0.3);
                             }
-                            console.log('[vrm] Spring bone physics enabled');
+                            logger.info('vrm', 'Spring bone physics enabled');
                         }
 
                         currentMixer = new THREE.AnimationMixer(vrm.scene);
 
                         statusDiv.textContent = 'VRM model loaded successfully!';
-                        console.log('VRM loaded:', vrm);
+                        logger.info('vrm', 'VRM loaded:', vrm);
 
                         // Hide loading GIF after VRM loads
                         hideLoadingGif();
@@ -1526,14 +1528,14 @@ const CoreModule = (() => {
                         statusDiv.textContent = `Loading VRM model... ${percent}%`;
                     },
                     (error) => {
-                        console.error('Error loading VRM:', error);
+                        logger.error('vrm', 'Error loading VRM:', error);
                         statusDiv.textContent = 'Error loading VRM model';
                         reject(error);
                     }
                 );
             });
         } catch (error) {
-            console.error('Error in loadVRM:', error);
+            logger.error('vrm', 'Error in loadVRM:', error);
             statusDiv.textContent = 'Error loading VRM model';
         }
     }
@@ -1562,7 +1564,7 @@ const CoreModule = (() => {
             const timer = setTimeout(() => {
                 if (!finished) {
                     currentMixer.removeEventListener('finished', handler);
-                    console.warn('[seq] waitForActionEnd timeout for action', action);
+                    logger.warn('seq', 'waitForActionEnd timeout for action', action);
                     resolve(false);
                 }
             }, maxWait);
@@ -1597,7 +1599,7 @@ const CoreModule = (() => {
                 }
             }
         } catch (e) {
-            console.error('[transition] failed to load animation', url, e);
+            logger.error('transition', 'failed to load animation', url, e);
         }
 
         return null;
@@ -1637,7 +1639,7 @@ const CoreModule = (() => {
 
     async function loadIdleLoop() {
         if (!currentVrm) return false;
-        console.log('[idle] loadIdleLoop called');
+        logger.info('idle', 'loadIdleLoop called');
 
         try {
             statusDiv.textContent = 'Loading: Idle loop...';
@@ -1645,26 +1647,26 @@ const CoreModule = (() => {
 
             const idleUrl = `${ASSET_BASE_URL}VRMA/idle_loop.vrma`;
             const gltf = await loader.loadAsync(idleUrl);
-            console.log('[idle] gltf loaded for idle loop', gltf);
+            logger.info('idle', 'gltf loaded for idle loop', gltf);
             const vrmAnimationData = gltf.userData.vrmAnimations && gltf.userData.vrmAnimations[0];
 
             if (vrmAnimationData) {
                 const baseClip = createVRMAnimationClip(vrmAnimationData, currentVrm);
-                console.log('[idle] baseClip created', baseClip);
+                logger.info('idle', 'baseClip created', baseClip);
 
                 if (baseClip) {
                     vrmaAnimationClip = baseClip;
                     await blendToAnimation(baseClip, THREE.LoopRepeat, 0);
 
                     statusDiv.textContent = 'Idle loop started automatically';
-                    console.log('[idle] idle loop playing');
+                    logger.info('idle', 'idle loop playing');
                     return true;
                 }
             }
-            console.warn('[idle] no VRM animation data found in idle loop gltf');
+            logger.warn('idle', 'no VRM animation data found in idle loop gltf');
             return false;
         } catch (error) {
-            console.error('[idle] Error loading idle loop:', error);
+            logger.error('idle', 'Error loading idle loop:', error);
             statusDiv.textContent = 'Failed to load idle loop';
             return false;
         }
@@ -1683,7 +1685,7 @@ const CoreModule = (() => {
                 loader.load(
                     url,
                     (gltf) => {
-                        console.log('GLTF loaded (VRMA):', gltf);
+                        logger.info('runtime', 'GLTF loaded (VRMA):', gltf);
 
                         const vrmAnimationData = gltf.userData.vrmAnimations && gltf.userData.vrmAnimations[0];
 
@@ -1705,7 +1707,7 @@ const CoreModule = (() => {
                                         currentAction.play();
                                         statusDiv.textContent += ' - Auto-playing...';
                                     } catch (idleError) {
-                                        console.error('Error playing idle animation:', idleError);
+                                        logger.error('runtime', 'Error playing idle animation:', idleError);
                                         statusDiv.textContent += ' - Playback error: ' + idleError.message;
                                     }
                                 } else {
@@ -1713,8 +1715,8 @@ const CoreModule = (() => {
                                     statusDiv.textContent = 'Animation loaded!';
                                 }
 
-                                console.log('Generated AnimationClip:', vrmaAnimationClip);
-                                console.log('Is idle animation:', isIdleAnimation);
+                                logger.info('runtime', 'Generated AnimationClip:', vrmaAnimationClip);
+                                logger.info('runtime', 'Is idle animation:', isIdleAnimation);
 
                                 resolve(vrmaAnimationClip);
                             }
@@ -1727,14 +1729,14 @@ const CoreModule = (() => {
                         statusDiv.textContent = `Loading VRMA animation... ${percent}%`;
                     },
                     (error) => {
-                        console.error('Error loading animation:', error);
+                        logger.error('runtime', 'Error loading animation:', error);
                         statusDiv.textContent = 'Error loading animation file: ' + error.message;
                         reject(error);
                     }
                 );
             });
         } catch (error) {
-            console.error('Error in loadVRMA:', error);
+            logger.error('runtime', 'Error in loadVRMA:', error);
             statusDiv.textContent = 'Error loading animation file';
         }
     }
@@ -1747,7 +1749,7 @@ const CoreModule = (() => {
         const visibleDuration = totalDuration - (2 * bufferSize);
 
         if (visibleDuration <= 0) {
-            console.warn(`Clip too short to buffer: ${totalDuration}s`);
+            logger.warn('runtime', `Clip too short to buffer: ${totalDuration}s`);
             return targetClip;
         }
 
@@ -1798,7 +1800,7 @@ const CoreModule = (() => {
     function resetExpressionToNeutral() {
         if (!currentVrm?.expressionManager) return;
         
-        console.log('[expression] Resetting to neutral');
+        logger.info('expression', 'Resetting to neutral');
         activeFacialExpression = null;
         blinkSystemEnabled = true;
         
@@ -1883,7 +1885,7 @@ const CoreModule = (() => {
         }
 
         const delay = Math.random() * (CONFIG.RANDOM_IDLE_MAX_DELAY - CONFIG.RANDOM_IDLE_MIN_DELAY) + CONFIG.RANDOM_IDLE_MIN_DELAY;
-        console.log('[idle] scheduling random idle in', delay, 'ms');
+        logger.info('idle', 'scheduling random idle in', delay, 'ms');
         currentIdleTimeout = setTimeout(playRandomIdle, delay);
     }
 
@@ -2033,7 +2035,7 @@ const CoreModule = (() => {
         if (!currentVrm || isPlayingWalkSequence) return;
 
         try {
-            console.log('[walk-electron] runElectronWalkSequence start', vrmaUrl);
+            logger.info('walk-electron', 'runElectronWalkSequence start', vrmaUrl);
             isPlayingWalkSequence = true;
 
             if (window.hideAllPanels) {
@@ -2063,9 +2065,9 @@ const CoreModule = (() => {
                     const windowCenterX = windowX + (windowBounds.width / 2);
                     walkingDirection = windowCenterX < screenCenter ? 'right' : 'left';
                     
-                    console.log('[walk-electron] window center:', windowCenterX, 'screen center:', screenCenter, 'walking:', walkingDirection);
+                    logger.info('walk-electron', 'window center:', windowCenterX, 'screen center:', screenCenter, 'walking:', walkingDirection);
                 } catch (e) {
-                    console.warn('[walk-electron] failed to get window position:', e);
+                    logger.warn('walk-electron', 'failed to get window position:', e);
                     walkingWindowInitialPos = { x: 0, y: 0 };
                 }
             }
@@ -2080,7 +2082,7 @@ const CoreModule = (() => {
             const turn = CONFIG.WALK_TURN_DURATION;
             walkingTotalDurationSec = 2 * turn;
 
-            console.log('[walk-electron] timing config', {
+            logger.info('walk-electron', 'timing config', {
                 startDelay: CONFIG.WALK_START_DELAY,
                 direction: walkingDirection,
                 leg,
@@ -2088,10 +2090,10 @@ const CoreModule = (() => {
                 totalPathSeconds: walkingTotalDurationSec,
             });
 
-            console.log('[walk-electron] waiting before starting clip...');
+            logger.info('walk-electron', 'waiting before starting clip...');
             await new Promise(resolve => setTimeout(resolve, CONFIG.WALK_START_DELAY * 1000));
 
-            console.log('[walk-electron] turning to face', walkingDirection, ', duration (ms)', turn * 1000);
+            logger.info('walk-electron', 'turning to face', walkingDirection, ', duration (ms)', turn * 1000);
             let action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
             if (action) {
                 try {
@@ -2101,12 +2103,12 @@ const CoreModule = (() => {
                         action.timeScale = walkTimeScale;
                     }
                 } catch (e) {
-                    console.warn('[walk-electron] failed to set time scale for initial turn', e);
+                    logger.warn('walk-electron', 'failed to set time scale for initial turn', e);
                 }
             }
             await animateElectronWalkPhase(0, turn, 'initial_turn', walkingDirection);
 
-            console.log('[walk-electron] starting', walkingDirection, 'walk clip (LoopRepeat)');
+            logger.info('walk-electron', 'starting', walkingDirection, 'walk clip (LoopRepeat)');
             action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
             if (action) {
                 try {
@@ -2116,13 +2118,13 @@ const CoreModule = (() => {
                         action.timeScale = walkTimeScale;
                     }
                 } catch (e) {
-                    console.warn('[walk-electron] failed to set time scale for walk leg', e);
+                    logger.warn('walk-electron', 'failed to set time scale for walk leg', e);
                 }
             }
-            console.log('[walk-electron]', walkingDirection, 'leg duration (ms)', leg * 1000);
+            logger.info('walk-electron', '', walkingDirection, 'leg duration (ms)', leg * 1000);
             await animateElectronWalkPhase(turn, turn + leg, 'walk', walkingDirection);
 
-            console.log('[walk-electron] turning to face forward, duration (ms)', turn * 1000);
+            logger.info('walk-electron', 'turning to face forward, duration (ms)', turn * 1000);
             action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat, transitionTime: 0.5 });
             if (action) {
                 try {
@@ -2132,13 +2134,13 @@ const CoreModule = (() => {
                         action.timeScale = walkTimeScale;
                     }
                 } catch (e) {
-                    console.warn('[walk-electron] failed to set time scale for turn to forward', e);
+                    logger.warn('walk-electron', 'failed to set time scale for turn to forward', e);
                 }
             }
             await animateElectronWalkPhase(turn + leg, turn + leg + turn, 'turn_to_forward', walkingDirection);
 
             walkingPathActive = false;
-            console.log('[walk-electron] finished, keeping current position and rotation');
+            logger.info('walk-electron', 'finished, keeping current position and rotation');
 
             // Send walk completion event to agent with original and new position
             if (window.electronAPI && walkingWindowInitialPos) {
@@ -2147,15 +2149,15 @@ const CoreModule = (() => {
                     sendEventToAgent('character_walk', 
                         `The character has finished walking. Original position: (${walkingWindowInitialPos.x}, ${walkingWindowInitialPos.y}). New position: (${newPos.x}, ${newPos.y}).`);
                 } catch (e) {
-                    console.warn('[walk-electron] Failed to send walk event:', e);
+                    logger.warn('walk-electron', 'Failed to send walk event:', e);
                 }
             }
 
-            console.log('[walk-electron] calling loadIdleLoop at end of sequence');
+            logger.info('walk-electron', 'calling loadIdleLoop at end of sequence');
             await loadIdleLoop();
             
         } finally {
-            console.log('[walk-electron] runElectronWalkSequence finished');
+            logger.info('walk-electron', 'runElectronWalkSequence finished');
             isPlayingWalkSequence = false;
             idleSuspended = false;
             scheduleRandomIdle();
@@ -2211,7 +2213,7 @@ const CoreModule = (() => {
                     try {
                         window.electronAPI.setWindowPosition(windowX, walkingWindowInitialPos.y);
                     } catch (e) {
-                        console.warn('[walk-electron] failed to update window position:', e);
+                        logger.warn('walk-electron', 'failed to update window position:', e);
                     }
                 }
 
@@ -2230,61 +2232,61 @@ const CoreModule = (() => {
     // START_1 SPECIAL SEQUENCE
     // ============================================================
     async function runStart1Sequence() {
-        console.log('[idle1] runStart1Sequence start');
+        logger.info('idle1', 'runStart1Sequence start');
         isPlayingSequence = true;
 
         hideMessagingPanel();
 
         try {
             statusDiv.textContent = 'Playing start_1 stand up...';
-            console.log('[idle1] step 1: transition to start_1standUp');
+            logger.info('idle1', 'step 1: transition to start_1standUp');
             const action = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/start_1standUp.vrma`, { 
                 loopMode: THREE.LoopOnce, 
                 startOffset: 0.5 
             });
             
             if (!action) {
-                console.warn('[idle1] failed to create action');
+                logger.warn('idle1', 'failed to create action');
                 return;
             }
 
-            console.log('[idle1] step 1 complete: start_1 animation started');
+            logger.info('idle1', 'step 1 complete: start_1 animation started');
 
-            console.log('[idle1] step 2: waiting 0.1s before pausing');
+            logger.info('idle1', 'step 2: waiting 0.1s before pausing');
             await new Promise(resolve => setTimeout(resolve, 100));
             
-            console.log('[idle1] step 2: pausing animation at time', action.time);
+            logger.info('idle1', 'step 2: pausing animation at time', action.time);
             const pausedTime = action.time;
             action.paused = true;
             action.timeScale = 0;
             statusDiv.textContent = 'Animation paused...';
 
             const stayTime = Math.random() * (CONFIG.RANDOM_IDLE_MAX_DELAY - CONFIG.RANDOM_IDLE_MIN_DELAY) + CONFIG.RANDOM_IDLE_MIN_DELAY;
-            console.log('[idle1] step 3: waiting for', stayTime, 'ms');
+            logger.info('idle1', 'step 3: waiting for', stayTime, 'ms');
             statusDiv.textContent = `Waiting for ${(stayTime/1000).toFixed(1)}s...`;
             
             await new Promise(resolve => setTimeout(resolve, stayTime));
-            console.log('[idle1] step 3 complete: wait finished');
+            logger.info('idle1', 'step 3 complete: wait finished');
 
-            console.log('[idle1] step 4: resuming animation from time', pausedTime);
+            logger.info('idle1', 'step 4: resuming animation from time', pausedTime);
             action.paused = false;
             action.timeScale = 1;
             statusDiv.textContent = 'Resuming animation...';
 
             await waitForActionEnd(action, 15000, false);
-            console.log('[idle1] step 4 complete: animation finished');
+            logger.info('idle1', 'step 4 complete: animation finished');
 
-            console.log('[idle1] step 5: returning to idle loop');
+            logger.info('idle1', 'step 5: returning to idle loop');
             statusDiv.textContent = 'Returning to idle loop...';
             const ok = await loadIdleLoop();
-            if (!ok) console.warn('[idle1] loadIdleLoop failed');
-            console.log('[idle1] step 5 complete: idle loop resumed');
+            if (!ok) logger.warn('idle1', 'loadIdleLoop failed');
+            logger.info('idle1', 'step 5 complete: idle loop resumed');
 
         } catch (error) {
-            console.error('[idle1] Error in start_1 sequence:', error);
+            logger.error('idle1', 'Error in start_1 sequence:', error);
         } finally {
             isPlayingSequence = false;
-            console.log('[idle1] runStart1Sequence finished');
+            logger.info('idle1', 'runStart1Sequence finished');
         }
     }
 
@@ -2294,50 +2296,50 @@ const CoreModule = (() => {
     async function startAutomaticSequence() {
         if (isPlayingSequence || !currentVrm) return;
 
-        console.log('[seq] starting automatic sequence');
+        logger.info('seq', 'starting automatic sequence');
         isPlayingSequence = true;
         statusDiv.textContent = 'Starting automatic sequence...';
 
         try {
             statusDiv.textContent = 'Playing stand up animation...';
-            console.log('[seq] transition to stand up');
+            logger.info('seq', 'transition to stand up');
             const action1 = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/start_1standUp.vrma`, { loopMode: THREE.LoopOnce, startOffset: 0.5 });
             if (action1) {
-                console.log('[seq] waiting for stand up to finish');
+                logger.info('seq', 'waiting for stand up to finish');
                 await waitForActionEnd(action1, 15000, true);
             }
-            console.log('[seq] stand up finished');
+            logger.info('seq', 'stand up finished');
 
             statusDiv.textContent = 'Playing turn around animation...';
-            console.log('[seq] transition to turn around');
+            logger.info('seq', 'transition to turn around');
             const action2 = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/start_2turnAround.vrma`, { loopMode: THREE.LoopOnce, startOffset: 0.5, transitionTime: 1.0 });
             if (action2) {
-                console.log('[seq] waiting for turn around to finish');
+                logger.info('seq', 'waiting for turn around to finish');
                 await waitForActionEnd(action2, 15000, true);
             }
-            console.log('[seq] turn around finished');
+            logger.info('seq', 'turn around finished');
 
             statusDiv.textContent = 'Starting idle loop...';
-            console.log('[seq] loading idle loop');
+            logger.info('seq', 'loading idle loop');
             const t0 = performance.now();
             await loadIdleLoop();
-            console.log('[seq] loadIdleLoop duration', performance.now() - t0);
-            console.log('[seq] idle loop should now be playing');
+            logger.info('seq', 'loadIdleLoop duration', performance.now() - t0);
+            logger.info('seq', 'idle loop should now be playing');
 
             await new Promise(resolve => setTimeout(resolve, 3000));
-            console.log('[seq] waited 3s after idle start');
+            logger.info('seq', 'waited 3s after idle start');
             beginRandomIdleSelection();
         } catch (error) {
-            console.error('[seq] Error in automatic sequence:', error);
+            logger.error('seq', 'Error in automatic sequence:', error);
             statusDiv.textContent = 'Error in sequence. Loading idle loop...';
             await loadIdleLoop();
         } finally {
             isPlayingSequence = false;
-            console.log('[seq] automatic sequence complete');
+            logger.info('seq', 'automatic sequence complete');
             if (!currentAction) {
-                console.log('[seq] no action active, forcing idle');
+                logger.info('seq', 'no action active, forcing idle');
                 const ok = await loadIdleLoop();
-                if (!ok) console.warn('[seq] failed to load idle loop in finally');
+                if (!ok) logger.warn('seq', 'failed to load idle loop in finally');
             }
             beginRandomIdleSelection();
         }
@@ -2347,12 +2349,12 @@ const CoreModule = (() => {
     // RANDOM IDLE SYSTEM - ENHANCED
     // ============================================================
     async function playRandomIdle() {
-        console.log('[idle] playRandomIdle called, currentAction=', currentAction, 'isPlayingSequence=', isPlayingSequence, 'isPlayingWalkSequence=', isPlayingWalkSequence);
+        logger.info('idle', 'playRandomIdle called, currentAction=', currentAction, 'isPlayingSequence=', isPlayingSequence, 'isPlayingWalkSequence=', isPlayingWalkSequence);
         if (!currentVrm || isPlayingSequence || isPlayingWalkSequence) return;
         
         // Don't start new random idle if agent request is pending - keep idle_loop looping
         if (window._agentRequestPending) {
-            console.log('[idle] Skipping random idle - agent request pending, keeping idle_loop');
+            logger.info('idle', 'Skipping random idle - agent request pending, keeping idle_loop');
             scheduleRandomIdle();
             return;
         }
@@ -2372,20 +2374,20 @@ const CoreModule = (() => {
 
             if (idleFiles.length > 0) {
                 const randomFile = idleFiles[Math.floor(Math.random() * idleFiles.length)];
-                console.log('[idle] selected random idle', randomFile);
+                logger.info('idle', 'selected random idle', randomFile);
                 statusDiv.textContent = `Playing random idle: ${randomFile}`;
 
                 if (randomFile.includes('walk.vrma') && !randomFile.includes('walk_left') && !randomFile.includes('walk_right')) {
                     if (window.electronAPI) {
                         await runElectronWalkSequence(randomFile);
                     } else {
-                        console.log('[idle] Web version - skipping walk animation');
+                        logger.info('idle', 'Web version - skipping walk animation');
                         await loadIdleLoop();
                     }
                 }
                 else if (randomFile.includes('sit.vrma') && !randomFile.includes('sitWave')) {
                     // Sit sequence: sit_down → sit loop → sit_up
-                    console.log('[idle] Running sit sequence (sit_down → sit loop → sit_up)');
+                    logger.info('idle', 'Running sit sequence (sit_down → sit loop → sit_up)');
                     statusDiv.textContent = 'Sitting sequence...';
                     
                     // 1. Play sit_down
@@ -2396,7 +2398,7 @@ const CoreModule = (() => {
                     
                     // 2. Loop sit for random duration
                     const sitDuration = Math.random() * (CONFIG.RANDOM_IDLE_MAX_DELAY - CONFIG.RANDOM_IDLE_MIN_DELAY) + CONFIG.RANDOM_IDLE_MIN_DELAY;
-                    console.log('[idle] Sitting for', (sitDuration / 1000).toFixed(1), 'seconds');
+                    logger.info('idle', 'Sitting for', (sitDuration / 1000).toFixed(1), 'seconds');
                     const sitAction = await startSmoothTransition(randomFile, { loopMode: THREE.LoopRepeat });
                     if (sitAction) {
                         await new Promise(resolve => setTimeout(resolve, sitDuration));
@@ -2415,14 +2417,14 @@ const CoreModule = (() => {
                     }
                 }
             } else {
-                console.warn('[idle] no idle files found');
+                logger.warn('idle', 'no idle files found');
             }
         } catch (error) {
-            console.error('[idle] Error playing random idle:', error);
+            logger.error('idle', 'Error playing random idle:', error);
         } finally {
             statusDiv.textContent = 'Returning to idle loop...';
             const ok = await loadIdleLoop();
-            if (!ok) console.warn('[idle] loadIdleLoop failed after random idle');
+            if (!ok) logger.warn('idle', 'loadIdleLoop failed after random idle');
             scheduleRandomIdle();
         }
     }
@@ -2439,7 +2441,7 @@ const CoreModule = (() => {
         let vrmaFiles = [];
 
         if (Array.isArray(window.VRMA_ANIMATION_URLS)) {
-            console.log('[vrma] using constant animation list');
+            logger.info('vrma', 'using constant animation list');
             vrmaFiles = window.VRMA_ANIMATION_URLS.slice();
         }
 
@@ -2516,7 +2518,7 @@ const CoreModule = (() => {
 
             // Don't start new animation if agent request is pending - keep idle_loop looping
             if (window._agentRequestPending) {
-                console.log('[anim-dropdown] Skipping animation - agent request pending, keeping idle_loop');
+                logger.info('anim-dropdown', 'Skipping animation - agent request pending, keeping idle_loop');
                 animationSelect.value = '';
                 return;
             }
@@ -2545,7 +2547,7 @@ const CoreModule = (() => {
                 if (window.electronAPI) {
                     await runElectronWalkSequence(vrmaUrl);
                 } else {
-                    console.log('[electron] Web version - skipping walk animation');
+                    logger.info('electron', 'Web version - skipping walk animation');
                     await loadIdleLoop();
                 }
             } else if (vrmaUrl.includes('sit.vrma') || vrmaUrl.includes('sitWave.vrma')) {
@@ -2558,7 +2560,7 @@ const CoreModule = (() => {
                 }
                 
                 isSitAnimationActive = true;
-                console.log('[sit] Sit sequence started (sit_down → sit loop → sit_up)');
+                logger.info('sit', 'Sit sequence started (sit_down → sit loop → sit_up)');
                 
                 // Send sit event to agent
                 sendEventToAgent('character_sit', 'The character has started sitting down.');
@@ -2571,7 +2573,7 @@ const CoreModule = (() => {
                 
                 // 2. Loop sit animation for a random duration
                 const sitDuration = Math.random() * (CONFIG.RANDOM_IDLE_MAX_DELAY - CONFIG.RANDOM_IDLE_MIN_DELAY) + CONFIG.RANDOM_IDLE_MIN_DELAY;
-                console.log('[sit] Sitting for', (sitDuration / 1000).toFixed(1), 'seconds');
+                logger.info('sit', 'Sitting for', (sitDuration / 1000).toFixed(1), 'seconds');
                 statusDiv.textContent = `Sitting for ${(sitDuration/1000).toFixed(1)}s...`;
                 
                 const sitAction = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopRepeat });
@@ -2590,7 +2592,7 @@ const CoreModule = (() => {
                 if (currentVrm) currentVrm.humanoid.resetNormalizedPose();
                 await loadIdleLoop();
                 
-                console.log('[sit] Sit sequence complete, panels remain hidden until user interaction');
+                logger.info('sit', 'Sit sequence complete, panels remain hidden until user interaction');
             } else {
                 await startSmoothTransition(vrmaUrl);
             }
@@ -2685,18 +2687,18 @@ const WebSocketModule = (() => {
     function getWebSocketUrl() {
       const localStorageUrl = localStorage.getItem('websocket_url');
       if (localStorageUrl && localStorageUrl.trim() !== '') {
-        console.log('[ws] Using WebSocket URL from localStorage:', localStorageUrl);
+        logger.info('ws', 'Using WebSocket URL from localStorage:', localStorageUrl);
         return localStorageUrl.trim();
       }
       
       const envUrl = import.meta.env.VITE_WEBSOCKET_URL;
       if (envUrl) {
-        console.log('[ws] Using WebSocket URL from environment variable:', envUrl);
+        logger.info('ws', 'Using WebSocket URL from environment variable:', envUrl);
         return envUrl;
       }
       
       const defaultUrl = 'ws://localhost:18789';
-      console.log('[ws] Using default WebSocket URL:', defaultUrl);
+      logger.info('ws', 'Using default WebSocket URL:', defaultUrl);
       return defaultUrl;
     }
 
@@ -2753,7 +2755,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       const token = localStorage.getItem('openclaw_token') || CONFIG.token;
       
       const url = `${baseUrl}/v1/chat/completions`;
-      console.log('[http] Sending agent request to:', url);
+      logger.info('http', 'Sending agent request to:', url);
       
       if (addToHistory) {
         conversationHistory.push({ role: 'user', content: message });
@@ -2775,7 +2777,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('[http] Error response:', response.status, errorText);
+        logger.error('http', 'Error response:', response.status, errorText);
         throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
       
@@ -2786,7 +2788,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         throw new Error('No content in HTTP response');
       }
       
-      console.log('[http] Agent reply:', replyText);
+      logger.info('http', 'Agent reply:', replyText);
       
       if (addToHistory) {
         conversationHistory.push({ role: 'assistant', content: replyText });
@@ -2797,7 +2799,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
 
     async function startSession() {
       if (sessionStarted) return;
-      console.log('[session] Starting new OpenClaw session...');
+      logger.info('session', 'Starting new OpenClaw session...');
 
       try {
         // Each HTTP request is already a new session, so no need to send /new
@@ -2805,7 +2807,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
 
         // Send system instructions as the first message
         const reply = await sendAgentViaHttp(SYSTEM_INSTRUCTIONS);
-        console.log('[session] System instructions sent, processing reply as normal message...');
+        logger.info('session', 'System instructions sent, processing reply as normal message...');
 
         sessionStarted = true;
 
@@ -2835,9 +2837,9 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           }
         }
 
-        console.log('[session] Session ready');
+        logger.info('session', 'Session ready');
       } catch (error) {
-        console.error('[session] Failed to start session:', error);
+        logger.error('session', 'Failed to start session:', error);
       }
     }
 
@@ -2855,7 +2857,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
 
         // Ignore non-JSON replies (e.g., "No response from OpenClaw")
         if (replyText.includes('No response from OpenClaw') || replyText.trim().length < 2) {
-          console.log('[http] Ignoring non-JSON reply:', replyText.substring(0, 50));
+          logger.info('http', 'Ignoring non-JSON reply:', replyText.substring(0, 50));
           if (window.enableMessaging) window.enableMessaging();
           if (window.resetMessagingPanel) window.resetMessagingPanel();
           return;
@@ -2871,12 +2873,12 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           await executeAgentCommand(parsedResponse);
         } else {
           // Not valid JSON — ignore it
-          console.log('[http] Reply does not match required JSON format, ignoring:', replyText.substring(0, 50));
+          logger.info('http', 'Reply does not match required JSON format, ignoring:', replyText.substring(0, 50));
           if (window.enableMessaging) window.enableMessaging();
           if (window.resetMessagingPanel) window.resetMessagingPanel();
         }
       } catch (error) {
-        console.error('[http] Agent request failed:', error);
+        logger.error('http', 'Agent request failed:', error);
         const statusDiv = document.getElementById('status');
         if (statusDiv) {
           statusDiv.textContent = 'Error: ' + error.message;
@@ -2891,16 +2893,16 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
 
     function initWebSocket() {
       if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
-        console.log('[ws] WebSocket already connected or connecting');
+        logger.info('ws', 'WebSocket already connected or connecting');
         return;
       }
 
       const savedToken = localStorage.getItem('openclaw_token');
       if (savedToken && savedToken.trim() !== '') {
         CONFIG.token = savedToken;
-        console.log('[ws] Using token from localStorage (first 8 chars:', savedToken.substring(0, 8) + '...)');
+        logger.info('ws', 'Using token from localStorage (first 8 chars:', savedToken.substring(0, 8) + '...)');
       } else {
-        console.error('[ws] No token configured. Please set openclaw_token in localStorage.');
+        logger.error('ws', 'No token configured. Please set openclaw_token in localStorage.');
         
         const statusDiv = document.getElementById('status');
         if (statusDiv) {
@@ -2913,7 +2915,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
 
       const wsUrl = getWebSocketUrl();
       currentWebSocketUrl = wsUrl;
-      console.log('[ws] Connecting to OpenClaw gateway at:', wsUrl);
+      logger.info('ws', 'Connecting to OpenClaw gateway at:', wsUrl);
       
       try {
         ws = new WebSocket(wsUrl);
@@ -2923,23 +2925,23 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         ws.onerror = handleError;
         ws.onclose = handleClose;
       } catch (error) {
-        console.error('[ws] Error creating WebSocket:', error);
+        logger.error('ws', 'Error creating WebSocket:', error);
         scheduleReconnect();
       }
     }
 
     function handleOpen() {
-      console.log('[ws] Connected to OpenClaw gateway');
+      logger.info('ws', 'Connected to OpenClaw gateway');
       isConnected = true;
       reconnectAttempts = 0;
       
-      console.log('[ws] Waiting for connect.challenge...');
+      logger.info('ws', 'Waiting for connect.challenge...');
     }
 
     function handleMessage(event) {
       try {
         const data = JSON.parse(event.data);
-        console.log('[ws] Received message:', data);
+        logger.info('ws', 'Received message:', data);
         
         switch (data.type) {
           case 'speak':
@@ -2965,20 +2967,20 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
             handleHistoryResponse(data);
             break;
           case 'ack':
-            console.log('[ws] Acknowledgment received:', data);
+            logger.info('ws', 'Acknowledgment received:', data);
             break;
           default:
-            console.warn('[ws] Unknown message type:', data.type);
+            logger.warn('ws', 'Unknown message type:', data.type);
         }
       } catch (error) {
-        console.error('[ws] Error parsing message:', error);
+        logger.error('ws', 'Error parsing message:', error);
       }
     }
 
     function handleEvent(data) {
       switch (data.event) {
         case 'connect.challenge':
-          console.log('[ws] Connection challenge received, sending auth request');
+          logger.info('ws', 'Connection challenge received, sending auth request');
           
           const connectParams = {
             minProtocol: 3,
@@ -3020,16 +3022,16 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           break;
         
         default:
-          console.log('[ws] Unknown event type:', data.event);
+          logger.info('ws', 'Unknown event type:', data.event);
       }
     }
 
     function handleChatEvent(data) {
-      console.log('[ws] Chat event received:', data);
+      logger.info('ws', 'Chat event received:', data);
       
       const runId = data.payload?.runId;
       if (runId && processedRunIds.has(runId)) {
-        console.log('[ws] Ignoring duplicate event with runId:', runId);
+        logger.info('ws', 'Ignoring duplicate event with runId:', runId);
         return;
       }
       
@@ -3039,12 +3041,12 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       const isValidSession = sessionKey === 'agent:main:main' || sessionKey === 'main';
       
       if (!isValidSession) {
-        console.log('[ws] Ignoring message from non-main agent:', { sessionKey, state });
+        logger.info('ws', 'Ignoring message from non-main agent:', { sessionKey, state });
         return;
       }
       
       if (state !== 'final') {
-        console.log('[ws] Ignoring non-final message (still typing):', { sessionKey, state });
+        logger.info('ws', 'Ignoring non-final message (still typing):', { sessionKey, state });
         return;
       }
       
@@ -3054,23 +3056,23 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         const rawText = textContent ? textContent.text : null;
         
         if (rawText) {
-          console.log('[ws] Chat message from main agent (raw):', rawText);
+          logger.info('ws', 'Chat message from main agent (raw):', rawText);
           
           // Filter system messages
           if (rawText.includes('HEARTBEAT') || rawText.includes('HEARTBEAT_OK')) {
-            console.log('[ws] Skipping HEARTBEAT system message');
+            logger.info('ws', 'Skipping HEARTBEAT system message');
             return;
           }
           if (rawText.includes('New session started') || rawText.includes('✅')) {
-            console.log('[ws] Skipping session system message');
+            logger.info('ws', 'Skipping session system message');
             return;
           }
           if (rawText.includes('Read HEARTBEAT.md')) {
-            console.log('[ws] Skipping HEARTBEAT instruction message');
+            logger.info('ws', 'Skipping HEARTBEAT instruction message');
             return;
           }
           if (rawText.includes('/new or /reset') || rawText.includes('Do not mention internal steps')) {
-            console.log('[ws] Skipping session instruction message');
+            logger.info('ws', 'Skipping session instruction message');
             return;
           }
           if (rawText.includes('===== USER MESSAGE =====') || 
@@ -3080,14 +3082,14 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
               rawText.includes('RESPONSE FORMAT') ||
               rawText.includes('TIMING OPTIONS') ||
               rawText.includes('IMPORTANT:')) {
-            console.log('[ws] Skipping system instruction message');
+            logger.info('ws', 'Skipping system instruction message');
             return;
           }
           if (rawText.trim().startsWith('{') && 
               (rawText.includes("'text'") || rawText.includes('"text"')) &&
               (rawText.includes("'animation'") || rawText.includes('"animation"')) &&
               (rawText.includes("'expression'") || rawText.includes('"expression"'))) {
-            console.log('[ws] Skipping raw JSON response');
+            logger.info('ws', 'Skipping raw JSON response');
             return;
           }
           
@@ -3096,14 +3098,14 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           
           if (parsedResponse && parsedResponse.text) {
             textToSpeak = parsedResponse.text;
-            console.log('[ws] Extracted text from JSON:', textToSpeak);
+            logger.info('ws', 'Extracted text from JSON:', textToSpeak);
             
             if (parsedResponse.animation || parsedResponse.expression) {
               executeAgentCommand(parsedResponse);
             }
           } else {
             textToSpeak = rawText;
-            console.log('[ws] Using raw text (not JSON):', textToSpeak);
+            logger.info('ws', 'Using raw text (not JSON):', textToSpeak);
           }
           
           if (runId) {
@@ -3143,10 +3145,10 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
     }
 
     function handleAgentResponse(data) {
-      console.log('[ws] Agent response received:', data);
+      logger.info('ws', 'Agent response received:', data);
       
       if (!data.ok) {
-        console.error('[ws] Error in response:', data);
+        logger.error('ws', 'Error in response:', data);
         const statusDiv = document.getElementById('status');
         if (statusDiv) {
           statusDiv.textContent = 'Error: ' + (data.payload?.error || 'Unknown error');
@@ -3156,7 +3158,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       }
       
       if (data.payload?.type === 'hello-ok') {
-        console.log('[ws] Connection successful, authenticated as:', data.payload.auth?.role);
+        logger.info('ws', 'Connection successful, authenticated as:', data.payload.auth?.role);
         const statusDiv = document.getElementById('status');
         if (statusDiv) {
           statusDiv.textContent = 'Connected to OpenClaw';
@@ -3168,7 +3170,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       } else if (data.payload?.result?.payloads && data.payload.result.payloads.length > 0) {
         const runId = data.payload?.runId || data.payload?.result?.meta?.systemPromptReport?.generatedAt;
         if (runId && processedRunIds.has(runId)) {
-          console.log('[ws] Ignoring duplicate res with runId:', runId);
+          logger.info('ws', 'Ignoring duplicate res with runId:', runId);
           return;
         }
         
@@ -3181,13 +3183,13 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         const isValidSession = sessionKey === 'agent:main:main' || sessionKey === 'main';
         
         if (!isValidSession) {
-          console.log('[ws] Ignoring response from non-main agent:', { sessionKey, state });
+          logger.info('ws', 'Ignoring response from non-main agent:', { sessionKey, state });
           return;
         }
         
         const replyText = data.payload.result.payloads[0]?.text;
         if (replyText) {
-          console.log('[ws] AI reply from main agent:', replyText);
+          logger.info('ws', 'AI reply from main agent:', replyText);
           
           if (runId) {
             processedRunIds.add(runId);
@@ -3198,8 +3200,8 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           if (parsedResponse) {
             executeAgentCommand(parsedResponse);
           } else {
-            console.warn('[ws] Response is not valid JSON, treating as plain text');
-            console.log('[ws] Plain text reply:', replyText);
+            logger.warn('ws', 'Response is not valid JSON, treating as plain text');
+            logger.info('ws', 'Plain text reply:', replyText);
             
             if (window.enableMessaging) {
               window.enableMessaging();
@@ -3221,14 +3223,14 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         }
         
       } else if (data.payload?.status === 'accepted') {
-        console.log('[ws] Request accepted, waiting for reply...');
+        logger.info('ws', 'Request accepted, waiting for reply...');
         
         const statusDiv = document.getElementById('status');
         if (statusDiv) {
           statusDiv.textContent = 'Processing request...';
         }
       } else {
-        console.log('[ws] Response data:', data.payload);
+        logger.info('ws', 'Response data:', data.payload);
       }
     }
 
@@ -3272,14 +3274,14 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         }
         
         if (result.text) {
-          console.log('[ws] Regex extraction succeeded:', result);
+          logger.info('ws', 'Regex extraction succeeded:', result);
           return result;
         }
         
-        console.warn('[ws] Regex extraction failed to find text field');
+        logger.warn('ws', 'Regex extraction failed to find text field');
         return null;
       } catch (e) {
-        console.error('[ws] Regex extraction error:', e);
+        logger.error('ws', 'Regex extraction error:', e);
         return null;
       }
     }
@@ -3294,7 +3296,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         } catch (e1) {
           // Second attempt: sanitize literal newlines/tabs in string values
           // Only do this if the raw parse failed (agent returned malformed JSON)
-          console.log('[ws] Raw JSON parse failed, trying with newline sanitization');
+          logger.info('ws', 'Raw JSON parse failed, trying with newline sanitization');
           try {
             const sanitized = text
               .trim()
@@ -3304,7 +3306,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
             parsed = JSON.parse(sanitized);
             needsUnescape = true;
           } catch (e2) {
-            console.log('[ws] Sanitized parse failed, trying single quote handling');
+            logger.info('ws', 'Sanitized parse failed, trying single quote handling');
             const fixedText = text
               .trim()
               .replace(/\n/g, '\\n')
@@ -3317,10 +3319,10 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
               needsUnescape = true;
             } catch (e3) {
               // Last resort: try regex extraction of text, animation, expression fields
-              console.log('[ws] JSON parse failed, trying regex field extraction');
+              logger.info('ws', 'JSON parse failed, trying regex field extraction');
               parsed = extractFieldsViaRegex(text);
               if (!parsed) {
-                console.warn('[ws] Failed to parse JSON response:', e3);
+                logger.warn('ws', 'Failed to parse JSON response:', e3);
                 return null;
               }
             }
@@ -3328,7 +3330,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         }
         
         if (!parsed.text || typeof parsed.text !== 'string') {
-          console.warn('[ws] Invalid JSON response: missing or invalid text field');
+          logger.warn('ws', 'Invalid JSON response: missing or invalid text field');
           return null;
         }
         
@@ -3345,7 +3347,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           ];
           
           if (!validAnimations.includes(parsed.animation.file)) {
-            console.warn('[ws] Invalid animation:', parsed.animation.file);
+            logger.warn('ws', 'Invalid animation:', parsed.animation.file);
             parsed.animation = null;
           }
         }
@@ -3354,7 +3356,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           const validExpressions = ['neutral', 'happy', 'sad', 'angry', 'surprised', 'shy', 'shocked', 'blink'];
           
           if (!validExpressions.includes(parsed.expression.name)) {
-            console.warn('[ws] Invalid expression:', parsed.expression.name);
+            logger.warn('ws', 'Invalid expression:', parsed.expression.name);
             parsed.expression = null;
           }
         }
@@ -3363,7 +3365,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         const validTimings = ['during', 'after', null];
         
         if (parsed.animation && !validTimings.includes(parsed.animation.timing)) {
-          console.warn('[ws] Invalid animation timing (before is not allowed):', parsed.animation.timing);
+          logger.warn('ws', 'Invalid animation timing (before is not allowed):', parsed.animation.timing);
           parsed.animation.timing = 'during';
         }
         
@@ -3372,17 +3374,17 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           parsed.expression.timing = 'during';
         }
         
-        console.log('[ws] Parsed agent command:', parsed);
+        logger.info('ws', 'Parsed agent command:', parsed);
         return parsed;
         
       } catch (error) {
-        console.warn('[ws] Failed to parse JSON response:', error);
+        logger.warn('ws', 'Failed to parse JSON response:', error);
         return null;
       }
     }
 
     async function executeAgentCommand(command) {
-      console.log('[ws] Executing agent command:', command);
+      logger.info('ws', 'Executing agent command:', command);
       
       const statusDiv = document.getElementById('status');
       
@@ -3395,7 +3397,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       
       if (window.lipSyncSystem && window.lipSyncSystem.setAgentCommandActive) {
         window.lipSyncSystem.setAgentCommandActive(true);
-        console.log('[ws] Agent command active - idle loop prevented');
+        logger.info('ws', 'Agent command active - idle loop prevented');
       }
       
       const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
@@ -3404,9 +3406,9 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       if (command.animation && command.animation.timing === 'during') {
         // Check if this animation is enabled in settings
         if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(`${ASSET_BASE_URL}VRMA/${command.animation.file}`)) {
-          console.log('[ws] Animation disabled in settings, skipping:', command.animation.file);
+          logger.info('ws', 'Animation disabled in settings, skipping:', command.animation.file);
         } else {
-          console.log('[ws] Playing animation DURING speaking (LoopOnce):', command.animation.file);
+          logger.info('ws', 'Playing animation DURING speaking (LoopOnce):', command.animation.file);
           if (window.startSmoothTransition) {
             await window.startSmoothTransition(`${ASSET_BASE_URL}VRMA/${command.animation.file}`, { loopMode: THREE.LoopOnce });
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -3417,14 +3419,14 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       // Expression is always applied DURING speaking (forced)
       // Apply AFTER animation starts so the animation doesn't override the expression
       if (command.expression && command.expression.name) {
-        console.log('[ws] Applying expression (always during):', command.expression.name);
+        logger.info('ws', 'Applying expression (always during):', command.expression.name);
         if (window.applyFacialExpression) {
           window.applyFacialExpression(command.expression.name);
         }
       }
       
       if (command.text && window.lipSyncSystem) {
-        console.log('[ws] Starting lip sync with text:', command.text.substring(0, 30) + '...');
+        logger.info('ws', 'Starting lip sync with text:', command.text.substring(0, 30) + '...');
         
         if (window.hideAllPanels) {
           window.hideAllPanels();
@@ -3444,7 +3446,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
               notTalkingCount++;
               if (notTalkingCount >= 10) {
                 clearInterval(checkInterval);
-                console.log('[ws] Lip sync confirmed complete after 10 checks');
+                logger.info('ws', 'Lip sync confirmed complete after 10 checks');
                 resolve();
               }
             } else {
@@ -3463,9 +3465,9 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       if (command.animation && command.animation.timing === 'after') {
         // Check if this animation is enabled in settings
         if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(`${ASSET_BASE_URL}VRMA/${command.animation.file}`)) {
-          console.log('[ws] Animation disabled in settings, skipping (after):', command.animation.file);
+          logger.info('ws', 'Animation disabled in settings, skipping (after):', command.animation.file);
         } else {
-          console.log('[ws] Playing animation AFTER speaking:', command.animation.file);
+          logger.info('ws', 'Playing animation AFTER speaking:', command.animation.file);
           if (statusDiv) {
             statusDiv.textContent = 'Playing animation after speaking...';
           }
@@ -3475,42 +3477,42 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
             `${ASSET_BASE_URL}VRMA/${command.animation.file}`,
             { loopMode: 2200 }
           );
-          console.log('[ws] After animation started, action:', action);
+          logger.info('ws', 'After animation started, action:', action);
           
-          console.log('[ws] Waiting minimum 5 seconds for after animation...');
+          logger.info('ws', 'Waiting minimum 5 seconds for after animation...');
           await new Promise(resolve => setTimeout(resolve, 5000));
           
           if (action && window.waitForActionEnd) {
             try {
               await window.waitForActionEnd(action, 60000, false);
-              console.log('[ws] After animation finished event received');
+              logger.info('ws', 'After animation finished event received');
             } catch (e) {
-              console.warn('[ws] After animation wait timed out or failed (this is OK):', e);
+              logger.warn('ws', 'After animation wait timed out or failed (this is OK):', e);
             }
           }
           
-          console.log('[ws] Additional 3 second delay for after animation...');
+          logger.info('ws', 'Additional 3 second delay for after animation...');
           await new Promise(resolve => setTimeout(resolve, 3000));
-          console.log('[ws] After animation fully complete');
+          logger.info('ws', 'After animation fully complete');
           }
         }
       }
       
       if (command.expression && command.expression.timing === 'after') {
-        console.log('[ws] Applying expression AFTER speaking:', command.expression.name);
+        logger.info('ws', 'Applying expression AFTER speaking:', command.expression.name);
         if (window.applyFacialExpression) {
           window.applyFacialExpression(command.expression.name);
         }
         
         setTimeout(() => {
-          console.log('[ws] Resetting expression to neutral');
+          logger.info('ws', 'Resetting expression to neutral');
           if (window.resetExpressionToNeutral) {
             window.resetExpressionToNeutral();
           }
         }, 2000);
       }
       
-      console.log('[ws] Returning to idle loop with neutral expression');
+      logger.info('ws', 'Returning to idle loop with neutral expression');
       if (window.loadIdleLoop) {
         await window.loadIdleLoop();
       }
@@ -3521,7 +3523,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       
       if (window.lipSyncSystem && window.lipSyncSystem.setAgentCommandActive) {
         window.lipSyncSystem.setAgentCommandActive(false);
-        console.log('[ws] Agent command complete - idle loop allowed again');
+        logger.info('ws', 'Agent command complete - idle loop allowed again');
       }
     }
 
@@ -3530,33 +3532,33 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         // Gracefully handle permission errors (e.g. missing operator.read scope)
         const errorCode = data.payload?.error?.code || data.error?.code || '';
         if (errorCode === 'INVALID_REQUEST' || errorCode.includes('scope')) {
-          console.warn('[ws] History not available (insufficient permissions:', errorCode + ')');
+          logger.warn('ws', 'History not available (insufficient permissions:', errorCode + ')');
         } else {
-          console.warn('[ws] History response error:', data.payload?.error || data.error || data);
+          logger.warn('ws', 'History response error:', data.payload?.error || data.error || data);
         }
         return;
       }
       
-      console.log('[ws] History response received, OK:', data.ok, 'ID:', data.id);
+      logger.info('ws', 'History response received, OK:', data.ok, 'ID:', data.id);
       
       const messages = data.payload?.messages || [];
       const totalCount = data.payload?.totalCount || 0;
       const hasMore = data.payload?.hasMore || false;
       
-      console.log('\n[ws] HISTORY METADATA:');
-      console.log('  Messages in this batch:', messages.length);
-      console.log('  Total messages available:', totalCount);
-      console.log('  Has more messages:', hasMore);
+    logger.info('history', 'HISTORY METADATA:');
+    logger.info('history', 'Messages in this batch:', messages.length);
+    logger.info('history', 'Total messages available:', totalCount);
+    logger.info('history', 'Has more messages:', hasMore);
       
       if (window.displayHistoryMessages) {
         window.displayHistoryMessages(messages, totalCount, hasMore);
       } else {
-        console.warn('[ws] displayHistoryMessages function not available');
+        logger.warn('ws', 'displayHistoryMessages function not available');
       }
     }
 
     function handleSpeakCommand(data) {
-      console.log('[ws] Speak command:', data.text);
+      logger.info('ws', 'Speak command:', data.text);
       
       if (window.lipSyncSystem && data.text) {
         window.lipSyncSystem.startSpeaking(data.text);
@@ -3565,7 +3567,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
     }
 
     function handleAnimateCommand(data) {
-      console.log('[ws] Animate command:', data.animation);
+      logger.info('ws', 'Animate command:', data.animation);
       
       const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
       
@@ -3576,14 +3578,14 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
             sendStatus('idle');
           })
           .catch(error => {
-            console.error('[ws] Animation error:', error);
+            logger.error('ws', 'Animation error:', error);
             sendStatus('error', { error: error.message });
           });
       }
     }
 
     function handleExpressCommand(data) {
-      console.log('[ws] Express command:', data.expression);
+      logger.info('ws', 'Express command:', data.expression);
       
       if (window.applyFacialExpression && data.expression) {
         window.applyFacialExpression(data.expression);
@@ -3592,18 +3594,18 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
     }
 
     function handleError(error) {
-      console.error('[ws] WebSocket error:', error);
+      logger.error('ws', 'WebSocket error:', error);
       isConnected = false;
     }
 
     function handleClose(event) {
-      console.log('[ws] WebSocket closed:', event.code, event.reason);
+      logger.info('ws', 'WebSocket closed:', event.code, event.reason);
       isConnected = false;
       
       if (reconnectAttempts < CONFIG.maxReconnectAttempts) {
         scheduleReconnect();
       } else {
-        console.error('[ws] Max reconnection attempts reached');
+        logger.error('ws', 'Max reconnection attempts reached');
       }
     }
 
@@ -3613,7 +3615,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       }
       
       reconnectAttempts++;
-      console.log(`[ws] Scheduling reconnect attempt ${reconnectAttempts}/${CONFIG.maxReconnectAttempts} in ${CONFIG.reconnectInterval}ms`);
+      logger.info('ws', `Scheduling reconnect attempt ${reconnectAttempts}/${CONFIG.maxReconnectAttempts} in ${CONFIG.reconnectInterval}ms`);
       
       reconnectTimer = setTimeout(() => {
         initWebSocket();
@@ -3626,13 +3628,13 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       if (isConnected && ws && ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(message);
-          console.log('[ws] Sent message:', data);
+          logger.info('ws', 'Sent message:', data);
         } catch (error) {
-          console.error('[ws] Error sending message:', error);
+          logger.error('ws', 'Error sending message:', error);
           queueMessage(data);
         }
       } else {
-        console.log('[ws] WebSocket not connected, queuing message');
+        logger.info('ws', 'WebSocket not connected, queuing message');
         queueMessage(data);
       }
     }
@@ -3697,7 +3699,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         // Build messages: conversation history + the system event message
         const messagesToSend = [...conversationHistory, { role: 'user', content: message }];
         
-        console.log('[http] Sending agent request (with history, not persisted):', url);
+        logger.info('http', 'Sending agent request (with history, not persisted):', url);
         
         const response = await fetch(url, {
           method: 'POST',
@@ -3714,7 +3716,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('[http] Error response:', response.status, errorText);
+          logger.error('http', 'Error response:', response.status, errorText);
           throw new Error(`HTTP ${response.status}: ${errorText}`);
         }
         
@@ -3725,12 +3727,12 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           throw new Error('No content in HTTP response');
         }
         
-        console.log('[http] Agent reply:', replyText);
+        logger.info('http', 'Agent reply:', replyText);
         
         // Don't add system message or reply to conversationHistory
         return replyText;
       } catch (error) {
-        console.error('[http] sendAgentMessageRaw failed:', error);
+        logger.error('http', 'sendAgentMessageRaw failed:', error);
         throw error;
       }
     }
@@ -3763,7 +3765,7 @@ const HistoryModule = (() => {
     let visiblePanelsBeforeHide = [];
 
     function initHistoryPanel() {
-        console.log('[history] Initializing history panel');
+        logger.info('history', 'Initializing history panel');
         
         historyPanel = document.createElement('div');
         historyPanel.id = 'history-panel';
@@ -3826,13 +3828,13 @@ const HistoryModule = (() => {
         historyPanel.appendChild(messagesContainer);
         document.body.appendChild(historyPanel);
         
-        console.log('[history] History panel initialized');
+        logger.info('history', 'History panel initialized');
     }
 
     function showHistoryPanel() {
         if (historyPanel) {
             historyPanel.style.display = 'flex';
-            console.log('[history] Panel shown');
+            logger.info('history', 'Panel shown');
             
             if (window.showMessagingPanel) {
                 window.showMessagingPanel();
@@ -3849,7 +3851,7 @@ const HistoryModule = (() => {
     function hideHistoryPanel() {
         if (historyPanel) {
             historyPanel.style.display = 'none';
-            console.log('[history] Panel hidden');
+            logger.info('history', 'Panel hidden');
             
             if (window.hideMessagingPanel) {
                 window.hideMessagingPanel();
@@ -3866,9 +3868,9 @@ const HistoryModule = (() => {
     }
 
     async function fetchConversationHistory(offset = 0) {
-        console.log('[history] fetchConversationHistory called with offset:', offset);
+        logger.info('history', 'fetchConversationHistory called with offset:', offset);
         if (isLoadingHistory) {
-            console.log('[history] Already loading history, ignoring request');
+            logger.info('history', 'Already loading history, ignoring request');
             return;
         }
         
@@ -3877,10 +3879,10 @@ const HistoryModule = (() => {
         if (offset === 0) {
             currentOffset = 0;
             displayedTimestamps.clear();
-            console.log('[history] Reset currentOffset and cleared displayedTimestamps for new fetch');
+            logger.info('history', 'Reset currentOffset and cleared displayedTimestamps for new fetch');
         }
         
-        console.log('[history] Fetching history with offset:', offset);
+        logger.info('history', 'Fetching history with offset:', offset);
         
         try {
             const requestId = 'history-' + Date.now();
@@ -3896,33 +3898,33 @@ const HistoryModule = (() => {
                     }
                 });
                 
-                console.log('[history] History request sent:', requestId);
+                logger.info('history', 'History request sent:', requestId);
             } else {
-                console.error('[history] sendMessage not available');
+                logger.error('history', 'sendMessage not available');
             }
         } catch (error) {
-            console.error('[history] Error fetching history:', error);
+            logger.error('history', 'Error fetching history:', error);
             isLoadingHistory = false;
         }
     }
 
     function loadMoreMessages() {
-        console.log('[history] Loading more messages, current offset:', currentOffset);
+        logger.info('history', 'Loading more messages, current offset:', currentOffset);
         
         const newOffset = currentOffset + 100;
         fetchConversationHistory(newOffset);
     }
 
     function displayHistoryMessages(messages, totalCountMsg, hasMoreMsg) {
-        console.log('\n========== CONVERSATION HISTORY DISPLAY START ==========');
-        console.log('[history] Total messages fetched:', messages.length);
-        console.log('[history] Total count available:', totalCountMsg);
-        console.log('[history] Has more messages:', hasMoreMsg);
-        console.log('[history] Current offset:', currentOffset);
+        logger.info('history', 'CONVERSATION HISTORY DISPLAY START');
+        logger.info('history', 'Total messages fetched:', messages.length);
+        logger.info('history', 'Total count available:', totalCountMsg);
+        logger.info('history', 'Has more messages:', hasMoreMsg);
+        logger.info('history', 'Current offset:', currentOffset);
         
         const messagesContainer = document.getElementById('history-messages');
         if (!messagesContainer) {
-            console.error('[history] ERROR: messagesContainer not found!');
+            logger.error('history', 'ERROR: messagesContainer not found!');
             return;
         }
         
@@ -3932,70 +3934,70 @@ const HistoryModule = (() => {
         if (currentOffset === 0) {
             messagesContainer.innerHTML = '';
             historyMessages = [];
-            console.log('[history] Cleared container for initial load (offset=0)');
+            logger.info('history', 'Cleared container for initial load (offset=0)');
         }
         
-        console.log('\n--- FILTERING PROCESS ---');
+        logger.info('history', 'FILTERING PROCESS');
         let acceptedCount = 0;
         let rejectedCount = 0;
         
         messages.forEach((msg, msgIndex) => {
-            console.log(`\n[Filtering Message ${msgIndex + 1}/${messages.length}]`);
-            console.log('  Role:', msg.role);
-            console.log('  Timestamp:', msg.timestamp);
+            logger.info('history', `Filtering Message ${msgIndex + 1}/${messages.length}`);
+            logger.info('runtime', '  Role:', msg.role);
+            logger.info('runtime', '  Timestamp:', msg.timestamp);
             
             if (msg.role === 'toolResult') {
-                console.log('  ❌ REJECTED: Role is "toolResult"');
+                logger.info('runtime', '  ❌ REJECTED: Role is "toolResult"');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Passed toolResult check');
+            logger.info('runtime', '  ✓ Passed toolResult check');
             
             if (!msg.content || msg.content.length === 0) {
-                console.log('  ❌ REJECTED: No content or empty content array');
+                logger.info('runtime', '  ❌ REJECTED: No content or empty content array');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Passed content existence check (content.length:', msg.content.length + ')');
+            logger.info('runtime', '  ✓ Passed content existence check (content.length:', msg.content.length + ')');
             
             const textContent = msg.content.find(item => item.type === 'text');
             if (!textContent || !textContent.text) {
-                console.log('  ❌ REJECTED: No text content found in content array');
+                logger.info('runtime', '  ❌ REJECTED: No text content found in content array');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Found text content');
+            logger.info('runtime', '  ✓ Found text content');
             
             let text = textContent.text;
-            console.log('  Text preview:', text.substring(0, 100) + (text.length > 100 ? '...' : ''));
+            logger.info('runtime', '  Text preview:', text.substring(0, 100) + (text.length > 100 ? '...' : ''));
             
             if (text.includes('HEARTBEAT') || text.includes('HEARTBEAT_OK')) {
-                console.log('  ❌ REJECTED: HEARTBEAT system message');
+                logger.info('runtime', '  ❌ REJECTED: HEARTBEAT system message');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Not a HEARTBEAT message');
+            logger.info('runtime', '  ✓ Not a HEARTBEAT message');
             
             if (text.includes('New session started') || text.includes('✅')) {
-                console.log('  ❌ REJECTED: Session system message');
+                logger.info('runtime', '  ❌ REJECTED: Session system message');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Not a session message');
+            logger.info('runtime', '  ✓ Not a session message');
             
             if (text.includes('Read HEARTBEAT.md')) {
-                console.log('  ❌ REJECTED: HEARTBEAT instruction message');
+                logger.info('runtime', '  ❌ REJECTED: HEARTBEAT instruction message');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Not a HEARTBEAT instruction');
+            logger.info('runtime', '  ✓ Not a HEARTBEAT instruction');
             
             if (text.includes('/new or /reset') || text.includes('Do not mention internal steps')) {
-                console.log('  ❌ REJECTED: Session instruction message');
+                logger.info('runtime', '  ❌ REJECTED: Session instruction message');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Not a session instruction');
+            logger.info('runtime', '  ✓ Not a session instruction');
             
             if (text.includes('===== USER MESSAGE =====') || 
                 text.includes('===== SYSTEM INSTRUCTIONS =====') ||
@@ -4009,19 +4011,19 @@ const HistoryModule = (() => {
                     const userMessageMatch = text.match(/===== USER MESSAGE =====\s*([\s\S]*?)\s*===== SYSTEM INSTRUCTIONS =====/);
                     if (userMessageMatch && userMessageMatch[1]) {
                         text = userMessageMatch[1].trim();
-                        console.log('  Extracted user message from system block:', text.substring(0, 100) + '...');
+                        logger.info('runtime', '  Extracted user message from system block:', text.substring(0, 100) + '...');
                     } else {
-                        console.log('  ❌ REJECTED: System instruction block (could not extract user message)');
+                        logger.info('runtime', '  ❌ REJECTED: System instruction block (could not extract user message)');
                         rejectedCount++;
                         return;
                     }
                 } else {
-                    console.log('  ❌ REJECTED: System instruction block');
+                    logger.info('runtime', '  ❌ REJECTED: System instruction block');
                     rejectedCount++;
                     return;
                 }
             }
-            console.log('  ✓ Not a system instruction block');
+            logger.info('runtime', '  ✓ Not a system instruction block');
             
             const systemPromptPatterns = [
                 /^User touched (?:your|the) \w+$/i,
@@ -4034,22 +4036,22 @@ const HistoryModule = (() => {
             
             const isSystemPrompt = systemPromptPatterns.some(pattern => pattern.test(text.trim()));
             if (isSystemPrompt) {
-                console.log('  ❌ REJECTED: System prompt (not actual user message)');
+                logger.info('runtime', '  ❌ REJECTED: System prompt (not actual user message)');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Not a system prompt');
+            logger.info('runtime', '  ✓ Not a system prompt');
             
             if (msg.role === 'toolResult' &&
                 text.trim().startsWith('{') && 
                 (text.includes("'text'") || text.includes('"text"')) &&
                 (text.includes("'animation'") || text.includes('"animation"')) &&
                 (text.includes("'expression'") || text.includes('"expression"'))) {
-                console.log('  ❌ REJECTED: Raw JSON response from toolResult');
+                logger.info('runtime', '  ❌ REJECTED: Raw JSON response from toolResult');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Not a raw JSON response from toolResult');
+            logger.info('runtime', '  ✓ Not a raw JSON response from toolResult');
             
             if (msg.role === 'assistant' && text.trim().startsWith('{')) {
                 let parsed;
@@ -4057,10 +4059,10 @@ const HistoryModule = (() => {
                     parsed = JSON.parse(text);
                     if (parsed.text) {
                         text = parsed.text;
-                        console.log('  Extracted text from JSON:', text.substring(0, 100) + '...');
+                        logger.info('runtime', '  Extracted text from JSON:', text.substring(0, 100) + '...');
                     }
                 } catch (e1) {
-                    console.log('  Standard JSON parse failed, trying direct text extraction');
+                    logger.info('runtime', '  Standard JSON parse failed, trying direct text extraction');
                     try {
                         const textMatch = text.match(/'text'\s*:\s*'([^']*(?:\\'[^']*)*)'/);
                         if (textMatch && textMatch[1]) {
@@ -4070,37 +4072,37 @@ const HistoryModule = (() => {
                                 .replace(/\\n/g, '\n')
                                 .replace(/\\r/g, '\r')
                                 .replace(/\\t/g, '\t');
-                            console.log('  Extracted text from JSON (single-quote):', text.substring(0, 100) + '...');
+                            logger.info('runtime', '  Extracted text from JSON (single-quote):', text.substring(0, 100) + '...');
                         } else {
-                            console.log('  Not valid JSON, using text as-is');
+                            logger.info('runtime', '  Not valid JSON, using text as-is');
                         }
                     } catch (e2) {
-                        console.log('  Not valid JSON, using text as-is');
+                        logger.info('runtime', '  Not valid JSON, using text as-is');
                     }
                 }
             }
             
             if (displayedTimestamps.has(msg.timestamp)) {
-                console.log('  ❌ REJECTED: Duplicate message (timestamp already displayed)');
+                logger.info('runtime', '  ❌ REJECTED: Duplicate message (timestamp already displayed)');
                 rejectedCount++;
                 return;
             }
-            console.log('  ✓ Not a duplicate message');
+            logger.info('runtime', '  ✓ Not a duplicate message');
             
             displayedTimestamps.add(msg.timestamp);
-            console.log('  ✓ Timestamp added to displayedTimestamps');
+            logger.info('runtime', '  ✓ Timestamp added to displayedTimestamps');
             
-            console.log('  ✅ ACCEPTED: All filters passed');
+            logger.info('runtime', '  ✅ ACCEPTED: All filters passed');
             acceptedCount++;
             addMessageToHistory(msg, text);
             historyMessages.push(msg);
         });
         
-        console.log('\n--- FILTERING SUMMARY ---');
-        console.log('  Total messages processed:', messages.length);
-        console.log('  Accepted messages:', acceptedCount);
-        console.log('  Rejected messages:', rejectedCount);
-        console.log('  Acceptance rate:', ((acceptedCount / messages.length) * 100).toFixed(2) + '%');
+        logger.info('history', 'FILTERING SUMMARY');
+        logger.info('runtime', '  Total messages processed:', messages.length);
+        logger.info('runtime', '  Accepted messages:', acceptedCount);
+        logger.info('runtime', '  Rejected messages:', rejectedCount);
+        logger.info('runtime', '  Acceptance rate:', ((acceptedCount / messages.length) * 100).toFixed(2) + '%');
         
         currentOffset += messages.length;
         
@@ -4108,7 +4110,7 @@ const HistoryModule = (() => {
         
         isLoadingHistory = false;
         
-        console.log('[history] Messages displayed, total:', historyMessages.length);
+        logger.info('history', 'Messages displayed, total:', historyMessages.length);
     }
 
     function addMessageToHistory(message, processedText) {
@@ -4119,21 +4121,21 @@ const HistoryModule = (() => {
         
         let displayText = processedText || '';
         
-        console.log('[history] addMessageToHistory called with processedText:', displayText.substring(0, 100) + (displayText.length > 100 ? '...' : ''));
+        logger.info('history', 'addMessageToHistory called with processedText:', displayText.substring(0, 100) + (displayText.length > 100 ? '...' : ''));
         
         if (!displayText || displayText.trim() === '') {
-            console.log('[history] Skipping message with empty text');
+            logger.info('history', 'Skipping message with empty text');
             return;
         }
         
         const beforeBracketRemoval = displayText;
         displayText = displayText.replace(/\[.*?\]/g, '').trim();
         if (beforeBracketRemoval !== displayText) {
-            console.log('[history] Removed bracket content, result:', displayText.substring(0, 100) + '...');
+            logger.info('history', 'Removed bracket content, result:', displayText.substring(0, 100) + '...');
         }
         
         if (!displayText || displayText.trim() === '') {
-            console.log('[history] Skipping message with no displayable text');
+            logger.info('history', 'Skipping message with no displayable text');
             return;
         }
         
@@ -4209,7 +4211,7 @@ const HistoryModule = (() => {
             hasMoreMessages = false;
             displayedTimestamps.clear();
             
-            console.log('[history] History cleared');
+            logger.info('history', 'History cleared');
         }
     }
 
@@ -4220,12 +4222,12 @@ const HistoryModule = (() => {
         
         if (lipSyncPanel && lipSyncPanel.style.display !== 'none') {
             visiblePanelsBeforeHide.push('messaging');
-            console.log('[history] Messaging panel was visible, hiding...');
+            logger.info('history', 'Messaging panel was visible, hiding...');
         }
         
         if (historyPanel && historyPanel.style.display !== 'none') {
             visiblePanelsBeforeHide.push('history');
-            console.log('[history] History panel was visible, hiding...');
+            logger.info('history', 'History panel was visible, hiding...');
         }
         
         if (visiblePanelsBeforeHide.includes('messaging') && window.hideMessagingPanel) {
@@ -4237,18 +4239,18 @@ const HistoryModule = (() => {
         }
         
         allPanelsVisible = (visiblePanelsBeforeHide.length > 0);
-        console.log('[history] All panels hidden (visible panels were:', visiblePanelsBeforeHide.join(', ') + ')');
+        logger.info('history', 'All panels hidden (visible panels were:', visiblePanelsBeforeHide.join(', ') + ')');
     }
 
     function restorePanels() {
         if (visiblePanelsBeforeHide.includes('messaging') && window.showMessagingPanel) {
             window.showMessagingPanel();
-            console.log('[history] Messaging panel restored');
+            logger.info('history', 'Messaging panel restored');
         } else if (visiblePanelsBeforeHide.includes('history') && showHistoryPanel) {
             showHistoryPanel();
-            console.log('[history] History panel restored');
+            logger.info('history', 'History panel restored');
         } else {
-            console.log('[history] No panel to restore (was hidden)');
+            logger.info('history', 'No panel to restore (was hidden)');
         }
     }
 
@@ -4268,7 +4270,7 @@ const HistoryModule = (() => {
             
             return `${timeStr} - ${dateStr}`;
         } catch (error) {
-            console.error('[history] Error formatting timestamp:', error);
+            logger.error('history', 'Error formatting timestamp:', error);
             return isoTimestamp;
         }
     }
@@ -4306,7 +4308,7 @@ const HistoryModule = (() => {
  * Initialize Electron-specific features
  */
 function initElectronFeatures() {
-    console.log('[electron] Initializing Electron-specific features');
+    logger.info('electron', 'Initializing Electron-specific features');
     
     // Setup window resize handler
     window.addEventListener('resize', CoreModule.handleResize);
@@ -4320,7 +4322,7 @@ function initElectronFeatures() {
     // Setup UI event listeners
     setupUIEventListeners();
     
-    console.log('[electron] Electron features initialized');
+    logger.info('electron', 'Electron features initialized');
 }
 
 /**
@@ -4333,7 +4335,7 @@ function initElectronFeatures() {
  * 4. mouseup during drag → play remaining hang.vrma half
  */
 function setupWindowDragging() {
-    console.log('[electron] Setting up drag/touch tracking');
+    logger.info('electron', 'Setting up drag/touch tracking');
     
     let mouseDownActive = false;
     let dragTransitionedToWindow = false;
@@ -4410,7 +4412,7 @@ function setupWindowDragging() {
                 try {
                     window.electronAPI.setWindowPosition(newX, newY);
                 } catch (err) {
-                    console.warn('[electron] failed to update window position:', err);
+                    logger.warn('electron', 'failed to update window position:', err);
                 }
             }
             return;
@@ -4425,7 +4427,7 @@ function setupWindowDragging() {
             if (window.electronAPI?.setIgnoreMouseEvents) {
                 window.electronAPI.setIgnoreMouseEvents(false);
             }
-            console.log('[drag] Mouse left canvas, starting window drag');
+            logger.info('drag', 'Mouse left canvas, starting window drag');
             
             // Play first half of hang.vrma
             if (window.startSmoothTransition) {
@@ -4456,7 +4458,7 @@ function setupWindowDragging() {
         
         if (dragTransitionedToWindow) {
             window.isWindowDragging = false;
-            console.log('[drag] Mouse up, ending window drag');
+            logger.info('drag', 'Mouse up, ending window drag');
             
             // Get current window position for the event message
             if (window.electronAPI) {
@@ -4537,17 +4539,17 @@ function loadAnimationSettings() {
             });
         }
     } catch (e) {
-        console.warn('[anim-settings] Failed to load settings:', e);
+        logger.warn('anim-settings', 'Failed to load settings:', e);
     }
-    console.log('[anim-settings] Loaded:', animationSettings);
+    logger.info('anim-settings', 'Loaded:', animationSettings);
 }
 
 function saveAnimationSettings() {
     try {
         localStorage.setItem('animation_settings', JSON.stringify(animationSettings));
-        console.log('[anim-settings] Saved:', animationSettings);
+        logger.info('anim-settings', 'Saved:', animationSettings);
     } catch (e) {
-        console.warn('[anim-settings] Failed to save settings:', e);
+        logger.warn('anim-settings', 'Failed to save settings:', e);
     }
 }
 
@@ -4595,12 +4597,12 @@ function setupAnimationToggles() {
             checkbox.addEventListener('change', () => {
                 animationSettings[key] = checkbox.checked;
                 saveAnimationSettings();
-                console.log(`[anim-settings] ${key} = ${checkbox.checked}`);
+                logger.info('anim-settings', `${key} = ${checkbox.checked}`);
             });
         }
     });
 
-    console.log('[anim-settings] Toggle UI initialized');
+    logger.info('anim-settings', 'Toggle UI initialized');
 }
 
 // Expose globally so CoreModule can access
@@ -4609,7 +4611,7 @@ window.isAnimationEnabled = isAnimationEnabled;
 window.isAnimationUrlEnabled = isAnimationUrlEnabled;
 
 function setupUIEventListeners() {
-console.log('[electron] Setting up UI event listeners');
+logger.info('electron', 'Setting up UI event listeners');
 
     // Animation toggle settings
     setupAnimationToggles();
@@ -4689,7 +4691,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
                     // Send only the user message — system instructions were sent once at session start
                     if (window.sendAgentMessage) {
                         window.sendAgentMessage(text);
-                        console.log('[electron] Sent user message to OpenClaw via HTTP API');
+                        logger.info('electron', 'Sent user message to OpenClaw via HTTP API');
                     }
                 }
             }
@@ -4713,7 +4715,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
                 const speed = parseFloat(e.target.value);
                 speakingSpeedValue.textContent = speed.toFixed(1) + 'x';
                 window._internalLipSync.setSpeakingSpeed(speed);
-                console.log('[electron] Speaking speed set to:', speed);
+                logger.info('electron', 'Speaking speed set to:', speed);
             }
         });
     }
@@ -4721,7 +4723,7 @@ Note: Animations play fully before proceeding. Expression resets to 'neutral' wh
     // Light controls
     setupLightControls();
     
-    console.log('[electron] UI event listeners set up');
+    logger.info('electron', 'UI event listeners set up');
 }
 
 /**
@@ -4801,7 +4803,7 @@ function setupToggleButtons() {
  * Setup WebSocket URL input
  */
 function setupWebSocketUrlInput() {
-    console.log('[electron] Setting up WebSocket URL input + Save & Connect button');
+    logger.info('electron', 'Setting up WebSocket URL input + Save & Connect button');
     
     const wsUrlInput = document.getElementById('websocketUrlInput');
     const tokenInput = document.getElementById('tokenInput');
@@ -4823,20 +4825,20 @@ function setupWebSocketUrlInput() {
             const url = wsUrlInput ? wsUrlInput.value.trim() : '';
             if (url) {
                 localStorage.setItem('websocket_url', url);
-                console.log('[electron] WebSocket URL saved:', url);
+                logger.info('electron', 'WebSocket URL saved:', url);
             } else {
                 localStorage.removeItem('websocket_url');
-                console.log('[electron] WebSocket URL cleared');
+                logger.info('electron', 'WebSocket URL cleared');
             }
             
             // 2. Save OpenClaw token
             const token = tokenInput ? tokenInput.value.trim() : '';
             if (token) {
                 localStorage.setItem('openclaw_token', token);
-                console.log('[electron] Token saved (length:', token.length + ')');
+                logger.info('electron', 'Token saved (length:', token.length + ')');
             } else {
                 localStorage.removeItem('openclaw_token');
-                console.log('[electron] Token cleared');
+                logger.info('electron', 'Token cleared');
             }
             
             // 3. Show status message
@@ -4866,7 +4868,7 @@ function setupWebSocketUrlInput() {
             tokenInput.addEventListener('keypress', triggerSave);
         }
     } else {
-        console.warn('[electron] Save & Connect button (#saveConnectBtn) not found in DOM');
+        logger.warn('electron', 'Save & Connect button (#saveConnectBtn) not found in DOM');
     }
 }
 
@@ -4884,9 +4886,9 @@ function setupTokenDialog() {
     }
     
     if (!savedToken) {
-        console.warn('[electron] No token configured. Token can be set in settings panel');
+        logger.warn('electron', 'No token configured. Token can be set in settings panel');
     } else {
-        console.log('[electron] Using saved token from localStorage');
+        logger.info('electron', 'Using saved token from localStorage');
     }
 }
 
@@ -4915,7 +4917,7 @@ function exposeCoreObjects() {
             window.hideAllPanels = HistoryModule.hideAllPanels;
             window.restorePanels = HistoryModule.restorePanels;
             
-            console.log('[electron] Core objects and messaging functions exposed');
+            logger.info('electron', 'Core objects and messaging functions exposed');
         }, 100);
     });
 }
@@ -4934,7 +4936,7 @@ function initWebSocket() {
 // INITIALIZATION
 // ============================================================
 async function initElectronApp() {
-    console.log('[electron] Initializing Hikari Electron App');
+    logger.info('electron', 'Initializing Hikari Electron App');
     
     try {
         // Setup toggle buttons
@@ -4948,7 +4950,7 @@ async function initElectronApp() {
         
         // Override walk sequence for Electron app (use horizontal walking)
         window.runWalkSequence = CoreModule.runElectronWalkSequence;
-        console.log('[electron] Using Electron-specific horizontal walk sequence');
+        logger.info('electron', 'Using Electron-specific horizontal walk sequence');
         
         // Initialize core functionality
         await CoreModule.init();
@@ -4967,9 +4969,9 @@ async function initElectronApp() {
         window.addLocalHistoryMessage = HistoryModule.addLocalHistoryMessage;
         // Expose startSession function
         window.startSession = WebSocketModule.startSession;
-        console.log('[electron] WebSocket sendMessage + sendAgentMessage + startSession exposed to window');
+        logger.info('electron', 'WebSocket sendMessage + sendAgentMessage + startSession exposed to window');
         
-        console.log('[electron] History functions exposed to window');
+        logger.info('electron', 'History functions exposed to window');
         
         // Initialize WebSocket connection
         initWebSocket();
@@ -4981,12 +4983,12 @@ async function initElectronApp() {
             }
         }, 3000);
         
-        console.log('[electron] Hikari Electron App initialized successfully');
+        logger.info('electron', 'Hikari Electron App initialized successfully');
         
         // Random idle system is now started automatically by startAutomaticSequence()
         
     } catch (error) {
-        console.error('[electron] Initialization error:', error);
+        logger.error('electron', 'Initialization error:', error);
         const statusDiv = document.getElementById('status');
         if (statusDiv) {
             statusDiv.textContent = 'Error initializing app: ' + error.message;
