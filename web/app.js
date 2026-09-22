@@ -2780,8 +2780,8 @@ function handleEvent(data) {
             
             const savedToken = localStorage.getItem('openclaw_token');
             const connectParams = {
-                minProtocol: 3,
-                maxProtocol: 3,
+                minProtocol: 4,
+                maxProtocol: 4,
                 client: {
                     id: 'cli',
                     version: '1.0.0',
@@ -3151,7 +3151,7 @@ async function executeAgentCommand(command) {
         }
     }
     
-    if (command.animation && command.animation.timing === 'during') {
+    if (command.animation && command.animation.file && command.animation.timing === 'during') {
         console.log('[ws] Playing animation DURING speaking:', command.animation.file);
         if (window.startSmoothTransition) {
             await window.startSmoothTransition(`${ASSET_BASE_URL}VRMA/${command.animation.file}`);
@@ -3205,7 +3205,7 @@ async function executeAgentCommand(command) {
         }
     }
     
-    if (command.animation && command.animation.timing === 'after') {
+    if (command.animation && command.animation.file && command.animation.timing === 'after') {
         console.log('[ws] Playing animation AFTER speaking:', command.animation.file);
         if (statusDiv) {
             statusDiv.textContent = 'Playing animation after speaking...';

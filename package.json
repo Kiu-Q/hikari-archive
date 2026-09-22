@@ -46,5 +46,8 @@
     "@pixiv/three-vrm-animation": "^3.0.0",
     "three": "^0.176.0",
     "ws": "^8.18.0"
+  },
+  "allowScripts": {
+    "electron@40.7.0": true
   }
 }

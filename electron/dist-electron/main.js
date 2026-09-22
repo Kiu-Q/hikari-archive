@@ -1,56 +1,87 @@
-import { ipcMain as r, app as s, session as f, BrowserWindow as l } from "electron";
-import i from "path";
-import { fileURLToPath as c } from "url";
-import { existsSync as m } from "fs";
-const p = c(import.meta.url), a = i.dirname(p), d = process.env.NODE_ENV === "development" || !m(i.join(a, "../dist/index.html"));
-let e = null;
-function u() {
-  e = new l({
+import { ipcMain, app, session, BrowserWindow } from "electron";
+import path from "path";
+import { fileURLToPath } from "url";
+import { existsSync } from "fs";
+const __filename$1 = fileURLToPath(import.meta.url);
+const __dirname$1 = path.dirname(__filename$1);
+const isDev = process.env.NODE_ENV === "development" || !existsSync(path.join(__dirname$1, "../dist/index.html"));
+let mainWindow = null;
+function createWindow() {
+  mainWindow = new BrowserWindow({
     width: 600,
     height: 900,
-    transparent: !0,
-    frame: !1,
-    alwaysOnTop: !0,
-    resizable: !0,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    resizable: true,
     webPreferences: {
-      preload: i.join(a, "preload.js"),
-      contextIsolation: !0,
-      nodeIntegration: !1,
-      webSecurity: !d,
-      backgroundThrottling: !1
+      preload: path.join(__dirname$1, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: !isDev,
+      backgroundThrottling: false
     }
-  }), d ? (e.loadURL("http://localhost:5174/electron/index.html"), e.webContents.openDevTools()) : e.loadFile(i.join(a, "../dist/index.html"));
+  });
+  if (isDev) {
+    mainWindow.loadURL("http://localhost:5174/electron/index.html");
+    mainWindow.webContents.openDevTools();
+  } else {
+    mainWindow.loadFile(path.join(__dirname$1, "../dist/index.html"));
+  }
 }
-r.handle("get-window-position", () => {
-  if (!e) return { x: 0, y: 0 };
-  const t = e.getPosition();
-  return { x: t[0], y: t[1] };
+ipcMain.handle("get-window-position", () => {
+  if (!mainWindow) return { x: 0, y: 0 };
+  const position = mainWindow.getPosition();
+  return { x: position[0], y: position[1] };
 });
-r.handle("set-window-position", (t, o, n) => e ? (e.setPosition(Math.round(o), Math.round(n)), !0) : !1);
-r.handle("get-window-bounds", () => e ? e.getBounds() : { width: 0, height: 0, x: 0, y: 0 });
-r.handle("set-window-bounds", (t, o, n, h, w) => e ? (e.setBounds({
-  x: Math.round(o),
-  y: Math.round(n),
-  width: Math.max(200, Math.round(h)),
-  height: Math.max(300, Math.round(w))
-}), !0) : !1);
-r.handle("set-ignore-mouse-events", (t, o, n) => e ? (e.setIgnoreMouseEvents(o, { forward: n !== !1 }), !0) : !1);
-s.whenReady().then(() => {
-  f.defaultSession.webRequest.onBeforeSendHeaders(
+ipcMain.handle("set-window-position", (event, x, y) => {
+  if (!mainWindow) return false;
+  mainWindow.setPosition(Math.round(x), Math.round(y));
+  return true;
+});
+ipcMain.handle("get-window-bounds", () => {
+  if (!mainWindow) return { width: 0, height: 0, x: 0, y: 0 };
+  const bounds = mainWindow.getBounds();
+  return bounds;
+});
+ipcMain.handle("set-window-bounds", (event, x, y, width, height) => {
+  if (!mainWindow) return false;
+  mainWindow.setBounds({
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.max(200, Math.round(width)),
+    height: Math.max(300, Math.round(height))
+  });
+  return true;
+});
+ipcMain.handle("set-ignore-mouse-events", (event, ignore, forward) => {
+  if (!mainWindow) return false;
+  mainWindow.setIgnoreMouseEvents(ignore, { forward: forward !== false });
+  return true;
+});
+app.whenReady().then(() => {
+  session.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: ["ws://*/*", "wss://*/*"] },
-    (t, o) => {
-      if (t.requestHeaders)
+    (details, callback) => {
+      if (details.requestHeaders) {
         try {
-          const n = new URL(t.url);
-          t.requestHeaders.Origin = `${n.protocol}//${n.host}`;
-        } catch {
+          const url = new URL(details.url);
+          details.requestHeaders["Origin"] = `${url.protocol}//${url.host}`;
+        } catch (e) {
         }
-      o({ requestHeaders: t.requestHeaders });
+      }
+      callback({ requestHeaders: details.requestHeaders });
     }
-  ), u(), s.on("activate", () => {
-    l.getAllWindows().length === 0 && u();
+  );
+  createWindow();
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
   });
 });
-s.on("window-all-closed", () => {
-  process.platform !== "darwin" && s.quit();
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
 });

@@ -115,19 +115,15 @@ const CoreModule = (() => {
     // CONFIGURATION
     // ============================================================
     const CONFIG = {
-        DEBUG: true,
-        
         // Animation transition settings
         BUFFER_TIME: 0.5,
         TRANSITION_TIME: 0.5,
         T_OFFSET: 0.5,
         // Walk sequence configuration
-        WALK_PATH_DISTANCE: 2.0,
         WALK_WINDOW_OFFSET: 600,
         WALK_START_DELAY: 0,
         WALK_WALK_DURATION: 4.0,
         WALK_TURN_DURATION: 1.0,
-        WALK_PAUSE_DURATION: 3.0,
         WALK_TIME_SCALE: 0.5,
         
         // Random idle configuration
@@ -145,14 +141,8 @@ const CoreModule = (() => {
     let isIdleMode = false;
     let isTransitioning = false;
     let idleSuspended = false;
-    let lipSyncActive = false;
-    let currentExpression = '';
     let transitionStartTime = 0;
     let transitionDuration = CONFIG.TRANSITION_TIME;
-    let walkingPathActive = false;
-    let walkingStartTimeSec = 0;
-    let walkingTotalDurationSec = 0;
-    let walkingInitialPos = new THREE.Vector3();
     let walkingInitialRotY = 0;
     let isPlayingWalkSequence = false;
     let walkingWindowInitialPos = null;
@@ -161,13 +151,6 @@ const CoreModule = (() => {
     let activeFacialExpression = null;
     let blinkSystemEnabled = true;
     let isSitAnimationActive = false;
-    let isDragging = false;
-    let dragStartPosition = new THREE.Vector2();
-    let currentDragPosition = new THREE.Vector2();
-    let mouseInWindow = false;
-    let mousePosition = new THREE.Vector2();
-    let initialModelRotationX = 0;
-    let isSitAnimationPlaying = false;
     let isWindowDragging = false;
     let windowDragOffset = { x: 0, y: 0 };
 
@@ -184,8 +167,6 @@ const CoreModule = (() => {
     // ============================================================
     let animationSelect, expressionSelect, statusDiv, textInputPanel, speakBtnPanel;
     let lipSyncPanel = null;
-    let historyPanel = null;
-    let originalMessageText = '';
     let isMessagingDisabled = false;
 
     // ============================================================
@@ -195,7 +176,6 @@ const CoreModule = (() => {
     let keyLight, fillLight, rimLight, topLight, ambientLight;
     let clock = new THREE.Clock();
     let raycaster, mouse;
-    let isTouchEnabled = true;
     let lastTouchTime = 0;
     const TOUCH_DEBOUNCE_MS = 200;
 
@@ -676,33 +656,75 @@ const CoreModule = (() => {
     // ============================================================
     // ASSET PATHS
     // ============================================================
-    const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
+    const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || '/';
     const VRM_MODEL_URL = `${ASSET_BASE_URL}VRM/sample.vrm`;
-    const VRMA_ANIMATION_URLS = [
-        `${ASSET_BASE_URL}VRMA/idle_loop.vrma`,
-        `${ASSET_BASE_URL}VRMA/idle_airplane.vrma`,
-        `${ASSET_BASE_URL}VRMA/idle_look.vrma`,
-        `${ASSET_BASE_URL}VRMA/idle_shoot.vrma`,
-        `${ASSET_BASE_URL}VRMA/idle_sport.vrma`,
-        `${ASSET_BASE_URL}VRMA/idle_stretch.vrma`,
-        `${ASSET_BASE_URL}VRMA/idle_vSign.vrma`,
-        `${ASSET_BASE_URL}VRMA/sit.vrma`,
-        `${ASSET_BASE_URL}VRMA/sitWave.vrma`,
-        `${ASSET_BASE_URL}VRMA/start_1standUp.vrma`,
-        `${ASSET_BASE_URL}VRMA/start_2turnAround.vrma`,
-        `${ASSET_BASE_URL}VRMA/walk.vrma`,
-        `${ASSET_BASE_URL}VRMA/walk_left.vrma`,
-        `${ASSET_BASE_URL}VRMA/walk_right.vrma`,
-        `${ASSET_BASE_URL}VRMA/wave_both.vrma`,
-        `${ASSET_BASE_URL}VRMA/wave_fast.vrma`,
-        `${ASSET_BASE_URL}VRMA/wave_left.vrma`,
-        `${ASSET_BASE_URL}VRMA/wave_right.vrma`,
-        `${ASSET_BASE_URL}VRMA/sit_down.vrma`,
-        `${ASSET_BASE_URL}VRMA/sit_up.vrma`,
-        `${ASSET_BASE_URL}VRMA/hang.vrma`
-    ];
+    
+    // Try multiple glob patterns to find VRMA files
+    let VRMA_ASSET_FILES = import.meta.glob('./VRMA/*.vrma', {
+        eager: true,
+        query: '?url',
+        import: 'default'
+    });
+    
+    // If no files found, try alternative paths
+    if (Object.keys(VRMA_ASSET_FILES).length === 0) {
+        VRMA_ASSET_FILES = import.meta.glob('../assets/VRMA/*.vrma', {
+            eager: true,
+            query: '?url',
+            import: 'default'
+        });
+    }
+    if (Object.keys(VRMA_ASSET_FILES).length === 0) {
+        VRMA_ASSET_FILES = import.meta.glob('/VRMA/*.vrma', {
+            eager: true,
+            query: '?url',
+            import: 'default'
+        });
+    }
+    if (Object.keys(VRMA_ASSET_FILES).length === 0) {
+        VRMA_ASSET_FILES = import.meta.glob('./assets/VRMA/*.vrma', {
+            eager: true,
+            query: '?url',
+            import: 'default'
+        });
+    }
+    
+    // Debug logging
+    console.log('[VRMA] ASSET_BASE_URL:', ASSET_BASE_URL);
+    console.log('[VRMA] VRMA_ASSET_FILES keys:', Object.keys(VRMA_ASSET_FILES));
+    console.log('[VRMA] VRMA_ASSET_FILES:', VRMA_ASSET_FILES);
+    
+    const VRMA_ANIMATION_ASSETS = Object.entries(VRMA_ASSET_FILES)
+        .map(([filePath, url]) => ({
+            fileName: filePath.split('/').pop(),
+            url
+        }))
+        .sort((left, right) => left.fileName.localeCompare(right.fileName));
+    const VRMA_ANIMATION_URLS = VRMA_ANIMATION_ASSETS.map(asset => asset.url);
+    const VRMA_ANIMATION_URL_BY_FILE = Object.fromEntries(
+        VRMA_ANIMATION_ASSETS.map(asset => [asset.fileName, asset.url])
+    );
 
     window.VRMA_ANIMATION_URLS = VRMA_ANIMATION_URLS;
+    window.VRMA_ANIMATION_FILE_NAMES = VRMA_ANIMATION_ASSETS.map(asset => asset.fileName);
+    window.VRMA_ANIMATION_URL_BY_FILE = VRMA_ANIMATION_URL_BY_FILE;
+
+    function getVRMAFileName(url) {
+        return window.VRMA_ANIMATION_FILE_BY_URL?.[url] || url.split('/').pop();
+    }
+
+    function getVRMAUrl(fileName) {
+        const url = window.VRMA_ANIMATION_URL_BY_FILE?.[fileName]
+            || `${ASSET_BASE_URL}VRMA/${fileName}`;
+        console.log('[VRMA] getVRMAUrl:', fileName, '->', url);
+        return url;
+    }
+
+    window.VRMA_ANIMATION_FILE_BY_URL = Object.fromEntries(
+        VRMA_ANIMATION_ASSETS.map(asset => [asset.url, asset.fileName])
+    );
+    window.getVRMAAnimationUrl = getVRMAUrl;
+    window.getVRMAAnimationFileName = getVRMAFileName;
 
     // ============================================================
     // DOM ELEMENTS INITIALIZATION
@@ -714,7 +736,6 @@ const CoreModule = (() => {
         textInputPanel = document.getElementById('textInputPanel');
         speakBtnPanel = document.getElementById('speakBtnPanel');
         lipSyncPanel = document.getElementById('lipSyncPanel');
-        historyPanel = document.getElementById('history-panel');
         
         logger.info('core', 'DOM elements initialized');
         
@@ -823,7 +844,6 @@ const CoreModule = (() => {
      */
     function setMessagingThinking() {
         if (textInputPanel && !isMessagingDisabled) {
-            originalMessageText = textInputPanel.value;
             textInputPanel.value = 'Thinking...';
             logger.info('messaging', 'Set to thinking state');
         }
@@ -836,7 +856,6 @@ const CoreModule = (() => {
         if (textInputPanel && !isMessagingDisabled) {
             // Clear the textbox completely
             textInputPanel.value = '';
-            originalMessageText = '';
             logger.info('messaging', 'Panel reset - textbox cleared');
         }
         
@@ -850,8 +869,6 @@ const CoreModule = (() => {
     function createLipSyncSystem() {
         let isCurrentlyTalking = false;
         let mouthTarget = 'a';
-        let mouthProgress = 0;
-        let localCurrentExpression = '';
         let speakingSpeedMultiplier = 1.0;
         let isAgentCommandActive = false;
 
@@ -972,7 +989,6 @@ const CoreModule = (() => {
             mouthTarget = 'neutral';
             updateDebugDisplay(text, 0);
 
-            lipSyncActive = true;
             if (currentIdleTimeout) {
                 clearTimeout(currentIdleTimeout);
                 currentIdleTimeout = null;
@@ -987,8 +1003,6 @@ const CoreModule = (() => {
                 });
             }
 
-            localCurrentExpression = text;
-            currentExpression = text;
             isCurrentlyTalking = true;
 
             // Split text by newlines and process each line separately
@@ -1022,7 +1036,6 @@ const CoreModule = (() => {
             // All lines finished
             isCurrentlyTalking = false;
             mouthTarget = 'neutral';
-            lipSyncActive = false;
             hideSpeakingBubble();
             
             // Immediately reset facial expression to neutral after speech completes
@@ -1037,6 +1050,113 @@ const CoreModule = (() => {
         }
 
         function speakLine(text) {
+            const hasChinese = /[\u4e00-\u9fff]/.test(text);
+            
+            // For Chinese text, use timer-based approach since onboundary fires at word boundaries
+            // (Chinese has no spaces, so it only fires once at the end)
+            if (hasChinese) {
+                return speakLineWithTimer(text);
+            }
+            
+            // For non-Chinese, use speech synthesis with onboundary events
+            if ('speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined') {
+                return speakLineWithSpeechSynthesis(text);
+            }
+
+            return speakLineWithTimer(text);
+        }
+
+        function speakLineWithSpeechSynthesis(text) {
+            return new Promise((resolve) => {
+                const utterance = new SpeechSynthesisUtterance(text);
+                const hasChinese = /[\u4e00-\u9fff]/.test(text);
+                let currentUnitIndex = -1;
+                let mouthCycleTimer = null;
+                let settled = false;
+
+                const clearMouthCycle = () => {
+                    if (mouthCycleTimer) {
+                        clearInterval(mouthCycleTimer);
+                        mouthCycleTimer = null;
+                    }
+                };
+
+                const finish = () => {
+                    if (settled) return;
+                    settled = true;
+                    clearMouthCycle();
+                    mouthTarget = 'neutral';
+                    resolve();
+                };
+
+                utterance.rate = speakingSpeedMultiplier;
+                utterance.pitch = 1;
+                utterance.volume = 1;
+
+                const voices = window.speechSynthesis.getVoices();
+                const preferredVoice = voices.find(voice => {
+                    const language = voice.lang.toLowerCase();
+                    return hasChinese ? language.startsWith('zh') : language.startsWith('en');
+                });
+                if (preferredVoice) {
+                    utterance.voice = preferredVoice;
+                }
+
+                // Pre-compute grapheme clusters for accurate index mapping
+                const graphemes = splitIntoGraphemes(text);
+                
+                utterance.onboundary = (event) => {
+                    const charIndex = event.charIndex || 0;
+                    const remainingText = text.slice(charIndex);
+                    const wordMatch = remainingText.match(/[^\s]+/);
+                    const spokenUnit = wordMatch ? wordMatch[0] : text[charIndex] || '';
+                    
+                    // Map UTF-16 charIndex to grapheme index for accurate display
+                    let unitIndex;
+                    if (hasChinese) {
+                        // Count graphemes up to charIndex
+                        const segmenter = new Intl.Segmenter('zh', { granularity: 'grapheme' });
+                        const segments = Array.from(segmenter.segment(text.slice(0, charIndex)));
+                        unitIndex = segments.length;
+                    } else {
+                        unitIndex = text.slice(0, charIndex).trim().split(/\s+/).filter(Boolean).length;
+                    }
+
+                    if (unitIndex !== currentUnitIndex) {
+                        currentUnitIndex = unitIndex;
+                        updateDebugDisplay(text, unitIndex, hasChinese ? spokenUnit[0] : null);
+                    }
+
+                    const mouthShapes = textToMouthShapes(spokenUnit);
+                    clearMouthCycle();
+                    let shapeIndex = 0;
+
+                    const applyNextShape = () => {
+                        mouthTarget = mouthShapes[shapeIndex % Math.max(mouthShapes.length, 1)] || 'neutral';
+                        shapeIndex++;
+                    };
+
+                    applyNextShape();
+                    if (mouthShapes.length > 1) {
+                        mouthCycleTimer = setInterval(applyNextShape, 80 / speakingSpeedMultiplier);
+                    }
+
+                    // Display up to the current grapheme index
+                    displayCharacterAtIndex(Math.min(unitIndex, graphemes.length - 1));
+                };
+
+                utterance.onend = finish;
+                utterance.onerror = (event) => {
+                    logger.warn('lip', 'Speech synthesis error:', event.error);
+                    finish();
+                };
+
+                window.speechSynthesis.cancel();
+                window.speechSynthesis.speak(utterance);
+            });
+        }
+
+        function speakLineWithTimer(text) {
             return new Promise((resolve) => {
                 logger.info('lip', 'Speaking line:', text);
                 updateDebugDisplay(text, 0);
@@ -1049,8 +1169,10 @@ const CoreModule = (() => {
                 let unitShapes = [];
                 let totalShapes = 0;
                 
+                // Use grapheme clusters for Chinese to properly handle emojis and combined characters
+                // Match the same splitting logic as showSpeakingBubble (no filtering to keep indices aligned)
                 if (hasChinese) {
-                    units = text.split('').filter(char => char.trim() !== '');
+                    units = splitIntoGraphemes(text);
                 } else {
                     units = text.split(' ').filter(word => word.length > 0);
                 }
@@ -1062,16 +1184,14 @@ const CoreModule = (() => {
                 });
                 
                 const speakingDuration = (totalShapes * 80) + (units.length * 50);
-                const maxDuration = speakingDuration / speakingSpeedMultiplier;
-                
-                logger.info('lip', 'units for speech', units, 'total shapes:', totalShapes, 'duration:', speakingDuration, 'max duration:', maxDuration);
+                logger.info('lip', 'units for speech', units, 'total shapes:', totalShapes, 'duration:', speakingDuration);
 
                 function processNextUnit() {
                     if (currentUnitIndex >= units.length) {
                         mouthTarget = 'neutral';
                         updateDebugDisplay(text, -1);
                         
-                        const lastCharIndex = text.length - 1;
+                        const lastCharIndex = units.length - 1;
                         displayCharacterAtIndex(lastCharIndex);
                         
                         if (idleSuspended) {
@@ -1116,9 +1236,12 @@ const CoreModule = (() => {
 
                         const elapsed = performance.now() - speakingStartTime;
                         const progressRatio = elapsed / speakingDuration;
-                        const charIndex = Math.floor(progressRatio * text.length);
+                        // Use grapheme index for Chinese, character index for others
+                        const charIndex = hasChinese 
+                            ? Math.floor(progressRatio * units.length)
+                            : Math.floor(progressRatio * text.length);
                         
-                        displayCharacterAtIndex(Math.min(charIndex, text.length - 1));
+                        displayCharacterAtIndex(Math.min(charIndex, units.length - 1));
 
                         const baseDuration = 80;
                         const shapeDuration = baseDuration / speakingSpeedMultiplier;
@@ -1143,7 +1266,6 @@ const CoreModule = (() => {
         }
 
         function updateDebugDisplay(text, unitIndex, currentUnit = null) {
-            currentExpression = text;
             const hasChinese = /[\u4e00-\u9fff]/.test(text);
 
             if (unitIndex === -1) {
@@ -1152,7 +1274,7 @@ const CoreModule = (() => {
             }
 
             if (hasChinese) {
-                const characters = text.split('').filter(char => char.trim() !== '');
+                const characters = splitIntoGraphemes(text);
                 const spokenText = characters.slice(0, unitIndex + 1).join('');
                 const currentChar = currentUnit || characters[unitIndex];
                 const remainingText = characters.slice(unitIndex + 1).join('');
@@ -1169,6 +1291,9 @@ const CoreModule = (() => {
         function stopSpeaking() {
             isCurrentlyTalking = false;
             mouthTarget = 'neutral';
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+            }
         }
 
         function update(vrm, delta) {
@@ -1289,6 +1414,18 @@ const CoreModule = (() => {
     let words = [];
     let wordDisplayTimer = null;
 
+    // Helper function to split text into grapheme clusters (handles emojis, combined characters, etc.)
+    function splitIntoGraphemes(text) {
+        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+            // Use undefined locale for grapheme clustering (locale-independent per Unicode standard)
+            const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+            return Array.from(segmenter.segment(text), s => s.segment);
+        }
+        // Fallback for environments without Intl.Segmenter
+        // Note: This fallback will split emojis incorrectly, but Intl.Segmenter is available in Electron 40+
+        return text.split('');
+    }
+
     function initSpeakingBubble() {
         speakingBubble = document.createElement('div');
         speakingBubble.id = 'speakingBubble';
@@ -1298,7 +1435,8 @@ const CoreModule = (() => {
         speakingBubble.style.color = 'white';
         speakingBubble.style.padding = '12px 16px';
         speakingBubble.style.borderRadius = '12px';
-        speakingBubble.style.fontFamily = 'Arial, sans-serif';
+        // Font stack with emoji support across platforms
+        speakingBubble.style.fontFamily = 'Arial, "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif';
         speakingBubble.style.fontSize = '16px';
         speakingBubble.style.lineHeight = '1.4';
         speakingBubble.style.maxWidth = '300px';
@@ -1410,9 +1548,9 @@ const CoreModule = (() => {
             speakingBubble.style.opacity = '1';
         });
         
-        // Split text into characters
+        // Split text into grapheme clusters (handles emojis, combined characters, Chinese chars correctly)
         currentWordIndex = 0;
-        words = text.split('');
+        words = splitIntoGraphemes(text);
         
         // Display first character immediately
         if (words.length > 0) {
@@ -1645,7 +1783,7 @@ const CoreModule = (() => {
             statusDiv.textContent = 'Loading: Idle loop...';
             isIdleMode = true;
 
-            const idleUrl = `${ASSET_BASE_URL}VRMA/idle_loop.vrma`;
+            const idleUrl = getVRMAUrl('idle_loop.vrma');
             const gltf = await loader.loadAsync(idleUrl);
             logger.info('idle', 'gltf loaded for idle loop', gltf);
             const vrmAnimationData = gltf.userData.vrmAnimations && gltf.userData.vrmAnimations[0];
@@ -1695,7 +1833,7 @@ const CoreModule = (() => {
                             if (clip) {
                                 vrmaAnimationClip = clip;
 
-                                const isIdleAnimation = url.includes('idle_loop.vrma');
+                                const isIdleAnimation = getVRMAFileName(url) === 'idle_loop.vrma';
 
                                 if (isIdleAnimation) {
                                     isIdleMode = true;
@@ -1760,11 +1898,9 @@ const CoreModule = (() => {
                 if (child.isBone || child.isSkinnedMesh) {
                     const position = new THREE.Vector3();
                     const quaternion = new THREE.Quaternion();
-                    const scale = new THREE.Vector3();
 
                     child.getWorldPosition(position);
                     child.getWorldQuaternion(quaternion);
-                    child.getWorldScale(scale);
 
                     currentPoseTracks.push(new THREE.VectorKeyframeTrack(
                         `${child.uuid}.position`,
@@ -2051,18 +2187,16 @@ const CoreModule = (() => {
             const walkTimeScale = CONFIG.WALK_TIME_SCALE;
 
             let walkingDirection = 'right';
-            let windowX = 0;
             
             if (window.electronAPI) {
                 try {
                     walkingWindowInitialPos = await window.electronAPI.getWindowPosition();
-                    windowX = walkingWindowInitialPos.x;
                     
                     const windowBounds = await window.electronAPI.getWindowBounds();
                     const screenWidth = window.screen ? window.screen.width : window.innerWidth;
                     const screenCenter = screenWidth / 2;
                     
-                    const windowCenterX = windowX + (windowBounds.width / 2);
+                    const windowCenterX = walkingWindowInitialPos.x + (windowBounds.width / 2);
                     walkingDirection = windowCenterX < screenCenter ? 'right' : 'left';
                     
                     logger.info('walk-electron', 'window center:', windowCenterX, 'screen center:', screenCenter, 'walking:', walkingDirection);
@@ -2072,22 +2206,16 @@ const CoreModule = (() => {
                 }
             }
 
-            walkingPathActive = true;
-            const nowSec = performance.now() / 1000;
-            walkingStartTimeSec = nowSec + CONFIG.WALK_START_DELAY;
-            walkingInitialPos.copy(currentVrm.scene.position);
             walkingInitialRotY = currentVrm.scene.rotation.y;
 
             const leg = CONFIG.WALK_WALK_DURATION;
             const turn = CONFIG.WALK_TURN_DURATION;
-            walkingTotalDurationSec = 2 * turn;
 
             logger.info('walk-electron', 'timing config', {
                 startDelay: CONFIG.WALK_START_DELAY,
                 direction: walkingDirection,
                 leg,
                 turn,
-                totalPathSeconds: walkingTotalDurationSec,
             });
 
             logger.info('walk-electron', 'waiting before starting clip...');
@@ -2139,7 +2267,6 @@ const CoreModule = (() => {
             }
             await animateElectronWalkPhase(turn + leg, turn + leg + turn, 'turn_to_forward', walkingDirection);
 
-            walkingPathActive = false;
             logger.info('walk-electron', 'finished, keeping current position and rotation');
 
             // Send walk completion event to agent with original and new position
@@ -2229,68 +2356,6 @@ const CoreModule = (() => {
     }
 
     // ============================================================
-    // START_1 SPECIAL SEQUENCE
-    // ============================================================
-    async function runStart1Sequence() {
-        logger.info('idle1', 'runStart1Sequence start');
-        isPlayingSequence = true;
-
-        hideMessagingPanel();
-
-        try {
-            statusDiv.textContent = 'Playing start_1 stand up...';
-            logger.info('idle1', 'step 1: transition to start_1standUp');
-            const action = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/start_1standUp.vrma`, { 
-                loopMode: THREE.LoopOnce, 
-                startOffset: 0.5 
-            });
-            
-            if (!action) {
-                logger.warn('idle1', 'failed to create action');
-                return;
-            }
-
-            logger.info('idle1', 'step 1 complete: start_1 animation started');
-
-            logger.info('idle1', 'step 2: waiting 0.1s before pausing');
-            await new Promise(resolve => setTimeout(resolve, 100));
-            
-            logger.info('idle1', 'step 2: pausing animation at time', action.time);
-            const pausedTime = action.time;
-            action.paused = true;
-            action.timeScale = 0;
-            statusDiv.textContent = 'Animation paused...';
-
-            const stayTime = Math.random() * (CONFIG.RANDOM_IDLE_MAX_DELAY - CONFIG.RANDOM_IDLE_MIN_DELAY) + CONFIG.RANDOM_IDLE_MIN_DELAY;
-            logger.info('idle1', 'step 3: waiting for', stayTime, 'ms');
-            statusDiv.textContent = `Waiting for ${(stayTime/1000).toFixed(1)}s...`;
-            
-            await new Promise(resolve => setTimeout(resolve, stayTime));
-            logger.info('idle1', 'step 3 complete: wait finished');
-
-            logger.info('idle1', 'step 4: resuming animation from time', pausedTime);
-            action.paused = false;
-            action.timeScale = 1;
-            statusDiv.textContent = 'Resuming animation...';
-
-            await waitForActionEnd(action, 15000, false);
-            logger.info('idle1', 'step 4 complete: animation finished');
-
-            logger.info('idle1', 'step 5: returning to idle loop');
-            statusDiv.textContent = 'Returning to idle loop...';
-            const ok = await loadIdleLoop();
-            if (!ok) logger.warn('idle1', 'loadIdleLoop failed');
-            logger.info('idle1', 'step 5 complete: idle loop resumed');
-
-        } catch (error) {
-            logger.error('idle1', 'Error in start_1 sequence:', error);
-        } finally {
-            isPlayingSequence = false;
-            logger.info('idle1', 'runStart1Sequence finished');
-        }
-    }
-
-    // ============================================================
     // AUTOMATIC SEQUENCE SYSTEM
     // ============================================================
     async function startAutomaticSequence() {
@@ -2303,7 +2368,7 @@ const CoreModule = (() => {
         try {
             statusDiv.textContent = 'Playing stand up animation...';
             logger.info('seq', 'transition to stand up');
-            const action1 = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/start_1standUp.vrma`, { loopMode: THREE.LoopOnce, startOffset: 0.5 });
+            const action1 = await startSmoothTransition(getVRMAUrl('start_1standUp.vrma'), { loopMode: THREE.LoopOnce, startOffset: 0.5 });
             if (action1) {
                 logger.info('seq', 'waiting for stand up to finish');
                 await waitForActionEnd(action1, 15000, true);
@@ -2312,7 +2377,7 @@ const CoreModule = (() => {
 
             statusDiv.textContent = 'Playing turn around animation...';
             logger.info('seq', 'transition to turn around');
-            const action2 = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/start_2turnAround.vrma`, { loopMode: THREE.LoopOnce, startOffset: 0.5, transitionTime: 1.0 });
+            const action2 = await startSmoothTransition(getVRMAUrl('start_2turnAround.vrma'), { loopMode: THREE.LoopOnce, startOffset: 0.5, transitionTime: 1.0 });
             if (action2) {
                 logger.info('seq', 'waiting for turn around to finish');
                 await waitForActionEnd(action2, 15000, true);
@@ -2361,7 +2426,7 @@ const CoreModule = (() => {
 
         try {
             const idleFiles = VRMA_ANIMATION_URLS.filter(url => {
-                const name = url.split('/').pop();
+                const name = getVRMAFileName(url);
                 // Filter out disabled animations
                 if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(url)) {
                     return false;
@@ -2374,10 +2439,11 @@ const CoreModule = (() => {
 
             if (idleFiles.length > 0) {
                 const randomFile = idleFiles[Math.floor(Math.random() * idleFiles.length)];
+                const randomFileName = getVRMAFileName(randomFile);
                 logger.info('idle', 'selected random idle', randomFile);
-                statusDiv.textContent = `Playing random idle: ${randomFile}`;
+                statusDiv.textContent = `Playing random idle: ${randomFileName}`;
 
-                if (randomFile.includes('walk.vrma') && !randomFile.includes('walk_left') && !randomFile.includes('walk_right')) {
+                if (randomFileName === 'walk.vrma') {
                     if (window.electronAPI) {
                         await runElectronWalkSequence(randomFile);
                     } else {
@@ -2385,13 +2451,13 @@ const CoreModule = (() => {
                         await loadIdleLoop();
                     }
                 }
-                else if (randomFile.includes('sit.vrma') && !randomFile.includes('sitWave')) {
+                else if (randomFileName === 'sit.vrma') {
                     // Sit sequence: sit_down → sit loop → sit_up
                     logger.info('idle', 'Running sit sequence (sit_down → sit loop → sit_up)');
                     statusDiv.textContent = 'Sitting sequence...';
                     
                     // 1. Play sit_down
-                    const sitDownAction = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/sit_down.vrma`, { loopMode: THREE.LoopOnce });
+                    const sitDownAction = await startSmoothTransition(getVRMAUrl('sit_down.vrma'), { loopMode: THREE.LoopOnce });
                     if (sitDownAction) {
                         await waitForActionEnd(sitDownAction, 15000, false);
                     }
@@ -2405,7 +2471,7 @@ const CoreModule = (() => {
                     }
                     
                     // 3. Play sit_up (startSmoothTransition crossfades from sit → sit_up smoothly)
-                    const sitUpAction = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/sit_up.vrma`, { loopMode: THREE.LoopOnce });
+                    const sitUpAction = await startSmoothTransition(getVRMAUrl('sit_up.vrma'), { loopMode: THREE.LoopOnce });
                     if (sitUpAction) {
                         await waitForActionEnd(sitUpAction, 15000, true);
                     }
@@ -2451,7 +2517,7 @@ const CoreModule = (() => {
             const option = document.createElement('option');
             option.value = url;
 
-            let filename = url.split('/').pop().replace('.vrma', '');
+            let filename = getVRMAFileName(url).replace('.vrma', '');
             filename = filename.replace('CC0animation', '');
             filename = filename.replace('CC0_', '');
             filename = filename.replace('_', ' ');
@@ -2478,7 +2544,6 @@ const CoreModule = (() => {
 
     function updateButtons() {
         const hasVrm = currentVrm !== undefined;
-        const hasVrma = vrmaAnimationClip !== undefined;
 
         if (animationSelect) {
             animationSelect.disabled = !hasVrm;
@@ -2507,6 +2572,7 @@ const CoreModule = (() => {
         
         animationSelect.addEventListener('change', async () => {
             const vrmaUrl = animationSelect.value;
+            const vrmaFileName = getVRMAFileName(vrmaUrl);
 
             if (!vrmaUrl) {
                 if (idleSuspended) {
@@ -2531,9 +2597,9 @@ const CoreModule = (() => {
 
             isTransitioning = false;
 
-            if (vrmaUrl.includes('idle_loop.vrma')) {
+            if (vrmaFileName === 'idle_loop.vrma') {
                 await loadIdleLoop();
-            } else if (/idle_.*\.vrma$/.test(vrmaUrl)) {
+            } else if (/^idle_.*\.vrma$/.test(vrmaFileName)) {
                 const action = await startSmoothTransition(vrmaUrl, { loopMode: THREE.LoopOnce });
                 if (action) {
                     await waitForActionEnd(action, 15000, true);
@@ -2543,14 +2609,14 @@ const CoreModule = (() => {
                     if (currentVrm) currentVrm.humanoid.resetNormalizedPose();
                     await loadIdleLoop();
                 }
-            } else if (vrmaUrl.includes('walk.vrma')) {
+            } else if (vrmaFileName === 'walk.vrma') {
                 if (window.electronAPI) {
                     await runElectronWalkSequence(vrmaUrl);
                 } else {
                     logger.info('electron', 'Web version - skipping walk animation');
                     await loadIdleLoop();
                 }
-            } else if (vrmaUrl.includes('sit.vrma') || vrmaUrl.includes('sitWave.vrma')) {
+            } else if (vrmaFileName === 'sit.vrma' || vrmaFileName === 'sitWave.vrma') {
                 // Hide both messaging and history panels
                 if (window.hideMessagingPanel) {
                     window.hideMessagingPanel();
@@ -2566,7 +2632,7 @@ const CoreModule = (() => {
                 sendEventToAgent('character_sit', 'The character has started sitting down.');
                 
                 // 1. Play sit_down first (transition to sitting)
-                const sitDownAction = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/sit_down.vrma`, { loopMode: THREE.LoopOnce });
+                const sitDownAction = await startSmoothTransition(getVRMAUrl('sit_down.vrma'), { loopMode: THREE.LoopOnce });
                 if (sitDownAction) {
                     await waitForActionEnd(sitDownAction, 15000, false);
                 }
@@ -2584,7 +2650,7 @@ const CoreModule = (() => {
                 }
                 
                 // 3. Play sit_up (stand back up)
-                const sitUpAction = await startSmoothTransition(`${ASSET_BASE_URL}VRMA/sit_up.vrma`, { loopMode: THREE.LoopOnce });
+                const sitUpAction = await startSmoothTransition(getVRMAUrl('sit_up.vrma'), { loopMode: THREE.LoopOnce });
                 if (sitUpAction) {
                     await waitForActionEnd(sitUpAction, 15000, true);
                 }
@@ -2674,8 +2740,6 @@ const WebSocketModule = (() => {
     let reconnectTimer = null;
     let isConnected = false;
     let messageQueue = [];
-    let processedRunIds = new Set();
-    let currentWebSocketUrl = null;
 
     // Configuration
     const CONFIG = {
@@ -2707,20 +2771,28 @@ const WebSocketModule = (() => {
       return wsUrl.replace(/^ws/, 'http');
     }
 
+        function getAnimationUrl(fileName) {
+            return window.getVRMAAnimationUrl?.(fileName)
+                || `${import.meta.env.VITE_ASSET_BASE_URL || './assets/'}VRMA/${fileName}`;
+        }
+
+        function getAvailableAnimationFiles() {
+            return (window.VRMA_ANIMATION_FILE_NAMES || [])
+                .filter(filename => filename.endsWith('.vrma'));
+        }
+
+        const availableAnimationFiles = getAvailableAnimationFiles();
+        const availableAnimationList = availableAnimationFiles.length > 0
+            ? availableAnimationFiles.map(filename => `- ${filename}`).join('\n')
+            : '- No VRMA animations available';
+
     const SYSTEM_INSTRUCTIONS = `===== SYSTEM INSTRUCTIONS =====
 You are communicating through a VRM (Virtual Reality Model) 3D character viewer. 
 However, act as a real human being having a natural conversation. Do not talk like a bot or mention that you are in a 3D model or virtual environment. 
 Just speak naturally like a real person.
 
-AVAILABLE ANIMATIONS (and what they do):
-- idle_airplane: Make airplane gesture with arm
-- idle_look: Look around
-- idle_shoot: Make shooting gesture with hand
-- idle_sport: Do sports movements/stretching
-- idle_vSign: Make V-sign with hand
-- wave_fast: Wave quickly with one hand
-- wave_left: Wave with left hand
-- wave_right: Wave with right hand
+AVAILABLE ANIMATIONS (use the exact filename, or null):
+${availableAnimationList}
 
 AVAILABLE EXPRESSIONS (always applied during speaking):
 - neutral
@@ -2914,7 +2986,6 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       }
 
       const wsUrl = getWebSocketUrl();
-      currentWebSocketUrl = wsUrl;
       logger.info('ws', 'Connecting to OpenClaw gateway at:', wsUrl);
       
       try {
@@ -2957,14 +3028,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
             handleEvent(data);
             break;
           case 'res':
-            if (data.id && data.id.startsWith('history-')) {
-              handleHistoryResponse(data);
-            } else {
-              handleAgentResponse(data);
-            }
-            break;
-          case 'history':
-            handleHistoryResponse(data);
+                        handleAgentResponse(data);
             break;
           case 'ack':
             logger.info('ws', 'Acknowledgment received:', data);
@@ -2983,8 +3047,8 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           logger.info('ws', 'Connection challenge received, sending auth request');
           
           const connectParams = {
-            minProtocol: 3,
-            maxProtocol: 3,
+            minProtocol: 4,
+            maxProtocol: 4,
             client: {
               id: 'cli',
               version: '1.0.0',
@@ -3006,16 +3070,10 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           });
           break;
         
-        case 'chat':
-          handleChatEvent(data);
-          break;
-        
         case 'health':
           break;
         
         case 'tick':
-          // Skip history fetch on tick if we don't have operator.read scope
-          // History is optional - messaging works without it
           break;
         
         case 'agent':
@@ -3023,114 +3081,6 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         
         default:
           logger.info('ws', 'Unknown event type:', data.event);
-      }
-    }
-
-    function handleChatEvent(data) {
-      logger.info('ws', 'Chat event received:', data);
-      
-      const runId = data.payload?.runId;
-      if (runId && processedRunIds.has(runId)) {
-        logger.info('ws', 'Ignoring duplicate event with runId:', runId);
-        return;
-      }
-      
-      const sessionKey = data.payload?.sessionKey || data.sessionKey;
-      const state = data.payload?.state;
-      
-      const isValidSession = sessionKey === 'agent:main:main' || sessionKey === 'main';
-      
-      if (!isValidSession) {
-        logger.info('ws', 'Ignoring message from non-main agent:', { sessionKey, state });
-        return;
-      }
-      
-      if (state !== 'final') {
-        logger.info('ws', 'Ignoring non-final message (still typing):', { sessionKey, state });
-        return;
-      }
-      
-      const messageContent = data.payload?.message?.content;
-      if (messageContent && messageContent.length > 0) {
-        const textContent = messageContent.find(item => item.type === 'text');
-        const rawText = textContent ? textContent.text : null;
-        
-        if (rawText) {
-          logger.info('ws', 'Chat message from main agent (raw):', rawText);
-          
-          // Filter system messages
-          if (rawText.includes('HEARTBEAT') || rawText.includes('HEARTBEAT_OK')) {
-            logger.info('ws', 'Skipping HEARTBEAT system message');
-            return;
-          }
-          if (rawText.includes('New session started') || rawText.includes('✅')) {
-            logger.info('ws', 'Skipping session system message');
-            return;
-          }
-          if (rawText.includes('Read HEARTBEAT.md')) {
-            logger.info('ws', 'Skipping HEARTBEAT instruction message');
-            return;
-          }
-          if (rawText.includes('/new or /reset') || rawText.includes('Do not mention internal steps')) {
-            logger.info('ws', 'Skipping session instruction message');
-            return;
-          }
-          if (rawText.includes('===== USER MESSAGE =====') || 
-              rawText.includes('===== SYSTEM INSTRUCTIONS =====') ||
-              rawText.includes('AVAILABLE ANIMATIONS') ||
-              rawText.includes('AVAILABLE EXPRESSIONS') ||
-              rawText.includes('RESPONSE FORMAT') ||
-              rawText.includes('TIMING OPTIONS') ||
-              rawText.includes('IMPORTANT:')) {
-            logger.info('ws', 'Skipping system instruction message');
-            return;
-          }
-          if (rawText.trim().startsWith('{') && 
-              (rawText.includes("'text'") || rawText.includes('"text"')) &&
-              (rawText.includes("'animation'") || rawText.includes('"animation"')) &&
-              (rawText.includes("'expression'") || rawText.includes('"expression"'))) {
-            logger.info('ws', 'Skipping raw JSON response');
-            return;
-          }
-          
-          const parsedResponse = parseAgentResponse(rawText);
-          let textToSpeak;
-          
-          if (parsedResponse && parsedResponse.text) {
-            textToSpeak = parsedResponse.text;
-            logger.info('ws', 'Extracted text from JSON:', textToSpeak);
-            
-            if (parsedResponse.animation || parsedResponse.expression) {
-              executeAgentCommand(parsedResponse);
-            }
-          } else {
-            textToSpeak = rawText;
-            logger.info('ws', 'Using raw text (not JSON):', textToSpeak);
-          }
-          
-          if (runId) {
-            processedRunIds.add(runId);
-          }
-          
-          if (window.enableMessaging) {
-            window.enableMessaging();
-          }
-          if (window.resetMessagingPanel) {
-            window.resetMessagingPanel();
-          }
-          
-          if (!parsedResponse || !parsedResponse.animation || !parsedResponse.expression) {
-            if (window.lipSyncSystem && textToSpeak) {
-              window.lipSyncSystem.startSpeaking(textToSpeak);
-              
-              const statusDiv = document.getElementById('status');
-              if (statusDiv) {
-                const displayText = textToSpeak.length > 30 ? textToSpeak.substring(0, 30) + '...' : textToSpeak;
-                statusDiv.textContent = 'Speaking: ' + displayText;
-              }
-            }
-          }
-        }
       }
     }
 
@@ -3167,68 +3117,6 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         
         flushMessageQueue();
         
-      } else if (data.payload?.result?.payloads && data.payload.result.payloads.length > 0) {
-        const runId = data.payload?.runId || data.payload?.result?.meta?.systemPromptReport?.generatedAt;
-        if (runId && processedRunIds.has(runId)) {
-          logger.info('ws', 'Ignoring duplicate res with runId:', runId);
-          return;
-        }
-        
-        const sessionKey = data.payload?.result?.meta?.agentMeta?.sessionKey || 
-                       data.payload?.result?.meta?.systemPromptReport?.sessionKey ||
-                       data.payload?.result?.sessionKey || 
-                       data.sessionKey;
-        const state = data.payload?.result?.state;
-        
-        const isValidSession = sessionKey === 'agent:main:main' || sessionKey === 'main';
-        
-        if (!isValidSession) {
-          logger.info('ws', 'Ignoring response from non-main agent:', { sessionKey, state });
-          return;
-        }
-        
-        const replyText = data.payload.result.payloads[0]?.text;
-        if (replyText) {
-          logger.info('ws', 'AI reply from main agent:', replyText);
-          
-          if (runId) {
-            processedRunIds.add(runId);
-          }
-          
-          const parsedResponse = parseAgentResponse(replyText);
-          
-          if (parsedResponse) {
-            executeAgentCommand(parsedResponse);
-          } else {
-            logger.warn('ws', 'Response is not valid JSON, treating as plain text');
-            logger.info('ws', 'Plain text reply:', replyText);
-            
-            if (window.enableMessaging) {
-              window.enableMessaging();
-            }
-            if (window.resetMessagingPanel) {
-              window.resetMessagingPanel();
-            }
-            
-            if (window.lipSyncSystem) {
-              window.lipSyncSystem.startSpeaking(replyText);
-              
-              const statusDiv = document.getElementById('status');
-              if (statusDiv) {
-                const displayText = replyText.length > 50 ? replyText.substring(0, 50) + '...' : replyText;
-                statusDiv.textContent = 'Speaking: ' + displayText;
-              }
-            }
-          }
-        }
-        
-      } else if (data.payload?.status === 'accepted') {
-        logger.info('ws', 'Request accepted, waiting for reply...');
-        
-        const statusDiv = document.getElementById('status');
-        if (statusDiv) {
-          statusDiv.textContent = 'Processing request...';
-        }
       } else {
         logger.info('ws', 'Response data:', data.payload);
       }
@@ -3338,13 +3226,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         parsed.text = parsed.text.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
         
         if (parsed.animation && parsed.animation.file) {
-          const validAnimations = [
-            'idle_loop.vrma', 'idle_airplane.vrma', 'idle_look.vrma', 'idle_shoot.vrma', 
-            'idle_sport.vrma', 'idle_stretch.vrma', 'idle_vSign.vrma',
-            'sit.vrma', 'sitWave.vrma', 'start_1standUp.vrma', 
-            'start_2turnAround.vrma', 'walk.vrma', 'walk_left.vrma', 'walk_right.vrma',
-            'wave_both.vrma', 'wave_fast.vrma', 'wave_left.vrma', 'wave_right.vrma'
-          ];
+                    const validAnimations = getAvailableAnimationFiles();
           
           if (!validAnimations.includes(parsed.animation.file)) {
             logger.warn('ws', 'Invalid animation:', parsed.animation.file);
@@ -3400,17 +3282,16 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         logger.info('ws', 'Agent command active - idle loop prevented');
       }
       
-      const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
-      
       // Animation: only 'during' or 'after' (no 'before')
-      if (command.animation && command.animation.timing === 'during') {
+      if (command.animation && command.animation.file && command.animation.timing === 'during') {
+                const animationUrl = getAnimationUrl(command.animation.file);
         // Check if this animation is enabled in settings
-        if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(`${ASSET_BASE_URL}VRMA/${command.animation.file}`)) {
+                if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(animationUrl)) {
           logger.info('ws', 'Animation disabled in settings, skipping:', command.animation.file);
         } else {
           logger.info('ws', 'Playing animation DURING speaking (LoopOnce):', command.animation.file);
           if (window.startSmoothTransition) {
-            await window.startSmoothTransition(`${ASSET_BASE_URL}VRMA/${command.animation.file}`, { loopMode: THREE.LoopOnce });
+                        await window.startSmoothTransition(animationUrl, { loopMode: THREE.LoopOnce });
             await new Promise(resolve => setTimeout(resolve, 500));
           }
         }
@@ -3462,9 +3343,10 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         }
       }
       
-      if (command.animation && command.animation.timing === 'after') {
+      if (command.animation && command.animation.file && command.animation.timing === 'after') {
+                const animationUrl = getAnimationUrl(command.animation.file);
         // Check if this animation is enabled in settings
-        if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(`${ASSET_BASE_URL}VRMA/${command.animation.file}`)) {
+                if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(animationUrl)) {
           logger.info('ws', 'Animation disabled in settings, skipping (after):', command.animation.file);
         } else {
           logger.info('ws', 'Playing animation AFTER speaking:', command.animation.file);
@@ -3474,7 +3356,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           
           if (window.startSmoothTransition) {
           const action = await window.startSmoothTransition(
-            `${ASSET_BASE_URL}VRMA/${command.animation.file}`,
+                        animationUrl,
             { loopMode: 2200 }
           );
           logger.info('ws', 'After animation started, action:', action);
@@ -3527,59 +3409,23 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       }
     }
 
-    function handleHistoryResponse(data) {
-      if (!data.ok) {
-        // Gracefully handle permission errors (e.g. missing operator.read scope)
-        const errorCode = data.payload?.error?.code || data.error?.code || '';
-        if (errorCode === 'INVALID_REQUEST' || errorCode.includes('scope')) {
-          logger.warn('ws', 'History not available (insufficient permissions:', errorCode + ')');
-        } else {
-          logger.warn('ws', 'History response error:', data.payload?.error || data.error || data);
-        }
-        return;
-      }
-      
-      logger.info('ws', 'History response received, OK:', data.ok, 'ID:', data.id);
-      
-      const messages = data.payload?.messages || [];
-      const totalCount = data.payload?.totalCount || 0;
-      const hasMore = data.payload?.hasMore || false;
-      
-    logger.info('history', 'HISTORY METADATA:');
-    logger.info('history', 'Messages in this batch:', messages.length);
-    logger.info('history', 'Total messages available:', totalCount);
-    logger.info('history', 'Has more messages:', hasMore);
-      
-      if (window.displayHistoryMessages) {
-        window.displayHistoryMessages(messages, totalCount, hasMore);
-      } else {
-        logger.warn('ws', 'displayHistoryMessages function not available');
-      }
-    }
-
     function handleSpeakCommand(data) {
       logger.info('ws', 'Speak command:', data.text);
       
       if (window.lipSyncSystem && data.text) {
         window.lipSyncSystem.startSpeaking(data.text);
-        sendStatus('speaking');
       }
     }
 
     function handleAnimateCommand(data) {
       logger.info('ws', 'Animate command:', data.animation);
       
-      const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
-      
       if (data.animation && window.startSmoothTransition) {
-        sendStatus('animating', { animation: data.animation });
-        window.startSmoothTransition(`${ASSET_BASE_URL}VRMA/${data.animation}`)
+                window.startSmoothTransition(getAnimationUrl(data.animation))
           .then(() => {
-            sendStatus('idle');
           })
           .catch(error => {
             logger.error('ws', 'Animation error:', error);
-            sendStatus('error', { error: error.message });
           });
       }
     }
@@ -3589,7 +3435,6 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       
       if (window.applyFacialExpression && data.expression) {
         window.applyFacialExpression(data.expression);
-        sendStatus('expressing', { expression: data.expression });
       }
     }
 
@@ -3651,19 +3496,6 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         const message = messageQueue.shift();
         sendMessage(message);
       }
-    }
-
-    function sendStatus(state, details = {}) {
-      sendMessage({
-        type: 'status',
-        state: state,
-        timestamp: Date.now(),
-        ...details
-      });
-    }
-
-    function isWebSocketConnected() {
-      return isConnected;
     }
 
     function closeWebSocket() {
@@ -3740,7 +3572,6 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
     return {
       initWebSocket,
       sendMessage,
-      isWebSocketConnected,
       closeWebSocket,
       sendAgentMessage,
       sendAgentMessageRaw,
@@ -3756,12 +3587,6 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
 const HistoryModule = (() => {
     let historyPanel = null;
     let historyMessages = [];
-    let currentOffset = 0;
-    let hasMoreMessages = false;
-    let totalCount = 0;
-    let isLoadingHistory = false;
-    let displayedTimestamps = new Set();
-    let allPanelsVisible = false;
     let visiblePanelsBeforeHide = [];
 
     function initHistoryPanel() {
@@ -3867,252 +3692,6 @@ const HistoryModule = (() => {
         }
     }
 
-    async function fetchConversationHistory(offset = 0) {
-        logger.info('history', 'fetchConversationHistory called with offset:', offset);
-        if (isLoadingHistory) {
-            logger.info('history', 'Already loading history, ignoring request');
-            return;
-        }
-        
-        isLoadingHistory = true;
-        
-        if (offset === 0) {
-            currentOffset = 0;
-            displayedTimestamps.clear();
-            logger.info('history', 'Reset currentOffset and cleared displayedTimestamps for new fetch');
-        }
-        
-        logger.info('history', 'Fetching history with offset:', offset);
-        
-        try {
-            const requestId = 'history-' + Date.now();
-            
-            if (window.sendMessage) {
-                window.sendMessage({
-                    type: 'req',
-                    id: requestId,
-                    method: 'chat.history',
-                    params: {
-                        sessionKey: 'main',
-                        limit: 100
-                    }
-                });
-                
-                logger.info('history', 'History request sent:', requestId);
-            } else {
-                logger.error('history', 'sendMessage not available');
-            }
-        } catch (error) {
-            logger.error('history', 'Error fetching history:', error);
-            isLoadingHistory = false;
-        }
-    }
-
-    function loadMoreMessages() {
-        logger.info('history', 'Loading more messages, current offset:', currentOffset);
-        
-        const newOffset = currentOffset + 100;
-        fetchConversationHistory(newOffset);
-    }
-
-    function displayHistoryMessages(messages, totalCountMsg, hasMoreMsg) {
-        logger.info('history', 'CONVERSATION HISTORY DISPLAY START');
-        logger.info('history', 'Total messages fetched:', messages.length);
-        logger.info('history', 'Total count available:', totalCountMsg);
-        logger.info('history', 'Has more messages:', hasMoreMsg);
-        logger.info('history', 'Current offset:', currentOffset);
-        
-        const messagesContainer = document.getElementById('history-messages');
-        if (!messagesContainer) {
-            logger.error('history', 'ERROR: messagesContainer not found!');
-            return;
-        }
-        
-        totalCount = totalCountMsg;
-        hasMoreMessages = hasMoreMsg;
-        
-        if (currentOffset === 0) {
-            messagesContainer.innerHTML = '';
-            historyMessages = [];
-            logger.info('history', 'Cleared container for initial load (offset=0)');
-        }
-        
-        logger.info('history', 'FILTERING PROCESS');
-        let acceptedCount = 0;
-        let rejectedCount = 0;
-        
-        messages.forEach((msg, msgIndex) => {
-            logger.info('history', `Filtering Message ${msgIndex + 1}/${messages.length}`);
-            logger.info('runtime', '  Role:', msg.role);
-            logger.info('runtime', '  Timestamp:', msg.timestamp);
-            
-            if (msg.role === 'toolResult') {
-                logger.info('runtime', '  ❌ REJECTED: Role is "toolResult"');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Passed toolResult check');
-            
-            if (!msg.content || msg.content.length === 0) {
-                logger.info('runtime', '  ❌ REJECTED: No content or empty content array');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Passed content existence check (content.length:', msg.content.length + ')');
-            
-            const textContent = msg.content.find(item => item.type === 'text');
-            if (!textContent || !textContent.text) {
-                logger.info('runtime', '  ❌ REJECTED: No text content found in content array');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Found text content');
-            
-            let text = textContent.text;
-            logger.info('runtime', '  Text preview:', text.substring(0, 100) + (text.length > 100 ? '...' : ''));
-            
-            if (text.includes('HEARTBEAT') || text.includes('HEARTBEAT_OK')) {
-                logger.info('runtime', '  ❌ REJECTED: HEARTBEAT system message');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Not a HEARTBEAT message');
-            
-            if (text.includes('New session started') || text.includes('✅')) {
-                logger.info('runtime', '  ❌ REJECTED: Session system message');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Not a session message');
-            
-            if (text.includes('Read HEARTBEAT.md')) {
-                logger.info('runtime', '  ❌ REJECTED: HEARTBEAT instruction message');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Not a HEARTBEAT instruction');
-            
-            if (text.includes('/new or /reset') || text.includes('Do not mention internal steps')) {
-                logger.info('runtime', '  ❌ REJECTED: Session instruction message');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Not a session instruction');
-            
-            if (text.includes('===== USER MESSAGE =====') || 
-                text.includes('===== SYSTEM INSTRUCTIONS =====') ||
-                text.includes('AVAILABLE ANIMATIONS') ||
-                text.includes('AVAILABLE EXPRESSIONS') ||
-                text.includes('RESPONSE FORMAT') ||
-                text.includes('TIMING OPTIONS') ||
-                text.includes('IMPORTANT:')) {
-                
-                if (msg.role === 'user' && text.includes('===== USER MESSAGE =====') && text.includes('===== SYSTEM INSTRUCTIONS =====')) {
-                    const userMessageMatch = text.match(/===== USER MESSAGE =====\s*([\s\S]*?)\s*===== SYSTEM INSTRUCTIONS =====/);
-                    if (userMessageMatch && userMessageMatch[1]) {
-                        text = userMessageMatch[1].trim();
-                        logger.info('runtime', '  Extracted user message from system block:', text.substring(0, 100) + '...');
-                    } else {
-                        logger.info('runtime', '  ❌ REJECTED: System instruction block (could not extract user message)');
-                        rejectedCount++;
-                        return;
-                    }
-                } else {
-                    logger.info('runtime', '  ❌ REJECTED: System instruction block');
-                    rejectedCount++;
-                    return;
-                }
-            }
-            logger.info('runtime', '  ✓ Not a system instruction block');
-            
-            const systemPromptPatterns = [
-                /^User touched (?:your|the) \w+$/i,
-                /^User (?:clicked|tapped|pressed) \w+$/i,
-                /^User (?:said|typed|entered) \w+$/i,
-                /^(?:Touch|Click|Tap|Press) \w+$/i,
-                /^System: /i,
-                /^🎵 /,
-            ];
-            
-            const isSystemPrompt = systemPromptPatterns.some(pattern => pattern.test(text.trim()));
-            if (isSystemPrompt) {
-                logger.info('runtime', '  ❌ REJECTED: System prompt (not actual user message)');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Not a system prompt');
-            
-            if (msg.role === 'toolResult' &&
-                text.trim().startsWith('{') && 
-                (text.includes("'text'") || text.includes('"text"')) &&
-                (text.includes("'animation'") || text.includes('"animation"')) &&
-                (text.includes("'expression'") || text.includes('"expression"'))) {
-                logger.info('runtime', '  ❌ REJECTED: Raw JSON response from toolResult');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Not a raw JSON response from toolResult');
-            
-            if (msg.role === 'assistant' && text.trim().startsWith('{')) {
-                let parsed;
-                try {
-                    parsed = JSON.parse(text);
-                    if (parsed.text) {
-                        text = parsed.text;
-                        logger.info('runtime', '  Extracted text from JSON:', text.substring(0, 100) + '...');
-                    }
-                } catch (e1) {
-                    logger.info('runtime', '  Standard JSON parse failed, trying direct text extraction');
-                    try {
-                        const textMatch = text.match(/'text'\s*:\s*'([^']*(?:\\'[^']*)*)'/);
-                        if (textMatch && textMatch[1]) {
-                            text = textMatch[1]
-                                .replace(/\\'/g, "'")
-                                .replace(/\\"/g, '"')
-                                .replace(/\\n/g, '\n')
-                                .replace(/\\r/g, '\r')
-                                .replace(/\\t/g, '\t');
-                            logger.info('runtime', '  Extracted text from JSON (single-quote):', text.substring(0, 100) + '...');
-                        } else {
-                            logger.info('runtime', '  Not valid JSON, using text as-is');
-                        }
-                    } catch (e2) {
-                        logger.info('runtime', '  Not valid JSON, using text as-is');
-                    }
-                }
-            }
-            
-            if (displayedTimestamps.has(msg.timestamp)) {
-                logger.info('runtime', '  ❌ REJECTED: Duplicate message (timestamp already displayed)');
-                rejectedCount++;
-                return;
-            }
-            logger.info('runtime', '  ✓ Not a duplicate message');
-            
-            displayedTimestamps.add(msg.timestamp);
-            logger.info('runtime', '  ✓ Timestamp added to displayedTimestamps');
-            
-            logger.info('runtime', '  ✅ ACCEPTED: All filters passed');
-            acceptedCount++;
-            addMessageToHistory(msg, text);
-            historyMessages.push(msg);
-        });
-        
-        logger.info('history', 'FILTERING SUMMARY');
-        logger.info('runtime', '  Total messages processed:', messages.length);
-        logger.info('runtime', '  Accepted messages:', acceptedCount);
-        logger.info('runtime', '  Rejected messages:', rejectedCount);
-        logger.info('runtime', '  Acceptance rate:', ((acceptedCount / messages.length) * 100).toFixed(2) + '%');
-        
-        currentOffset += messages.length;
-        
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        
-        isLoadingHistory = false;
-        
-        logger.info('history', 'Messages displayed, total:', historyMessages.length);
-    }
-
     function addMessageToHistory(message, processedText) {
         const messagesContainer = document.getElementById('history-messages');
         if (!messagesContainer) return;
@@ -4207,10 +3786,6 @@ const HistoryModule = (() => {
         if (messagesContainer) {
             messagesContainer.innerHTML = '';
             historyMessages = [];
-            currentOffset = 0;
-            hasMoreMessages = false;
-            displayedTimestamps.clear();
-            
             logger.info('history', 'History cleared');
         }
     }
@@ -4238,7 +3813,6 @@ const HistoryModule = (() => {
             hideHistoryPanel();
         }
         
-        allPanelsVisible = (visiblePanelsBeforeHide.length > 0);
         logger.info('history', 'All panels hidden (visible panels were:', visiblePanelsBeforeHide.join(', ') + ')');
     }
 
@@ -4291,9 +3865,6 @@ const HistoryModule = (() => {
         showHistoryPanel,
         hideHistoryPanel,
         toggleHistoryPanel,
-        fetchConversationHistory,
-        loadMoreMessages,
-        displayHistoryMessages,
         hideAllPanels,
         restorePanels,
         addLocalHistoryMessage
@@ -4341,8 +3912,6 @@ function setupWindowDragging() {
     let dragTransitionedToWindow = false;
     let hangAction = null;
     
-    const ASSET_BASE_URL_DRAG = import.meta.env.VITE_ASSET_BASE_URL || './assets/';
-    
     function isInsideCanvas(clientX, clientY) {
         const canvas = document.querySelector('canvas');
         if (!canvas) return false;
@@ -4365,35 +3934,64 @@ function setupWindowDragging() {
         hangAction = null;
         
         // Pre-fetch window position for potential drag
-        // Calculate offset from canvas top-left to window position
-        if (window.electronAPI) {
-            const canvas = document.querySelector('canvas');
-            if (canvas) {
-                const canvasRect = canvas.getBoundingClientRect();
-                // Canvas top-left in screen coordinates
-                const canvasScreenX = window.screenX + canvasRect.left;
-                const canvasScreenY = window.screenY + canvasRect.top;
+        // Calculate offset from character's right hand to window position
+        if (window.electronAPI && currentVrm && currentVrm.humanoid) {
+            // Get right hand bone (VRM humanoid standard: rightHand)
+            const rightHandBone = currentVrm.humanoid.getNormalizedBoneNode('rightHand');
+            
+            if (rightHandBone) {
+                // Get right hand position in world coordinates
+                const handWorldPos = new THREE.Vector3();
+                rightHandBone.getWorldPosition(handWorldPos);
                 
-                window.electronAPI.getWindowPosition().then((pos) => {
-                    // Save original position for drag event message
-                    window._dragStartWindowPos = { x: pos.x, y: pos.y };
-                    // Offset from window position to canvas top-left
-                    window.windowDragOffset = {
-                        x: canvasScreenX - pos.x,
-                        y: canvasScreenY - pos.y
-                    };
-                }).catch(() => {});
+                // Convert to screen coordinates
+                const canvas = document.querySelector('canvas');
+                if (canvas && renderer && camera) {
+                    const handScreenPos = handWorldPos.clone().project(camera);
+                    const canvasRect = canvas.getBoundingClientRect();
+                    
+                    // Convert from NDC (-1 to 1) to screen coordinates
+                    const handScreenX = (handScreenPos.x * 0.5 + 0.5) * canvasRect.width + canvasRect.left;
+                    const handScreenY = (-handScreenPos.y * 0.5 + 0.5) * canvasRect.height + canvasRect.top;
+                    
+                    // Get window position
+                    window.electronAPI.getWindowPosition().then((pos) => {
+                        // Save original position for drag event message
+                        window._dragStartWindowPos = { x: pos.x, y: pos.y };
+                        // Offset from window position to right hand position
+                        window.windowDragOffset = {
+                            x: handScreenX - pos.x,
+                            y: handScreenY - pos.y
+                        };
+                        logger.info('drag', 'Right hand drag offset calculated:', window.windowDragOffset);
+                    }).catch(() => {});
+                }
             } else {
-                // Fallback to mouse position if no canvas
-                window.electronAPI.getWindowPosition().then((pos) => {
-                    // Save original position for drag event message
-                    window._dragStartWindowPos = { x: pos.x, y: pos.y };
-                    window.windowDragOffset = {
-                        x: e.screenX - pos.x,
-                        y: e.screenY - pos.y
-                    };
-                }).catch(() => {});
+                // Fallback to canvas top-left if no right hand bone
+                const canvas = document.querySelector('canvas');
+                if (canvas) {
+                    const canvasRect = canvas.getBoundingClientRect();
+                    const canvasScreenX = window.screenX + canvasRect.left;
+                    const canvasScreenY = window.screenY + canvasRect.top;
+                    
+                    window.electronAPI.getWindowPosition().then((pos) => {
+                        window._dragStartWindowPos = { x: pos.x, y: pos.y };
+                        window.windowDragOffset = {
+                            x: canvasScreenX - pos.x,
+                            y: canvasScreenY - pos.y
+                        };
+                    }).catch(() => {});
+                }
             }
+        } else if (window.electronAPI) {
+            // Fallback to mouse position if no VRM
+            window.electronAPI.getWindowPosition().then((pos) => {
+                window._dragStartWindowPos = { x: pos.x, y: pos.y };
+                window.windowDragOffset = {
+                    x: e.screenX - pos.x,
+                    y: e.screenY - pos.y
+                };
+            }).catch(() => {});
         }
     });
     
@@ -4402,11 +4000,56 @@ function setupWindowDragging() {
         
         if (dragTransitionedToWindow) {
             // Already in drag mode — keep character's right hand at mouse position
-            if (window.electronAPI) {
+            if (window.electronAPI && currentVrm && currentVrm.humanoid) {
                 e.preventDefault();
-                // The offset was calculated at mousedown: screenX - window.x
-                // So we move window so that the grab point follows the mouse
-                // To keep right hand at mouse: window position = mouse screen pos - initial offset
+                
+                // Recalculate right hand position dynamically during drag
+                const rightHandBone = currentVrm.humanoid.getNormalizedBoneNode('rightHand');
+                if (rightHandBone && renderer && camera) {
+                    const handWorldPos = new THREE.Vector3();
+                    rightHandBone.getWorldPosition(handWorldPos);
+                    
+                    const canvas = document.querySelector('canvas');
+                    if (canvas) {
+                        const handScreenPos = handWorldPos.clone().project(camera);
+                        const canvasRect = canvas.getBoundingClientRect();
+                        
+                        // Convert from NDC (-1 to 1) to screen coordinates
+                        const handScreenX = (handScreenPos.x * 0.5 + 0.5) * canvasRect.width + canvasRect.left;
+                        const handScreenY = (-handScreenPos.y * 0.5 + 0.5) * canvasRect.height + canvasRect.top;
+                        
+                        // Move window so right hand follows mouse
+                        // window position = mouse screen pos - (hand screen pos - window pos)
+                        // = mouse screen pos - hand screen pos + window pos
+                        // But we want: hand screen pos = mouse screen pos
+                        // So: window pos = mouse screen pos - (hand screen pos - window pos)
+                        // = mouse screen pos - hand screen pos + window pos
+                        // This means we need to track the offset from window to hand
+                        
+                        // Get current window position
+                        window.electronAPI.getWindowPosition().then((pos) => {
+                            const newX = e.screenX - (handScreenX - pos.x);
+                            const newY = e.screenY - (handScreenY - pos.y);
+                            try {
+                                window.electronAPI.setWindowPosition(newX, newY);
+                            } catch (err) {
+                                logger.warn('electron', 'failed to update window position:', err);
+                            }
+                        }).catch(() => {});
+                    }
+                } else {
+                    // Fallback to static offset
+                    const newX = e.screenX - (window.windowDragOffset?.x || 0);
+                    const newY = e.screenY - (window.windowDragOffset?.y || 0);
+                    try {
+                        window.electronAPI.setWindowPosition(newX, newY);
+                    } catch (err) {
+                        logger.warn('electron', 'failed to update window position:', err);
+                    }
+                }
+            } else if (window.electronAPI) {
+                // Fallback to static offset
+                e.preventDefault();
                 const newX = e.screenX - (window.windowDragOffset?.x || 0);
                 const newY = e.screenY - (window.windowDragOffset?.y || 0);
                 try {
@@ -4431,7 +4074,7 @@ function setupWindowDragging() {
             
             // Play first half of hang.vrma
             if (window.startSmoothTransition) {
-                window.startSmoothTransition(`${ASSET_BASE_URL_DRAG}VRMA/hang.vrma`, { 
+                window.startSmoothTransition(window.getVRMAAnimationUrl?.('hang.vrma') || './assets/VRMA/hang.vrma', { 
                     loopMode: THREE.LoopOnce, 
                     startOffset: 0 
                 })
@@ -4562,7 +4205,8 @@ function isAnimationEnabled(key) {
  * e.g. "http://.../VRMA/idle_airplane.vrma" → "idle_airplane"
  */
 function getAnimNameFromUrl(url) {
-    const filename = url.split('/').pop().replace('.vrma', '');
+    const mappedFilename = window.getVRMAAnimationFileName?.(url);
+    const filename = (mappedFilename || url.split('/').pop()).replace('.vrma', '');
     return filename;
 }
 
@@ -4636,57 +4280,6 @@ logger.info('electron', 'Setting up UI event listeners');
                     // Disable messaging controls and set to thinking state
                     CoreModule.disableMessaging();
                     CoreModule.setMessagingThinking();
-                    
-                    // Generate unique request ID
-                    const requestId = 'req-' + Date.now();
-                    const idempotencyKey = 'msg-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
-                    
-                    // Construct full message with user message + system instructions
-                    const fullMessage = `===== USER MESSAGE =====
-${text}
-
-===== SYSTEM INSTRUCTIONS =====
-You are communicating through a VRM (Virtual Reality Model) 3D character viewer.
-
-AVAILABLE ANIMATIONS (and what they do):
-- idle_airplane: Make airplane gesture with arm
-- idle_shoot: Make shooting gesture with hand
-- idle_sport: Do sports movements/stretching
-- idle_stretch: Stretch body and limbs
-- idle_vSign: Make V-sign with hand
-- wave_both: Wave with both hands
-- wave_left: Wave with left hand
-- wave_right: Wave with right hand
-
-AVAILABLE EXPRESSIONS:
-- neutral (default state)
-- happy
-- sad
-- angry
-- surprised
-
-RESPONSE FORMAT (JSON):
-Please respond with a JSON object containing:
-{
-  'text': 'Your spoken response here',
-  'animation': {
-    'file': 'idle_loop.vrma',  // or null for no animation
-    'timing': 'before'            // 'before', 'during', 'after', or null
-  },
-  'expression': {
-    'name': 'happy',             // or null for no expression
-    'timing': 'during'            // 'before', 'during', 'after', or null
-  }
-}
-
-TIMING OPTIONS:
-- 'before': play animation/expression BEFORE speaking
-- 'during': play animation/expression WHILE speaking
-- 'after': play animation/expression AFTER speaking completes
-- null: no animation/expression needed (use defaults)
-
-IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JSON response. Just provide the raw JSON object directly.
-Note: Animations play fully before proceeding. Expression resets to 'neutral' when returning to idle_loop.`;
                     
                     // Send only the user message — system instructions were sent once at session start
                     if (window.sendAgentMessage) {
@@ -4911,9 +4504,6 @@ function exposeCoreObjects() {
             window.showMessagingPanel = CoreModule.showMessagingPanel;
             window.hideMessagingPanel = CoreModule.hideMessagingPanel;
             
-            // Expose conversation history functions
-            window.fetchConversationHistory = HistoryModule.fetchConversationHistory;
-            window.loadMoreMessages = HistoryModule.loadMoreMessages;
             window.hideAllPanels = HistoryModule.hideAllPanels;
             window.restorePanels = HistoryModule.restorePanels;
             
@@ -4958,11 +4548,6 @@ async function initElectronApp() {
         // Initialize history panel
         HistoryModule.initHistoryPanel();
         
-        // Expose history functions to window
-        window.displayHistoryMessages = HistoryModule.displayHistoryMessages;
-        
-        // Expose WebSocket sendMessage function for conversation history
-        window.sendMessage = WebSocketModule.sendMessage;
         // Expose HTTP-based agent messaging (bypasses WS scope issue)
         window.sendAgentMessage = WebSocketModule.sendAgentMessage;
         // Expose local history function
