@@ -40,6 +40,7 @@ build/Release
 
 # Dependency directories
 node_modules/
+tools/media-state/media-state
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)
@@ -141,3 +142,7 @@ out
 # Custom cache directories for npm and electron
 .electron-cache
 .npm-cache
+
+# Electron/Vite generated output
+dist-electron/
+electron/dist-electron/

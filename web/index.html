@@ -1,446 +1,120 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
     <meta charset="utf-8" />
-    <title>VRM Viewer - Web/Mobile App</title>
+    <title>Hikari - AI Avatar</title>
     <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
-    <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    
     <style>
-        body {
-            margin: 0;
-            font-family: 'Inter', sans-serif;
-            overflow: hidden;
-            background: #1a1a1a;
+        :root {
+            color-scheme: dark;
+            --panel: rgba(14, 17, 19, 0.88);
+            --panel-border: rgba(255, 255, 255, 0.12);
+            --accent: #4caf50;
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
         }
-        canvas {
-            display: block;
-            width: 100vw;
-            height: 100vh;
+        * { box-sizing: border-box; }
+        html, body {
+            width: 100%; height: 100%; margin: 0; overflow: hidden;
+            background: #0b0d0e; color: #f5f5f5;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
+        body { min-height: 100dvh; }
+        canvas { position: fixed; inset: 0; display: block; width: 100% !important; height: 100% !important; touch-action: none; }
+        button, input, select { font: inherit; }
+        button { -webkit-tap-highlight-color: transparent; }
 
-        /* Main settings panel (top-left) - responsive design */
+        .controls, .settings-panel, #history-panel {
+            color: #fff; background: var(--panel); border: 1px solid var(--panel-border);
+            border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,.32);
+            -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+        }
         .controls {
-            position: absolute;
-            top: 10px;
-            left: 100px;
-            right: 10px;
-            background: rgba(0, 0, 0, 0.6);
-            color: white;
-            padding: 20px;
-            border-radius: 12px;
-            z-index: 100;
-            display: none;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            max-width: 95vw;
+            position: fixed; z-index: 100; top: max(12px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left));
+            width: min(390px, calc(100vw - 24px)); padding: 16px; display: flex; flex-direction: column; gap: 12px;
         }
-        .controls > div {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 10px;
+        .controls > div { display: flex; align-items: center; gap: 10px; }
+        .controls label { min-width: 108px; color: #dedede; font-size: 13px; }
+        .controls input[type="text"], .controls input[type="password"], .controls select {
+            min-width: 0; flex: 1; width: 100%; padding: 10px 12px; color: #fff;
+            background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18); border-radius: 9px; outline: none;
         }
-        .controls label {
-            min-width: 90px;
-            font-weight: 500;
-            color: #e0e0e0;
-            font-size: 13px;
+        .controls input:focus, .controls select:focus { border-color: var(--accent); }
+        .controls button, .settings-panel button {
+            min-height: 42px; padding: 10px 14px; color: #fff; background: linear-gradient(145deg,#4caf50,#2e8b57);
+            border: 0; border-radius: 9px; cursor: pointer; font-weight: 650;
         }
-        .status-message {
-            grid-column: 1 / -1;
-            text-align: center;
-            padding: 8px 0;
-            font-size: 12px;
-            color: #ccc;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            margin-top: 8px;
-        }
+        .controls button:disabled, .settings-panel button:disabled { opacity: .5; cursor: not-allowed; }
+        .full-width-btn { width: 100%; }
+        .status-message { padding-top: 8px; color: #bdbdbd; border-top: 1px solid rgba(255,255,255,.1); font-size: 12px; line-height: 1.35; text-align: center; }
 
-        /* Button styles - green buttons */
-        .controls button {
-            flex: 1;
-            min-width: 80px;
-            padding: 10px 15px;
-            background: linear-gradient(145deg, #4CAF50, #2e8b57);
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: background 0.3s ease, transform 0.1s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .controls button:hover:not(:disabled) {
-            background: linear-gradient(145deg, #45a049, #228b22);
-            transform: translateY(-2px);
-        }
-        .controls button:active {
-            transform: translateY(0);
-        }
-        .controls button:disabled {
-            background: #666;
-            cursor: not-allowed;
-            opacity: 0.5;
-        }
-
-        /* Dropdown styles */
-        .controls select {
-            padding: 8px 12px;
-            background: #1a1a1a !important;
-            color: #ffffff !important;
-            border: 1px solid #888 !important;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            min-width: 200px;
-            max-width: 90vw;
-            appearance: auto !important;
-            -webkit-appearance: auto !important;
-            -moz-appearance: auto !important;
-        }
-        .controls select:hover {
-            background: #2a2a2a !important;
-            border-color: #aaa !important;
-        }
-        .controls select:disabled {
-            background: #444 !important;
-            color: #ccc !important;
-            cursor: not-allowed;
-            opacity: 0.8;
-            border-color: #555 !important;
-        }
-        .controls select option {
-            background: #2a2a2a !important;
-            color: #ffffff !important;
-            padding: 8px;
-        }
-        .controls select option:checked {
-            background: #4CAF50 !important;
-            font-weight: bold;
-        }
-
-        /* Status display */
-        .status {
-            margin-top: 10px;
-            font-size: 14px;
-            color: #ccc;
-            text-align: center;
-        }
-
-        /* Lip sync panel - bottom-left, mobile-responsive */
         .settings-panel {
-            position: absolute;
-            bottom: 10px;
-            left: 100px;
-            background: rgba(0, 0, 0, 0.6);
-            color: white;
-            padding: 20px;
-            border-radius: 12px;
-            z-index: 100;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            min-width: 300px;
-            max-width: 95vw;
+            position: fixed; z-index: 100; left: max(12px, env(safe-area-inset-left)); bottom: calc(12px + var(--safe-bottom));
+            width: min(520px, calc(100vw - 24px)); padding: 12px;
         }
-        .settings-panel div {
-            display: flex;
-            flex-wrap: nowrap;
-            align-items: center;
-            gap: 10px;
-            width: 100%;
-        }
-        .settings-panel input {
-            flex: 1;
-            padding: 8px 12px;
-            border: 1px solid #555;
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            font-size: 14px;
-            width: 100%;
-            box-sizing: border-box;
-        }
-        .settings-panel button {
-            padding: 8px 12px;
-            min-width: 60px;
-            background: linear-gradient(145deg, #4CAF50, #2e8b57);
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 16px;
-            transition: all 0.3s ease;
-            flex-shrink: 0;
-        }
-        .settings-panel input:focus {
-            outline: none;
-            border-color: #4CAF50;
-            background: rgba(255, 255, 255, 0.2);
-        }
-        .settings-panel input::placeholder {
-            color: #aaa;
-        }
-        .settings-panel button:hover:not(:disabled) {
-            background: linear-gradient(145deg, #45a049, #228b22);
-            transform: translateY(-2px);
-        }
-        .settings-panel button:disabled {
-            background: #666;
-            cursor: not-allowed;
-            transform: none;
-        }
-        #speakBtnPanel {
-            opacity: 0.5;
-        }
+        .settings-panel > div { display: flex; align-items: center; gap: 8px; }
+        .settings-panel input { flex: 1; min-width: 0; width: 100%; padding: 11px 13px; color: #fff; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18); border-radius: 9px; outline: none; }
+        .settings-panel input:focus { border-color: var(--accent); }
+        .settings-panel button { min-width: 48px; padding-inline: 12px; }
+        .light-control { display: block !important; }
+        .light-control label { display: block; margin-bottom: 5px; font-size: 12px; }
+        .light-control input[type="range"] { width: 100%; accent-color: var(--accent); }
+        .anim-toggles { display: block !important; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.1); }
+        .anim-section-label { margin-bottom: 8px; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+        .anim-checkbox-grid { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+        .anim-checkbox-item { display: inline-flex !important; min-width: auto !important; gap: 5px !important; font-size: 12px !important; }
 
-        /* Facial expressions section */
-        .facial-expressions {
-            margin-top: 15px;
-        }
-        .facial-expressions label {
-            display: block;
-            margin-bottom: 8px;
-            font-size: 14px;
-        }
-        .expression-buttons {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        .expr-btn {
-            padding: 6px 12px;
-            background: linear-gradient(145deg, #2196F3, #1976D2);
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.3s ease;
-        }
-        .expr-btn:hover:not(:disabled) {
-            background: linear-gradient(145deg, #1976D2, #1565C0);
-            transform: translateY(-2px);
-        }
-        .expr-btn:disabled {
-            background: #666;
-            cursor: not-allowed;
-            transform: none;
-        }
-        .expr-btn.active {
-            background: linear-gradient(145deg, #FF9800, #F57C00);
-        }
-
-        /* Toggle button styles - invisible until hovered */
         .toggle-btn {
-            position: absolute;
-            width: 75px;
-            height: 75px;
-            border-radius: 8px;
-            background: transparent;
-            color: transparent;
-            border: none;
-            cursor: pointer;
-            font-size: 28px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-            z-index: 200;
-            opacity: 0;
-            -webkit-app-region: no-drag;
+            position: fixed; z-index: 200; width: 48px; height: 48px; padding: 0; color: #fff;
+            background: rgba(18,22,24,.82); border: 1px solid rgba(255,255,255,.16); border-radius: 50%;
+            box-shadow: 0 8px 24px rgba(0,0,0,.3); cursor: pointer; font-size: 21px; opacity: .92;
         }
-        .toggle-btn:hover {
-            background: linear-gradient(145deg, #4CAF50, #2e8b57);
-            color: white;
-            opacity: 0.4;
-            transform: translateY(-2px);
-        }
-        .toggle-btn:active {
-            transform: translateY(0);
-        }
-        .controls {
-            opacity: 0.5;
-        }
-        .settings-panel {
-            opacity: 0.5;
-        }
-        .toggle-btn:hover + .controls,
-        .toggle-btn:hover + .settings-panel {
-            opacity: 1;
-        }
+        .toggle-btn:hover, .toggle-btn:focus-visible { background: rgba(76,175,80,.85); outline: none; }
+        .speaking-bubble { position: fixed; z-index: 1000; max-width: min(320px,calc(100vw - 32px)); padding: 10px 14px; color: #fff; background: rgba(0,0,0,.86); border: 1px solid rgba(255,255,255,.14); border-radius: 16px; box-shadow: 0 6px 22px rgba(0,0,0,.4); pointer-events: none; white-space: pre-wrap; overflow-wrap: anywhere; }
+        #glassOverlay { position: fixed; inset: 0; z-index: 9999; display: none; background: rgba(0,0,0,.96); }
+        #loadingInfo { position: fixed; inset: 50% auto auto 50%; z-index: 10000; display: none; transform: translate(-50%,-50%); text-align: center; }
+        .loading-text { color: var(--accent); font-weight: 700; }
+        .loading-percentage { margin: 14px 0; color: var(--accent); font-size: 40px; font-weight: 800; }
+        .loading-bar { width: min(300px,70vw); height: 7px; overflow: hidden; background: #252a2b; border-radius: 4px; }
+        .loading-progress { width: 0; height: 100%; background: var(--accent); transition: width .2s ease; }
 
-        /* Light control sliders */
-        .light-control {
-            margin-top: 8px;
+        @media (hover:none) { .toggle-btn:hover { background: rgba(18,22,24,.82); } }
+        @media (max-width:600px) {
+            .controls { top: auto; right: 0; bottom: 0; left: 0; width: 100%; max-height: min(78dvh,620px); overflow-y: auto; padding: 14px 14px calc(14px + var(--safe-bottom)); border-right: 0; border-bottom: 0; border-radius: 18px 18px 0 0; }
+            .controls > div { align-items: stretch; flex-direction: column; gap: 6px; }
+            .controls label { min-width: 0; }
+            .settings-panel { right: 0; bottom: calc(8px + var(--safe-bottom)); left: 0; width: 100%; border-right: 0; border-bottom: 0; border-radius: 18px 18px 0 0; }
+            .settings-panel > div { gap: 8px; }
+            .settings-panel input { font-size: 16px; }
+            .toggle-btn { width: 46px; height: 46px; }
+            .toggle-btn[style*="left"] { left: 12px !important; top: max(12px,env(safe-area-inset-top)) !important; }
+            .toggle-btn[style*="bottom"] { right: 12px !important; bottom: calc(12px + var(--safe-bottom)) !important; left: auto !important; }
+            #history-panel { right: 10px !important; bottom: calc(68px + var(--safe-bottom)) !important; left: 10px !important; width: auto !important; max-width: none !important; max-height: 55dvh !important; }
         }
-        .light-control label {
-            display: block;
-            font-size: 12px;
-            color: #e0e0e0;
-            margin-bottom: 4px;
-        }
-        .light-control input[type="range"] {
-            width: 100%;
-            max-width: 70vw;
-            cursor: pointer;
-        }
-
-        /* Glass overlay - covers everything */
-        #glassOverlay {
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            width: 100vw !important;
-            height: 100vh !important;
-            z-index: 9999 !important;
-            background: rgba(0, 0, 0, 1) !important;
-            backdrop-filter: blur(15px) !important;
-            -webkit-backdrop-filter: blur(15px) !important;
-            display: none;
-        }
-
-        /* Loading info - appears on top of glass overlay */
-        #loadingInfo {
-            position: fixed !important;
-            top: 50% !important;
-            left: 50% !important;
-            transform: translate(-50%, -50%) !important;
-            z-index: 10000 !important;
-            text-align: center;
-            pointer-events: none;
-            display: none;
-        }
-        .loading-text {
-            font-size: 24px;
-            font-weight: bold;
-            margin-bottom: 20px;
-            color: #2e8b57;
-            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
-        }
-        .loading-percentage {
-            font-size: 48px;
-            font-weight: bold;
-            color: #4CAF50;
-            margin-bottom: 20px;
-            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
-        }
-        .loading-bar {
-            width: 300px;
-            height: 8px;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 4px;
-            overflow: hidden;
-            margin: 0 auto;
-        }
-        .loading-progress {
-            height: 100%;
-            background: linear-gradient(90deg, #4CAF50, #2e8b57);
-            border-radius: 4px;
-            transition: width 0.3s ease;
-            width: 0%;
-        }
-
-        /* Hide drag elements for web */
-        .drag-btn-wrapper {
-            display: none;
-        }
-
-        /* Camera zoom on mobile tap */
-        #camera-zoom-indicator {
-            position: fixed;
-            top: 50%;
-            right: 20px;
-            transform: translateY(-50%);
-            background: rgba(0, 0, 0, 0.6);
-            color: white;
-            padding: 10px 15px;
-            border-radius: 8px;
-            z-index: 100;
-            display: none;
-            font-size: 14px;
-            pointer-events: none;
-        }
+        @media (max-width:380px) { .settings-panel > div { align-items: stretch; flex-direction: column; } .settings-panel button { width: 100%; } }
     </style>
 </head>
 <body>
-    <!-- Glass Overlay for Loading State -->
-    <div id="glassOverlay"></div>
-    
-    <!-- Loading GIF is created dynamically in JavaScript -->
-    
-    <!-- Main Settings Panel (can be toggled with ⚙️ button) -->
-    <div class="controls" id="settingsPanel" style="display: none;">
-        <!-- Column 1 -->
-        <div>
-            <label>WebSocket URL:</label>
-            <input type="text" id="websocketUrlInput" 
-                placeholder="ws://localhost:18789" 
-                style="flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
-            <button id="connectWsBtn" style="min-width: 80px;">Connect</button>
-        </div>
-        <div>
-            <label>OpenClaw Token:</label>
-            <input type="password" id="tokenInput" 
-                placeholder="Enter token..." 
-                style="flex: 1; min-width: 200px; max-width: 90vw; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
-            <button id="saveTokenBtn" style="min-width: 80px;">Save</button>
-        </div>
-        
-        <!-- Column 2 -->
-        <div>
-            <label>Animation:</label>
-            <select id="animationSelect" disabled>
-                <option value="">Select Animation</option>
-            </select>
-        </div>
-        <div>
-            <label>Expression:</label>
-            <select id="expressionSelect" disabled>
-                <option value="">Select Expression</option>
-                <option value="neutral">Neutral</option>
-                <option value="happy">Happy</option>
-                <option value="sad">Sad</option>
-                <option value="angry">Angry</option>
-                <option value="surprised">Surprised</option>
-                <option value="blink">Blink</option>
-            </select>
-        </div>
-        <div class="light-control">
-            <label>Speaking Speed: <span id="speakingSpeedValue">1.0x</span></label>
-            <input type="range" id="speakingSpeedSlider" min="0.5" max="2.0" step="0.1" value="1" style="flex: 1; max-width: 70vw;" />
-        </div>
-        <div>
-            <button id="resetCameraBtn">Reset Camera</button>
-        </div>
-        
-        <!-- Status message (full width) -->
+    <div id="glassOverlay" aria-hidden="true"></div>
+    <section class="controls" id="settingsPanel" style="display:none" aria-label="Settings">
+        <div><label for="websocketUrlInput">Gateway URL</label><input type="text" id="websocketUrlInput" placeholder="http://localhost:18789" autocomplete="url" /></div>
+        <div><label for="tokenInput">OpenClaw Token</label><input type="password" id="tokenInput" placeholder="Optional" autocomplete="current-password" /></div>
+        <div class="light-control"><label for="speakingSpeedSlider">Speaking speed: <span id="speakingSpeedValue">1.0x</span></label><input type="range" id="speakingSpeedSlider" min="0.5" max="2" step="0.1" value="1" /></div>
+        <label for="animationSelect">Animation</label>
+        <select id="animationSelect" disabled><option value="">Select animation</option></select>
+        <label for="expressionSelect">Expression</label>
+        <select id="expressionSelect" disabled><option value="neutral">Neutral</option><option value="happy">Happy</option><option value="sad">Sad</option><option value="angry">Angry</option><option value="surprised">Surprised</option><option value="shy">Shy</option><option value="shocked">Shocked</option></select>
+        <button id="saveConnectBtn" class="full-width-btn">Save settings</button>
+        <div class="anim-toggles"><div class="anim-section-label">Animation toggles</div><div class="anim-checkbox-grid">
+            <label class="anim-checkbox-item"><input type="checkbox" id="anim-walk" checked /> Walk</label><label class="anim-checkbox-item"><input type="checkbox" id="anim-touch" checked /> Touch</label><label class="anim-checkbox-item"><input type="checkbox" id="anim-sit" checked /> Sit</label>
+            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_airplane" checked /> Airplane</label><label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_look" checked /> Look</label><label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_loop" checked /> Idle loop</label>
+            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_shoot" checked /> Shoot</label><label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_sport" checked /> Sport</label><label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_stretch" checked /> Stretch</label>
+            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_vSign" checked /> V-sign</label><label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_both" checked /> Wave</label><label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_fast" checked /> Fast wave</label><label class="anim-checkbox-item"><input type="checkbox" id="anim-start_2turnAround" checked /> Turn around</label>
+        </div></div>
         <div class="status-message" id="status">Loading VRM model...</div>
-    </div>
-    
-    <!-- Lip Sync Panel (bottom-left, can be toggled with 💬 button) -->
-    <div class="settings-panel" id="lipSyncPanel" style="display: none;">
-        <div>
-            <input type="text" id="textInputPanel"
-                placeholder="Message" 
-                style="flex: 1; min-width: 200px; max-width: 70vw; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 14px;" />
-            <button id="speakBtnPanel" disabled>➤</button>
-        </div>
-    </div>
-
-    <!-- Toggle Buttons (⚙️ and 💬) -->
-    <button class="toggle-btn" id="toggleSettingsBtn" style="top: 10px; left: 10px;">⚙️</button>
-    <button class="toggle-btn" id="toggleLipSyncBtn" style="bottom: 10px; left: 10px;">💬</button>
-
+    </section>
+    <section class="settings-panel" id="lipSyncPanel" aria-label="Chat"><div><input type="text" id="textInputPanel" placeholder="Message Hikari" autocomplete="off" /><button id="speakBtnPanel" disabled aria-label="Send">➤</button></div></section>
     <script type="module" src="./app.js"></script>
 </body>
 </html>

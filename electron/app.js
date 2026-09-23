@@ -4,6 +4,9 @@
  */
 
 import logger from './logger.js';
+import { AwarenessController, isExpectedAwarenessAbort } from './desktop-awareness-renderer.js';
+import { BILINGUAL_RESPONSE_INSTRUCTIONS, normalizeJapaneseText } from './agent-response-contract.js';
+import { createJapaneseSpeechPlayer } from './japanese-speech-player.js';
 
 logger.info('electron', 'Hikari Electron version starting');
 
@@ -26,6 +29,15 @@ import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-v
  */
 let agentRequestQueue = [];
 let isAgentRequestInProgress = false;
+let awarenessController = null;
+
+function noteDirectHikariInteraction() {
+    if (awarenessController) {
+        awarenessController.noteDirectHikariInteraction();
+    } else {
+        window.electronAPI?.awareness?.noteDirectInteraction?.();
+    }
+}
 
 /**
  * Send an event notification to the agent and display the reply.
@@ -47,7 +59,7 @@ window.sendEventToAgent = sendEventToAgent;
 
 async function processAgentRequestQueue() {
     if (isAgentRequestInProgress || agentRequestQueue.length === 0) return;
-    
+
     isAgentRequestInProgress = true;
     const { eventType, message, resolve, reject } = agentRequestQueue.shift();
     
@@ -67,28 +79,24 @@ async function processAgentRequestQueue() {
     
     try {
         // Send message to agent (without adding to conversation history to keep it clean)
-        const replyText = await WebSocketModule.sendAgentMessageRaw(message);
-        
+        const replyText = await AgentApiModule.sendAgentMessageRaw(message);
+
         // Clear pending flag
         window._agentRequestPending = false;
-        
+
         if (replyText && window.lipSyncSystem) {
             // Parse the reply for any JSON commands
-            const parsedResponse = WebSocketModule.parseAgentResponse(replyText);
+            const parsedResponse = AgentApiModule.parseAgentResponse(replyText);
             
             if (parsedResponse && parsedResponse.text) {
-                // Add agent reply to local history
-                if (window.addLocalHistoryMessage) {
-                    window.addLocalHistoryMessage('agent', parsedResponse.text);
-                }
                 // Execute the agent command (speak + animate)
-                await WebSocketModule.executeAgentCommand(parsedResponse);
+                await AgentApiModule.executeAgentCommand(parsedResponse);
             } else if (replyText.trim().length > 0) {
                 // Plain text reply - just speak it
                 if (window.addLocalHistoryMessage) {
                     window.addLocalHistoryMessage('agent', replyText);
                 }
-                window.lipSyncSystem.startSpeaking(replyText);
+                await window.lipSyncSystem.startSpeaking(replyText, '');
                 const statusDiv = document.getElementById('status');
                 if (statusDiv) {
                     const displayText = replyText.length > 50 ? replyText.substring(0, 50) + '...' : replyText;
@@ -125,7 +133,10 @@ const CoreModule = (() => {
         WALK_WALK_DURATION: 4.0,
         WALK_TURN_DURATION: 1.0,
         WALK_TIME_SCALE: 0.5,
-        
+
+        // Let VRM spring bones settle after the startup pose is applied.
+        STARTUP_HAIR_SETTLE_TIME: 1.0,
+
         // Random idle configuration
         RANDOM_IDLE_MIN_DELAY: 20000,
         RANDOM_IDLE_MAX_DELAY: 30000,
@@ -152,6 +163,7 @@ const CoreModule = (() => {
     let blinkSystemEnabled = true;
     let isSitAnimationActive = false;
     let isWindowDragging = false;
+    let actionPausedForWindowDrag = null;
     let windowDragOffset = { x: 0, y: 0 };
 
     // Zoom control state
@@ -161,6 +173,7 @@ const CoreModule = (() => {
     const MIN_ZOOM = 0.5;
     const MAX_ZOOM = 2.5;
     let zoomScale = 1.0;
+    const ZOOM_STORAGE_KEY = 'electron_zoom_scale';
 
     // ============================================================
     // DOM ELEMENTS
@@ -176,6 +189,23 @@ const CoreModule = (() => {
     let keyLight, fillLight, rimLight, topLight, ambientLight;
     let clock = new THREE.Clock();
     let raycaster, mouse;
+    let mouseLookTarget;
+    let mouseLookDesired = new THREE.Vector3();
+    let mouseLookCurrent = new THREE.Vector3();
+    let mouseLookPointer = new THREE.Vector2();
+    let mouseLookClientPosition = new THREE.Vector2();
+    let mouseLookHeadPosition = new THREE.Vector3();
+    let mouseLookHeadScreenPosition = new THREE.Vector3();
+    let mouseLookForward = new THREE.Vector3();
+    let mouseLookRight = new THREE.Vector3();
+    let mouseLookUp = new THREE.Vector3();
+    let mouseLookHeadQuaternion = new THREE.Quaternion();
+    let mouseLookFaceQuaternion = new THREE.Quaternion();
+    let mouseLookActive = false;
+    const EYE_FOLLOW_STORAGE_KEY = 'electron_eye_follow_degrees';
+    const DEFAULT_EYE_FOLLOW_DEGREES = 20;
+    let mouseLookMaxYaw = THREE.MathUtils.degToRad(DEFAULT_EYE_FOLLOW_DEGREES);
+    let mouseLookMaxPitch = THREE.MathUtils.degToRad(DEFAULT_EYE_FOLLOW_DEGREES * 0.7);
     let lastTouchTime = 0;
     const TOUCH_DEBOUNCE_MS = 200;
 
@@ -253,6 +283,141 @@ const CoreModule = (() => {
     }
 
     /**
+     * Make the VRM eyes follow the pointer while it is over the canvas.
+     * The target is smoothed in world space so eye movement stays gentle.
+     */
+    function setupMouseLook() {
+        if (!renderer || !camera || !scene) return;
+
+        mouseLookTarget = new THREE.Object3D();
+        mouseLookTarget.name = 'mouseLookTarget';
+        scene.add(mouseLookTarget);
+
+        const canvas = renderer.domElement;
+        const setLookTargetFromPointer = (event) => {
+            const rect = canvas.getBoundingClientRect();
+            if (!rect.width || !rect.height) return;
+
+            mouseLookClientPosition.set(event.clientX, event.clientY);
+            mouseLookActive = true;
+        };
+
+        const setLookTargetToCenter = () => {
+            const center = new THREE.Vector3(0, 0, 0.5).unproject(camera);
+            const direction = center.sub(camera.position).normalize();
+            mouseLookDesired.copy(camera.position).addScaledVector(direction, 5);
+            mouseLookActive = false;
+        };
+
+        canvas.addEventListener('mouseenter', setLookTargetFromPointer);
+        canvas.addEventListener('mousemove', setLookTargetFromPointer);
+        canvas.addEventListener('mouseleave', setLookTargetToCenter);
+        setLookTargetToCenter();
+        mouseLookCurrent.copy(mouseLookDesired);
+
+        logger.info('look', 'Mouse look initialized');
+    }
+
+    function setMouseLookMaxAngle(degrees) {
+        const value = THREE.MathUtils.clamp(Number(degrees) || 0, 0, 45);
+        mouseLookMaxYaw = THREE.MathUtils.degToRad(value);
+        mouseLookMaxPitch = THREE.MathUtils.degToRad(value * 0.7);
+        localStorage.setItem(EYE_FOLLOW_STORAGE_KEY, String(value));
+        return value;
+    }
+
+    function updateMouseLook(deltaTime) {
+        if (!mouseLookTarget || !camera) return;
+
+        // Return smoothly to the VRM's neutral forward direction when the
+        // pointer leaves the canvas or a window drag begins.
+        if (!mouseLookActive || window.isWindowDragging) {
+            if (currentVrm?.lookAt) {
+                currentVrm.lookAt.target = null;
+                currentVrm.lookAt.autoUpdate = false;
+                currentVrm.lookAt.yaw = THREE.MathUtils.damp(currentVrm.lookAt.yaw, 0, 10, deltaTime);
+                currentVrm.lookAt.pitch = THREE.MathUtils.damp(currentVrm.lookAt.pitch, 0, 10, deltaTime);
+            }
+            return;
+        }
+
+        if (currentVrm?.lookAt) {
+            // Animations can move the head independently of the canvas center.
+            // Refresh world matrices and project the actual head bone so a
+            // pointer directly over the head always means neutral eye rotation.
+            currentVrm.scene.updateMatrixWorld(true);
+
+            if (typeof currentVrm.lookAt.getLookAtWorldPosition === 'function') {
+                currentVrm.lookAt.getLookAtWorldPosition(mouseLookHeadPosition);
+            } else {
+                const head = currentVrm.humanoid?.getBoneNode('head');
+                if (!head) return;
+                head.getWorldPosition(mouseLookHeadPosition);
+            }
+
+            const humanoid = currentVrm.humanoid;
+            const head = humanoid?.getRawBoneNode?.('head')
+                || humanoid?.getNormalizedBoneNode?.('head')
+                || humanoid?.getBoneNode?.('head');
+            const canvas = renderer.domElement;
+            const rect = canvas.getBoundingClientRect();
+
+            if (head && rect.width && rect.height) {
+                head.getWorldPosition(mouseLookHeadScreenPosition);
+                mouseLookHeadScreenPosition.project(camera);
+
+                const headClientX = rect.left + (mouseLookHeadScreenPosition.x + 1) * rect.width * 0.5;
+                const headClientY = rect.top + (1 - mouseLookHeadScreenPosition.y) * rect.height * 0.5;
+                const deltaX = mouseLookClientPosition.x - headClientX;
+                const deltaY = headClientY - mouseLookClientPosition.y;
+                const horizontalRange = deltaX >= 0
+                    ? rect.right - headClientX
+                    : headClientX - rect.left;
+                const verticalRange = deltaY >= 0
+                    ? headClientY - rect.top
+                    : rect.bottom - headClientY;
+
+                mouseLookPointer.set(
+                    THREE.MathUtils.clamp(deltaX / Math.max(horizontalRange, 1), -1, 1),
+                    THREE.MathUtils.clamp(deltaY / Math.max(verticalRange, 1), -1, 1)
+                );
+            }
+
+            if (typeof currentVrm.lookAt.getLookAtWorldQuaternion === 'function' &&
+                typeof currentVrm.lookAt.getFaceFrontQuaternion === 'function') {
+                currentVrm.lookAt.getLookAtWorldQuaternion(mouseLookHeadQuaternion);
+                currentVrm.lookAt.getFaceFrontQuaternion(mouseLookFaceQuaternion);
+                mouseLookForward.set(0, 0, 1)
+                    .applyQuaternion(mouseLookHeadQuaternion)
+                    .applyQuaternion(mouseLookFaceQuaternion)
+                    .normalize();
+            } else {
+                camera.getWorldDirection(mouseLookForward).normalize();
+            }
+
+            mouseLookRight.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+            mouseLookUp.set(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+
+            // Build the target from the head's neutral forward direction.
+            // The pointer only adds a very small angular offset around it.
+            mouseLookDesired.copy(mouseLookHeadPosition)
+                .addScaledVector(mouseLookForward, 5)
+                .addScaledVector(mouseLookRight, Math.tan(mouseLookMaxYaw) * 5 * mouseLookPointer.x)
+                .addScaledVector(mouseLookUp, Math.tan(mouseLookMaxPitch) * 5 * mouseLookPointer.y);
+        }
+
+        const smoothing = 1 - Math.exp(-deltaTime * 10);
+        mouseLookCurrent.lerp(mouseLookDesired, smoothing);
+        mouseLookTarget.position.copy(mouseLookCurrent);
+        mouseLookTarget.updateMatrixWorld();
+
+        if (currentVrm?.lookAt) {
+            currentVrm.lookAt.target = mouseLookTarget;
+            currentVrm.lookAt.autoUpdate = true;
+        }
+    }
+
+    /**
      * Handle window resize
      */
     function handleResize() {
@@ -323,7 +488,10 @@ const CoreModule = (() => {
         
         // Mouse leave handler
         renderer.domElement.addEventListener('mouseleave', () => {
-            mouseDownPos = null;
+            // Don't reset mouseDownPos if we're still tracking for potential window drag
+            if (!window.isWindowDragging && !window._dragTransitionedToWindow) {
+                mouseDownPos = null;
+            }
         });
 
         logger.info('touch', 'Touch detection initialized');
@@ -375,6 +543,11 @@ const CoreModule = (() => {
                 const newY = Math.round(currentCenterY - newHeight / 2);
 
                 await window.electronAPI.setWindowBounds(newX, newY, newWidth, newHeight);
+                localStorage.setItem(ZOOM_STORAGE_KEY, JSON.stringify({
+                    zoom: zoomScale,
+                    width: newWidth,
+                    height: newHeight
+                }));
 
                 // Explicitly update the renderer/camera to fill the new window size.
                 // The resize event can fire at an unreliable time, so we force it here.
@@ -389,6 +562,41 @@ const CoreModule = (() => {
         }, { passive: false });
 
         logger.info('zoom', 'Custom zoom control initialized');
+    }
+
+    async function loadZoomSettings() {
+        let savedSettings;
+        try {
+            savedSettings = JSON.parse(localStorage.getItem(ZOOM_STORAGE_KEY));
+        } catch (_) {
+            return;
+        }
+        // Accept the old scalar format once, then migrate it on the next zoom.
+        if (Number.isFinite(savedSettings)) savedSettings = { zoom: savedSettings };
+        if (!Number.isFinite(savedSettings?.zoom)) return;
+
+        zoomScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, savedSettings.zoom));
+        const distance = BASE_CAMERA_DISTANCE / zoomScale;
+        const direction = new THREE.Vector3();
+        camera.getWorldDirection(direction);
+        camera.position.copy(controls.target).addScaledVector(direction, -distance);
+        controls.update();
+
+        if (window.electronAPI && Number.isFinite(savedSettings.width) && Number.isFinite(savedSettings.height)) {
+            const bounds = await window.electronAPI.getWindowBounds();
+            const width = Math.max(200, Math.round(savedSettings.width));
+            const height = Math.max(300, Math.round(savedSettings.height));
+            await window.electronAPI.setWindowBounds(
+                Math.round(bounds.x + (bounds.width - width) / 2),
+                Math.round(bounds.y + (bounds.height - height) / 2),
+                width,
+                height
+            );
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        }
+        logger.info('zoom', 'Restored zoom scale:', zoomScale);
     }
 
     /**
@@ -526,6 +734,7 @@ const CoreModule = (() => {
         }
         
         lastTouchTime = now;
+        noteDirectHikariInteraction();
         logger.info('touch', 'Touch event triggered on model (works during any animation)');
         
         // Immediately change facial expression to 'shy' or 'shocked' randomly
@@ -645,6 +854,37 @@ const CoreModule = (() => {
         }
     }
 
+    // Return the visible right-hand position in screen coordinates so Electron
+    // window dragging can keep that hand under the cursor.
+    function getRightHandScreenPosition() {
+        if (!currentVrm?.humanoid || !camera) return null;
+
+        // Some VRMs place the rightHand node at the wrist/arm pivot (or even
+        // at the bind-pose origin). Prefer a visible finger bone so the
+        // cursor is anchored to the actual hand mesh.
+        const hand = [
+            'rightMiddleDistal',
+            'rightIndexDistal',
+            'rightHand'
+        ].map((boneName) => currentVrm.humanoid.getNormalizedBoneNode(boneName))
+            .find(Boolean);
+        const canvas = document.querySelector('canvas');
+        if (!hand || !canvas) return null;
+
+        // The hand can move during the hang/idle animation. Ensure its latest
+        // pose is reflected before converting it to screen coordinates.
+        currentVrm.scene.updateMatrixWorld(true);
+        const worldPosition = new THREE.Vector3();
+        hand.getWorldPosition(worldPosition);
+        const ndc = worldPosition.project(camera);
+        const rect = canvas.getBoundingClientRect();
+
+        return {
+            x: window.screenX + rect.left + (ndc.x + 1) * 0.5 * rect.width,
+            y: window.screenY + rect.top + (1 - ndc.y) * 0.5 * rect.height
+        };
+    }
+
     // ============================================================
     // GLTF LOADER
     // ============================================================
@@ -658,48 +898,22 @@ const CoreModule = (() => {
     // ============================================================
     const ASSET_BASE_URL = import.meta.env.VITE_ASSET_BASE_URL || '/';
     const VRM_MODEL_URL = `${ASSET_BASE_URL}VRM/sample.vrm`;
-    
-    // Try multiple glob patterns to find VRMA files
-    let VRMA_ASSET_FILES = import.meta.glob('./VRMA/*.vrma', {
-        eager: true,
-        query: '?url',
-        import: 'default'
-    });
-    
-    // If no files found, try alternative paths
-    if (Object.keys(VRMA_ASSET_FILES).length === 0) {
-        VRMA_ASSET_FILES = import.meta.glob('../assets/VRMA/*.vrma', {
-            eager: true,
-            query: '?url',
-            import: 'default'
-        });
-    }
-    if (Object.keys(VRMA_ASSET_FILES).length === 0) {
-        VRMA_ASSET_FILES = import.meta.glob('/VRMA/*.vrma', {
-            eager: true,
-            query: '?url',
-            import: 'default'
-        });
-    }
-    if (Object.keys(VRMA_ASSET_FILES).length === 0) {
-        VRMA_ASSET_FILES = import.meta.glob('./assets/VRMA/*.vrma', {
-            eager: true,
-            query: '?url',
-            import: 'default'
-        });
-    }
-    
-    // Debug logging
+
+    // VRMA files live in Vite's public directory. Address them from the
+    // public root instead of importing them with import.meta.glob, which
+    // produces the `/assets/VRMA/...` warning for public-directory files.
+    const VRMA_FILE_NAMES = [
+        'hang.vrma', 'idle_airplane.vrma', 'idle_look.vrma', 'idle_loop.vrma',
+        'idle_shoot.vrma', 'idle_sport.vrma', 'idle_stretch.vrma', 'idle_vSign.vrma',
+        'lay.vrma', 'sit.vrma', 'sitWave.vrma', 'sit_down.vrma', 'sit_up.vrma',
+        'start_1standUp.vrma', 'start_2turnAround.vrma', 'walk.vrma',
+        'walk_left.vrma', 'walk_right.vrma', 'wave_both.vrma', 'wave_fast.vrma'
+    ];
+    const VRMA_ANIMATION_ASSETS = VRMA_FILE_NAMES
+        .sort((left, right) => left.localeCompare(right))
+        .map(fileName => ({ fileName, url: `${ASSET_BASE_URL}VRMA/${fileName}` }));
     console.log('[VRMA] ASSET_BASE_URL:', ASSET_BASE_URL);
-    console.log('[VRMA] VRMA_ASSET_FILES keys:', Object.keys(VRMA_ASSET_FILES));
-    console.log('[VRMA] VRMA_ASSET_FILES:', VRMA_ASSET_FILES);
-    
-    const VRMA_ANIMATION_ASSETS = Object.entries(VRMA_ASSET_FILES)
-        .map(([filePath, url]) => ({
-            fileName: filePath.split('/').pop(),
-            url
-        }))
-        .sort((left, right) => left.fileName.localeCompare(right.fileName));
+    console.log('[VRMA] VRMA files:', VRMA_FILE_NAMES);
     const VRMA_ANIMATION_URLS = VRMA_ANIMATION_ASSETS.map(asset => asset.url);
     const VRMA_ANIMATION_URL_BY_FILE = Object.fromEntries(
         VRMA_ANIMATION_ASSETS.map(asset => [asset.fileName, asset.url])
@@ -736,9 +950,9 @@ const CoreModule = (() => {
         textInputPanel = document.getElementById('textInputPanel');
         speakBtnPanel = document.getElementById('speakBtnPanel');
         lipSyncPanel = document.getElementById('lipSyncPanel');
-        
+
         logger.info('core', 'DOM elements initialized');
-        
+
         // Add click listener to messaging panel to reset sit animation flag when user interacts
         if (lipSyncPanel) {
             lipSyncPanel.addEventListener('click', () => {
@@ -871,6 +1085,14 @@ const CoreModule = (() => {
         let mouthTarget = 'a';
         let speakingSpeedMultiplier = 1.0;
         let isAgentCommandActive = false;
+        let speechGeneration = 0;
+        const japanesePlayer = createJapaneseSpeechPlayer({
+            synthesize: input => {
+                if (!window.electronAPI?.tts) throw new Error('Local Japanese voice is unavailable.');
+                return window.electronAPI.tts.synthesize(input);
+            },
+            onMouth: shape => { mouthTarget = shape; },
+        });
 
         const vowelShapes = {
             'a': 'aa', 'e': 'ee', 'i': 'ih', 'o': 'oh', 'u': 'oo'
@@ -983,7 +1205,71 @@ const CoreModule = (() => {
             vrm.expressionManager.setValue(expressionName, intensity);
         }
 
-        function startSpeaking(text) {
+        function startSpeaking(text, japaneseText, presentation = {}) {
+            logger.info('lip', 'Queued speech', text);
+            const generation = speechGeneration;
+            speechQueue = speechQueue
+                .catch(() => {})
+                .then(() => {
+                    if (generation !== speechGeneration) return;
+                    return japaneseText === undefined
+                        ? speakNow(text)
+                        : speakBilingualNow(text, japaneseText, presentation);
+                });
+            return speechQueue;
+        }
+
+        let speechQueue = Promise.resolve();
+
+        async function speakBilingualNow(chineseText, japaneseText, presentation) {
+            isCurrentlyTalking = true; // Includes preparation, so awareness cannot interrupt it.
+            mouthTarget = 'neutral';
+            if (currentIdleTimeout) {
+                clearTimeout(currentIdleTimeout);
+                currentIdleTimeout = null;
+                idleSuspended = true;
+            }
+            let displayed = false;
+            const displayReply = (withVoice) => {
+                if (displayed) return;
+                displayed = true;
+                showSpeakingBubble(chineseText);
+                displayCharacterAtIndex(getWordCount() - 1);
+                if (statusDiv) statusDiv.textContent = 'Speaking: ' + chineseText;
+                if (withVoice) presentation.onStart?.();
+                else presentation.onTextOnly?.();
+            };
+            try {
+                if (!japaneseText) {
+                    displayReply(false);
+                    if (statusDiv) statusDiv.textContent = '未收到日文翻譯，已顯示中文回覆。';
+                    await new Promise(resolve => setTimeout(resolve, 3500));
+                    return;
+                }
+                if (statusDiv) statusDiv.textContent = '準備日文語音…';
+                const completed = await japanesePlayer.speak(japaneseText, Math.max(0.5, Math.min(2, speakingSpeedMultiplier)), {
+                    beforePlay: presentation.beforePlay,
+                    onStart: () => displayReply(true),
+                });
+                if (statusDiv) statusDiv.textContent = completed ? '日文語音播放完成。' : '語音已停止。';
+            } catch (error) {
+                logger.warn('tts', 'Japanese voice unavailable:', error);
+                displayReply(false);
+                if (statusDiv) statusDiv.textContent = '日文語音暫時無法播放，中文回覆已保留。';
+                await new Promise(resolve => setTimeout(resolve, 3500));
+            } finally {
+                isCurrentlyTalking = false;
+                mouthTarget = 'neutral';
+                if (displayed) hideSpeakingBubble();
+                window.resetExpressionToNeutral?.();
+                if (idleSuspended) {
+                    scheduleRandomIdle();
+                    idleSuspended = false;
+                }
+            }
+        }
+
+        async function speakNow(text) {
             logger.info('lip', 'startSpeaking', text);
             isCurrentlyTalking = false;
             mouthTarget = 'neutral';
@@ -1010,7 +1296,7 @@ const CoreModule = (() => {
             logger.info('lip', 'Text split into', lines.length, 'lines');
             
             // Process lines sequentially with a small pause between them
-            processLinesSequentially(lines);
+            await processLinesSequentially(lines);
         }
 
         async function processLinesSequentially(lines) {
@@ -1289,6 +1575,8 @@ const CoreModule = (() => {
         }
 
         function stopSpeaking() {
+            speechGeneration++;
+            japanesePlayer.stop();
             isCurrentlyTalking = false;
             mouthTarget = 'neutral';
             if ('speechSynthesis' in window) {
@@ -1409,6 +1697,7 @@ const CoreModule = (() => {
     let speakingBubble, currentSpeakingText = '', bubbleVisible = false;
     let cachedHeadBone = null, headBoneWarningLogged = false;
     let bubbleHideTimer = null;
+    let bubbleFadeTimer = null;
     let currentDisplayedText = '';
     let currentWordIndex = 0;
     let words = [];
@@ -1520,6 +1809,9 @@ const CoreModule = (() => {
     }
 
     function showSpeakingBubble(text) {
+        clearTimeout(bubbleHideTimer);
+        clearTimeout(bubbleFadeTimer);
+        clearTimeout(wordDisplayTimer);
         clearCachedHeadBone();
         
         speakingBubble.textContent = '';
@@ -1570,7 +1862,7 @@ const CoreModule = (() => {
         bubbleHideTimer = setTimeout(() => {
             speakingBubble.style.opacity = '0';
             
-            setTimeout(() => {
+            bubbleFadeTimer = setTimeout(() => {
                 bubbleVisible = false;
                 speakingBubble.style.display = 'none';
                 currentSpeakingText = '';
@@ -1656,9 +1948,6 @@ const CoreModule = (() => {
                         statusDiv.textContent = 'VRM model loaded successfully!';
                         logger.info('vrm', 'VRM loaded:', vrm);
 
-                        // Hide loading GIF after VRM loads
-                        hideLoadingGif();
-
                         resolve(vrm);
                     },
                     (progress) => {
@@ -1681,7 +1970,34 @@ const CoreModule = (() => {
     // ============================================================
     // ANIMATION SYSTEM
     // ============================================================
+    function waitForWindowDragEnd() {
+        if (!isWindowDragging) return Promise.resolve();
+        return new Promise(resolve => {
+            window.addEventListener('hikari-window-drag-end', resolve, { once: true });
+        });
+    }
+
+    function setWindowDragging(active) {
+        isWindowDragging = active;
+
+        if (active) {
+            if (currentAction && !currentAction.paused) {
+                actionPausedForWindowDrag = currentAction;
+                currentAction.paused = true;
+            }
+            return;
+        }
+
+        if (actionPausedForWindowDrag) {
+            actionPausedForWindowDrag.paused = false;
+            actionPausedForWindowDrag = null;
+        }
+        window.dispatchEvent(new Event('hikari-window-drag-end'));
+    }
+
     function waitForActionEnd(action, maxWait = 15000, resetPose = false) {
+        if (!action || !currentMixer) return Promise.resolve(false);
+        if (!action.isRunning()) return Promise.resolve(true);
         return new Promise(resolve => {
             let finished = false;
             
@@ -1709,8 +2025,14 @@ const CoreModule = (() => {
         });
     }
 
-    async function startSmoothTransition(url, { loopMode = THREE.LoopRepeat, startOffset = CONFIG.T_OFFSET, resetPose = false, transitionTime = CONFIG.TRANSITION_TIME } = {}) {
+    async function startSmoothTransition(url, { loopMode = THREE.LoopRepeat, startOffset = CONFIG.T_OFFSET, resetPose = false, transitionTime = CONFIG.TRANSITION_TIME, allowDuringDrag = false } = {}) {
         if (!currentVrm) return null;
+
+        // Animation requests can arrive while the user is dragging. Keep
+        // them pending so the drag hang animation is not replaced midway.
+        if (isWindowDragging && !allowDuringDrag) {
+            await waitForWindowDragEnd();
+        }
 
         isTransitioning = true;
         transitionStartTime = performance.now();
@@ -1741,6 +2063,28 @@ const CoreModule = (() => {
         }
 
         return null;
+    }
+
+    // Load and convert the clip without changing the current pose. Start it
+    // synchronously from the audio's playing event once the WAV is ready.
+    async function prepareSpeakingAnimation(url) {
+        if (!currentVrm) return null;
+        const vrm = currentVrm;
+        const gltf = await loader.loadAsync(url);
+        const data = gltf.userData.vrmAnimations?.[0];
+        if (!data || currentVrm !== vrm) return null;
+        const clip = createVRMAnimationClip(data, vrm);
+        if (isWindowDragging) await waitForWindowDragEnd();
+        return () => {
+            if (!clip || currentVrm !== vrm || isWindowDragging) return;
+            vrmaAnimationClip = clip;
+            isIdleMode = false;
+            isTransitioning = true;
+            transitionStartTime = performance.now();
+            transitionDuration = CONFIG.TRANSITION_TIME;
+            void blendToAnimation(clip, THREE.LoopOnce).catch(error => logger.warn('animation', error));
+            setTimeout(() => { isTransitioning = false; }, 300);
+        };
     }
 
     function blendToAnimation(targetClip, loopMode = THREE.LoopRepeat, startOffset = CONFIG.T_OFFSET, resetPose = false, transitionTime = CONFIG.TRANSITION_TIME) {
@@ -1777,6 +2121,9 @@ const CoreModule = (() => {
 
     async function loadIdleLoop() {
         if (!currentVrm) return false;
+        if (isWindowDragging) {
+            await waitForWindowDragEnd();
+        }
         logger.info('idle', 'loadIdleLoop called');
 
         try {
@@ -1814,6 +2161,10 @@ const CoreModule = (() => {
         if (!currentVrm) {
             statusDiv.textContent = 'VRM model not loaded. Please load VRM model first.';
             return;
+        }
+
+        if (isWindowDragging) {
+            await waitForWindowDragEnd();
         }
 
         try {
@@ -2034,12 +2385,14 @@ const CoreModule = (() => {
         lipSyncSystem = createLipSyncSystem();
         blinkSystem = createBlinkSystem();
         
-        // Expose core functions to window for WebSocket access
+        // Expose core functions to the agent API module.
         window.lipSyncSystem = lipSyncSystem;
         window.applyFacialExpression = applyFacialExpression;
         window.loadVRMA = loadVRMA;
         window.startSmoothTransition = startSmoothTransition;
+        window.prepareSpeakingAnimation = prepareSpeakingAnimation;
         window.loadIdleLoop = loadIdleLoop;
+        window.waitForActionEnd = waitForActionEnd;
         window.resetExpressionToNeutral = resetExpressionToNeutral;
         
         window._internalLipSync = lipSyncSystem;
@@ -2050,8 +2403,14 @@ const CoreModule = (() => {
 
         const deltaTime = clock.getDelta();
 
+        // Apply animation tracks first. VRM.update then applies humanoid,
+        // expression, spring-bone, and eye look-at results on top.
+        if (currentMixer) {
+            currentMixer.update(deltaTime);
+        }
+
         if (currentVrm) {
-            currentVrm.update(deltaTime);
+            updateMouseLook(deltaTime);
 
             if (blinkSystem) {
                 blinkSystem.update(currentVrm, deltaTime);
@@ -2090,10 +2449,17 @@ const CoreModule = (() => {
                     isTransitioning = false;
                 }
             }
+
+            currentVrm.update(deltaTime);
         }
 
-        if (currentMixer) {
-            currentMixer.update(deltaTime);
+        // Keep the lowest visible point of the animated model on the floor.
+        // Animations can change the skinned bounds, so correct this every frame.
+        if (currentVrm) {
+            const bounds = new THREE.Box3().setFromObject(currentVrm.scene);
+            if (Number.isFinite(bounds.min.y)) {
+                currentVrm.scene.position.y -= bounds.min.y;
+            }
         }
 
         controls.update();
@@ -2269,17 +2635,6 @@ const CoreModule = (() => {
 
             logger.info('walk-electron', 'finished, keeping current position and rotation');
 
-            // Send walk completion event to agent with original and new position
-            if (window.electronAPI && walkingWindowInitialPos) {
-                try {
-                    const newPos = await window.electronAPI.getWindowPosition();
-                    sendEventToAgent('character_walk', 
-                        `The character has finished walking. Original position: (${walkingWindowInitialPos.x}, ${walkingWindowInitialPos.y}). New position: (${newPos.x}, ${newPos.y}).`);
-                } catch (e) {
-                    logger.warn('walk-electron', 'Failed to send walk event:', e);
-                }
-            }
-
             logger.info('walk-electron', 'calling loadIdleLoop at end of sequence');
             await loadIdleLoop();
             
@@ -2370,8 +2725,18 @@ const CoreModule = (() => {
             logger.info('seq', 'transition to stand up');
             const action1 = await startSmoothTransition(getVRMAUrl('start_1standUp.vrma'), { loopMode: THREE.LoopOnce, startOffset: 0.5 });
             if (action1) {
+                // The startup clip begins from the sitting pose. Hold that
+                // first frame briefly so spring-bone hair can settle while
+                // the loading overlay still covers the character.
+                action1.paused = true;
+                logger.info('seq', 'settling startup hair for 1 second');
+                await new Promise(resolve => setTimeout(resolve, CONFIG.STARTUP_HAIR_SETTLE_TIME * 1000));
+                hideLoadingGif();
+                action1.paused = false;
                 logger.info('seq', 'waiting for stand up to finish');
                 await waitForActionEnd(action1, 15000, true);
+            } else {
+                hideLoadingGif();
             }
             logger.info('seq', 'stand up finished');
 
@@ -2673,6 +3038,7 @@ const CoreModule = (() => {
         showLoadingGif();
         
         initThreeJS();
+        setupMouseLook();
         initDOMElements();
         initSpeakingBubble();
         initSystems();
@@ -2685,6 +3051,7 @@ const CoreModule = (() => {
 
         // Setup custom zoom control (camera dolly + window resize)
         setupZoomControl();
+        await loadZoomSettings();
 
         // Setup dynamic click-through (transparent areas let clicks pass through)
         setupClickThrough();
@@ -2699,14 +3066,16 @@ const CoreModule = (() => {
         // Start animation loop
         animate();
         
-        // Start automatic sequence after VRM loads
-        startAutomaticSequence();
+        // Finish the startup sequence before the greeting is presented.
+        await startAutomaticSequence();
     }
 
     // Export public API
     return {
         init,
         handleResize,
+        setupMouseLook,
+        setMouseLookMaxAngle,
         beginRandomIdleSelection,
         hideMessagingPanel,
         showMessagingPanel,
@@ -2717,9 +3086,11 @@ const CoreModule = (() => {
         saveCameraSettings,
         loadCameraSettings,
         resetCamera,
+        getRightHandScreenPosition,
         runElectronWalkSequence,
         loadVRMA,
         startSmoothTransition,
+        setWindowDragging,
         loadIdleLoop,
         resetExpressionToNeutral,
         applyFacialExpression,
@@ -2733,47 +3104,49 @@ const CoreModule = (() => {
 })();
 
 // ============================================================
-// WEBSOCKET MODULE
+// AGENT API MODULE
 // ============================================================
-const WebSocketModule = (() => {
-    let ws = null;
-    let reconnectTimer = null;
-    let isConnected = false;
-    let messageQueue = [];
-
-    // Configuration
+const AgentApiModule = (() => {
+    // The gateway accepts chat-completions requests over HTTP. Keep the
+    // WebSocket-shaped setting name for backward-compatible local storage.
     const CONFIG = {
-      token: 'YOUR_TOKEN_HERE',
-      reconnectInterval: 3000,
-      maxReconnectAttempts: 10
+      token: 'YOUR_TOKEN_HERE'
     };
 
-    function getWebSocketUrl() {
+    function getGatewayUrl() {
       const localStorageUrl = localStorage.getItem('websocket_url');
       if (localStorageUrl && localStorageUrl.trim() !== '') {
-        logger.info('ws', 'Using WebSocket URL from localStorage:', localStorageUrl);
+        logger.info('http', 'Using gateway URL from localStorage:', localStorageUrl);
         return localStorageUrl.trim();
       }
+
+      // Browser development is served from a different origin than the
+      // local OpenClaw gateway. Use Vite's same-origin proxy so Chrome does
+      // not block the preflight request before the app can start.
+      if (!window.electronAPI && import.meta.env.DEV) {
+        const proxyUrl = `${window.location.origin}/__openclaw__`;
+        logger.info('http', 'Using browser development gateway proxy:', proxyUrl);
+        return proxyUrl;
+      }
       
-      const envUrl = import.meta.env.VITE_WEBSOCKET_URL;
+      const envUrl = import.meta.env.VITE_GATEWAY_URL;
       if (envUrl) {
-        logger.info('ws', 'Using WebSocket URL from environment variable:', envUrl);
+        logger.info('http', 'Using gateway URL from environment variable:', envUrl);
         return envUrl;
       }
       
       const defaultUrl = 'ws://localhost:18789';
-      logger.info('ws', 'Using default WebSocket URL:', defaultUrl);
+      logger.info('http', 'Using default gateway URL:', defaultUrl);
       return defaultUrl;
     }
 
     function getHttpBaseUrl() {
-      const wsUrl = getWebSocketUrl();
-      return wsUrl.replace(/^ws/, 'http');
+      return getGatewayUrl().replace(/^ws/, 'http');
     }
 
         function getAnimationUrl(fileName) {
             return window.getVRMAAnimationUrl?.(fileName)
-                || `${import.meta.env.VITE_ASSET_BASE_URL || './assets/'}VRMA/${fileName}`;
+                || `${import.meta.env.VITE_ASSET_BASE_URL || './'}VRMA/${fileName}`;
         }
 
         function getAvailableAnimationFiles() {
@@ -2802,13 +3175,16 @@ AVAILABLE EXPRESSIONS (always applied during speaking):
 
 RESPONSE FORMAT (JSON):
 For ALL the message in this WHOLE session, please respond with a JSON object containing:
-{ 'text': 'Your spoken response here',
-  'animation': {
-    'file': 'idle_airplane.vrma',  // or null for no animation
-    'timing': 'during'             // 'during' or 'after' only
+{ "text": "老師，早晨！",
+  "text_ja": "先生、おはよう！",
+  "animation": {
+    "file": "idle_airplane.vrma",
+    "timing": "during"
   },
-  'expression': {
-    'name': 'neutral'}}                // or null for no expression (always applied during speaking)
+  "expression": { "name": "neutral" }}
+
+${BILINGUAL_RESPONSE_INSTRUCTIONS}
+Animation and expression may be null when unnecessary. Use valid JSON with double quotes.
 
 ANIMATION TIMING OPTIONS:
 - 'during': play animation WHILE speaking
@@ -2819,8 +3195,11 @@ IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JS
 Do NOT include any extra text or explanations.
 Just provide the raw JSON object directly. Separate your sentences with line breaks.`;
 
-    let sessionStarted = false;
     let conversationHistory = [];
+    let initialGreetingRequest = null;
+    let initialGreetingPresentation = Promise.resolve();
+    let initialGreetingStarted = false;
+    let agentResponseQueue = Promise.resolve();
 
     async function sendAgentViaHttp(message, addToHistory = true) {
       const baseUrl = getHttpBaseUrl();
@@ -2829,10 +3208,11 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       const url = `${baseUrl}/v1/chat/completions`;
       logger.info('http', 'Sending agent request to:', url);
       
-      if (addToHistory) {
-        conversationHistory.push({ role: 'user', content: message });
-      }
-      const messagesToSend = addToHistory ? conversationHistory : [{ role: 'user', content: message }];
+      if (addToHistory) conversationHistory.push({ role: 'user', content: message });
+      const messagesToSend = [
+        { role: 'system', content: SYSTEM_INSTRUCTIONS },
+        ...(addToHistory ? conversationHistory : [{ role: 'user', content: message }])
+      ];
       
       const response = await fetch(url, {
         method: 'POST',
@@ -2841,9 +3221,11 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          model: 'openclaw',
-          messages: messagesToSend,
-          max_tokens: 4096
+          // Keep the request route-neutral so OpenClaw can use the configured
+          // native Codex runtime and its subscription authentication. Provider
+          // request overrides such as max_tokens force an embedded API route.
+          model: 'openclaw/default',
+          messages: messagesToSend
         })
       });
       
@@ -2869,37 +3251,47 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       return replyText;
     }
 
+    function prepareInitialGreeting() {
+      if (initialGreetingRequest) return initialGreetingRequest;
+
+      // A browser user may open the UI before configuring the gateway token.
+      // Do not create a guaranteed 401 console error during startup; the
+      // settings panel can provide the token before the first chat message.
+      const configuredToken = localStorage.getItem('openclaw_token');
+      if (!window.electronAPI && (!configuredToken || configuredToken === CONFIG.token)) {
+        logger.info('http', 'Skipping initial greeting until an OpenClaw token is configured');
+        initialGreetingRequest = Promise.resolve(null);
+        return initialGreetingRequest;
+      }
+
+      conversationHistory = [];
+      initialGreetingRequest = sendAgentViaHttp(
+        'Please greet the user briefly and naturally as the application starts.'
+      );
+      logger.info('http', 'Initial greeting request started before VRM loading');
+      return initialGreetingRequest;
+    }
+
     async function startSession() {
-      if (sessionStarted) return;
-      logger.info('session', 'Starting new OpenClaw session...');
+      if (initialGreetingStarted) return initialGreetingPresentation;
+      initialGreetingStarted = true;
+      window._directAgentRequestPending = true;
+      logger.info('http', 'Preparing initial greeting response (no OpenClaw session startup)');
 
-      try {
-        // Each HTTP request is already a new session, so no need to send /new
-        conversationHistory = [];
+      initialGreetingPresentation = (async () => {
+        try {
+          const reply = await (initialGreetingRequest || prepareInitialGreeting());
 
-        // Send system instructions as the first message
-        const reply = await sendAgentViaHttp(SYSTEM_INSTRUCTIONS);
-        logger.info('session', 'System instructions sent, processing reply as normal message...');
-
-        sessionStarted = true;
-
-        // 3. Treat the reply as a normal agent message — parse, speak, animate
-        if (reply) {
-          // Add agent reply to local history
-          if (window.addLocalHistoryMessage) {
-            const parsed = parseAgentResponse(reply);
-            const displayText = parsed?.text || reply;
-            window.addLocalHistoryMessage('agent', displayText);
-          }
-
+          if (reply) {
           const parsedResponse = parseAgentResponse(reply);
 
           if (parsedResponse && parsedResponse.text) {
             await executeAgentCommand(parsedResponse);
           } else {
             // Not JSON — just speak it as plain text
+            window.addLocalHistoryMessage?.('agent', reply);
             if (window.lipSyncSystem) {
-              window.lipSyncSystem.startSpeaking(reply);
+              await window.lipSyncSystem.startSpeaking(reply, '');
               const statusDiv = document.getElementById('status');
               if (statusDiv) {
                 const displayText = reply.length > 50 ? reply.substring(0, 50) + '...' : reply;
@@ -2909,13 +3301,29 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           }
         }
 
-        logger.info('session', 'Session ready');
-      } catch (error) {
-        logger.error('session', 'Failed to start session:', error);
-      }
+          logger.info('http', 'Initial greeting complete');
+        } catch (error) {
+          logger.error('http', 'Initial greeting failed:', error);
+        } finally {
+          window._directAgentRequestPending = false;
+        }
+      })();
+      return initialGreetingPresentation;
     }
 
-    async function sendAgentMessage(message) {
+    function sendAgentMessage(message) {
+      awarenessController?.onUserMessageStarted();
+      const queuedResponse = agentResponseQueue
+        .catch((error) => logger.error('http', 'Previous agent response failed:', error))
+        .then(() => initialGreetingPresentation)
+        .then(() => sendAgentMessageNow(message))
+        .finally(() => awarenessController?.onUserMessageFinished());
+      agentResponseQueue = queuedResponse;
+      return queuedResponse;
+    }
+
+    async function sendAgentMessageNow(message) {
+      window._directAgentRequestPending = true;
       try {
         // Only send the user message — system instructions were sent once at session start
         const replyText = await sendAgentViaHttp(message);
@@ -2938,10 +3346,6 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         const parsedResponse = parseAgentResponse(replyText);
         
         if (parsedResponse && parsedResponse.text) {
-          // Add agent reply to local history
-          if (window.addLocalHistoryMessage) {
-            window.addLocalHistoryMessage('agent', parsedResponse.text);
-          }
           await executeAgentCommand(parsedResponse);
         } else {
           // Not valid JSON — ignore it
@@ -2958,167 +3362,8 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         }
         if (window.enableMessaging) window.enableMessaging();
         if (window.resetMessagingPanel) window.resetMessagingPanel();
-      }
-    }
-
-    let reconnectAttempts = 0;
-
-    function initWebSocket() {
-      if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
-        logger.info('ws', 'WebSocket already connected or connecting');
-        return;
-      }
-
-      const savedToken = localStorage.getItem('openclaw_token');
-      if (savedToken && savedToken.trim() !== '') {
-        CONFIG.token = savedToken;
-        logger.info('ws', 'Using token from localStorage (first 8 chars:', savedToken.substring(0, 8) + '...)');
-      } else {
-        logger.error('ws', 'No token configured. Please set openclaw_token in localStorage.');
-        
-        const statusDiv = document.getElementById('status');
-        if (statusDiv) {
-          statusDiv.textContent = 'Error: OpenClaw token not configured. Please set in browser console with: localStorage.setItem("openclaw_token", "your-token")';
-          statusDiv.style.color = '#ff6b6b';
-        }
-        
-        return;
-      }
-
-      const wsUrl = getWebSocketUrl();
-      logger.info('ws', 'Connecting to OpenClaw gateway at:', wsUrl);
-      
-      try {
-        ws = new WebSocket(wsUrl);
-        
-        ws.onopen = handleOpen;
-        ws.onmessage = handleMessage;
-        ws.onerror = handleError;
-        ws.onclose = handleClose;
-      } catch (error) {
-        logger.error('ws', 'Error creating WebSocket:', error);
-        scheduleReconnect();
-      }
-    }
-
-    function handleOpen() {
-      logger.info('ws', 'Connected to OpenClaw gateway');
-      isConnected = true;
-      reconnectAttempts = 0;
-      
-      logger.info('ws', 'Waiting for connect.challenge...');
-    }
-
-    function handleMessage(event) {
-      try {
-        const data = JSON.parse(event.data);
-        logger.info('ws', 'Received message:', data);
-        
-        switch (data.type) {
-          case 'speak':
-            handleSpeakCommand(data);
-            break;
-          case 'animate':
-            handleAnimateCommand(data);
-            break;
-          case 'express':
-            handleExpressCommand(data);
-            break;
-          case 'event':
-            handleEvent(data);
-            break;
-          case 'res':
-                        handleAgentResponse(data);
-            break;
-          case 'ack':
-            logger.info('ws', 'Acknowledgment received:', data);
-            break;
-          default:
-            logger.warn('ws', 'Unknown message type:', data.type);
-        }
-      } catch (error) {
-        logger.error('ws', 'Error parsing message:', error);
-      }
-    }
-
-    function handleEvent(data) {
-      switch (data.event) {
-        case 'connect.challenge':
-          logger.info('ws', 'Connection challenge received, sending auth request');
-          
-          const connectParams = {
-            minProtocol: 4,
-            maxProtocol: 4,
-            client: {
-              id: 'cli',
-              version: '1.0.0',
-              platform: getPlatform(),
-              mode: 'cli'
-            },
-            role: 'operator',
-            scopes: ['operator.read', 'operator.write', 'chat.read', 'chat.write', 'agent'],
-            auth: {
-              token: CONFIG.token
-            }
-          };
-          
-          sendMessage({
-            type: 'req',
-            id: 'conn-' + Date.now(),
-            method: 'connect',
-            params: connectParams
-          });
-          break;
-        
-        case 'health':
-          break;
-        
-        case 'tick':
-          break;
-        
-        case 'agent':
-          break;
-        
-        default:
-          logger.info('ws', 'Unknown event type:', data.event);
-      }
-    }
-
-    function getPlatform() {
-      const userAgent = navigator.userAgent;
-      if (userAgent.indexOf('Win') !== -1) return 'windows';
-      if (userAgent.indexOf('Mac') !== -1) return 'macos';
-      if (userAgent.indexOf('Linux') !== -1) return 'linux';
-      if (userAgent.indexOf('Android') !== -1) return 'android';
-      if (userAgent.indexOf('iOS') !== -1) return 'ios';
-      return 'unknown';
-    }
-
-    function handleAgentResponse(data) {
-      logger.info('ws', 'Agent response received:', data);
-      
-      if (!data.ok) {
-        logger.error('ws', 'Error in response:', data);
-        const statusDiv = document.getElementById('status');
-        if (statusDiv) {
-          statusDiv.textContent = 'Error: ' + (data.payload?.error || 'Unknown error');
-          statusDiv.style.color = '#ff6b6b';
-        }
-        return;
-      }
-      
-      if (data.payload?.type === 'hello-ok') {
-        logger.info('ws', 'Connection successful, authenticated as:', data.payload.auth?.role);
-        const statusDiv = document.getElementById('status');
-        if (statusDiv) {
-          statusDiv.textContent = 'Connected to OpenClaw';
-          statusDiv.style.color = '#4CAF50';
-        }
-        
-        flushMessageQueue();
-        
-      } else {
-        logger.info('ws', 'Response data:', data.payload);
+      } finally {
+        window._directAgentRequestPending = false;
       }
     }
 
@@ -3142,6 +3387,12 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         }
         
         // Extract animation file
+        const japaneseMatch = text.match(/(?:'text_ja'|"text_ja")\s*:\s*(?:'([^']*(?:\\'[^']*)*)'|"((?:[^"\\]|\\.)*)")/s);
+        if (japaneseMatch) {
+          result.text_ja = normalizeJapaneseText((japaneseMatch[1] || japaneseMatch[2] || '')
+            .replace(/\\'/g, "'").replace(/\\"/g, '"'));
+        }
+
         const animFileMatch = text.match(/(?:'file'|"file")\s*:\s*(?:'([^']*)'|"([^"]*)")/);
         if (animFileMatch) {
           result.animation = { file: animFileMatch[1] || animFileMatch[2] || null };
@@ -3162,14 +3413,14 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         }
         
         if (result.text) {
-          logger.info('ws', 'Regex extraction succeeded:', result);
+            logger.info('agent', 'Regex extraction succeeded:', result);
           return result;
         }
         
-        logger.warn('ws', 'Regex extraction failed to find text field');
+        logger.warn('agent', 'Regex extraction failed to find text field');
         return null;
       } catch (e) {
-        logger.error('ws', 'Regex extraction error:', e);
+        logger.error('agent', 'Regex extraction error:', e);
         return null;
       }
     }
@@ -3184,7 +3435,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         } catch (e1) {
           // Second attempt: sanitize literal newlines/tabs in string values
           // Only do this if the raw parse failed (agent returned malformed JSON)
-          logger.info('ws', 'Raw JSON parse failed, trying with newline sanitization');
+          logger.info('agent', 'Raw JSON parse failed, trying with newline sanitization');
           try {
             const sanitized = text
               .trim()
@@ -3194,7 +3445,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
             parsed = JSON.parse(sanitized);
             needsUnescape = true;
           } catch (e2) {
-            logger.info('ws', 'Sanitized parse failed, trying single quote handling');
+            logger.info('agent', 'Sanitized parse failed, trying single quote handling');
             const fixedText = text
               .trim()
               .replace(/\n/g, '\\n')
@@ -3207,10 +3458,10 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
               needsUnescape = true;
             } catch (e3) {
               // Last resort: try regex extraction of text, animation, expression fields
-              logger.info('ws', 'JSON parse failed, trying regex field extraction');
+              logger.info('agent', 'JSON parse failed, trying regex field extraction');
               parsed = extractFieldsViaRegex(text);
               if (!parsed) {
-                logger.warn('ws', 'Failed to parse JSON response:', e3);
+                logger.warn('agent', 'Failed to parse JSON response:', e3);
                 return null;
               }
             }
@@ -3218,18 +3469,19 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         }
         
         if (!parsed.text || typeof parsed.text !== 'string') {
-          logger.warn('ws', 'Invalid JSON response: missing or invalid text field');
+          logger.warn('agent', 'Invalid JSON response: missing or invalid text field');
           return null;
         }
         
         // Unescape any \n back to actual newlines in the text field
         parsed.text = parsed.text.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
+        parsed.text_ja = normalizeJapaneseText(parsed.text_ja);
         
         if (parsed.animation && parsed.animation.file) {
                     const validAnimations = getAvailableAnimationFiles();
           
           if (!validAnimations.includes(parsed.animation.file)) {
-            logger.warn('ws', 'Invalid animation:', parsed.animation.file);
+            logger.warn('agent', 'Invalid animation:', parsed.animation.file);
             parsed.animation = null;
           }
         }
@@ -3238,7 +3490,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           const validExpressions = ['neutral', 'happy', 'sad', 'angry', 'surprised', 'shy', 'shocked', 'blink'];
           
           if (!validExpressions.includes(parsed.expression.name)) {
-            logger.warn('ws', 'Invalid expression:', parsed.expression.name);
+            logger.warn('agent', 'Invalid expression:', parsed.expression.name);
             parsed.expression = null;
           }
         }
@@ -3247,7 +3499,7 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         const validTimings = ['during', 'after', null];
         
         if (parsed.animation && !validTimings.includes(parsed.animation.timing)) {
-          logger.warn('ws', 'Invalid animation timing (before is not allowed):', parsed.animation.timing);
+          logger.warn('agent', 'Invalid animation timing (before is not allowed):', parsed.animation.timing);
           parsed.animation.timing = 'during';
         }
         
@@ -3256,17 +3508,26 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
           parsed.expression.timing = 'during';
         }
         
-        logger.info('ws', 'Parsed agent command:', parsed);
+        logger.info('agent', 'Parsed agent command:', parsed);
         return parsed;
         
       } catch (error) {
-        logger.warn('ws', 'Failed to parse JSON response:', error);
+        logger.warn('agent', 'Failed to parse JSON response:', error);
         return null;
       }
     }
 
-    async function executeAgentCommand(command) {
-      logger.info('ws', 'Executing agent command:', command);
+    let commandQueue = Promise.resolve();
+
+    function executeAgentCommand(command) {
+      commandQueue = commandQueue
+        .catch((error) => logger.error('http', 'Previous command failed:', error))
+        .then(() => executeAgentCommandNow(command));
+      return commandQueue;
+    }
+
+    async function executeAgentCommandNow(command) {
+      logger.info('agent', 'Executing agent command:', command);
       
       const statusDiv = document.getElementById('status');
       
@@ -3279,66 +3540,54 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       
       if (window.lipSyncSystem && window.lipSyncSystem.setAgentCommandActive) {
         window.lipSyncSystem.setAgentCommandActive(true);
-        logger.info('ws', 'Agent command active - idle loop prevented');
+        logger.info('agent', 'Agent command active - idle loop prevented');
       }
       
-      // Animation: only 'during' or 'after' (no 'before')
-      if (command.animation && command.animation.file && command.animation.timing === 'during') {
-                const animationUrl = getAnimationUrl(command.animation.file);
-        // Check if this animation is enabled in settings
-                if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(animationUrl)) {
-          logger.info('ws', 'Animation disabled in settings, skipping:', command.animation.file);
-        } else {
-          logger.info('ws', 'Playing animation DURING speaking (LoopOnce):', command.animation.file);
-          if (window.startSmoothTransition) {
-                        await window.startSmoothTransition(animationUrl, { loopMode: THREE.LoopOnce });
-            await new Promise(resolve => setTimeout(resolve, 500));
+      let startAnimation = null;
+      let historyAdded = false;
+      const addReplyToHistory = () => {
+        if (historyAdded) return;
+        historyAdded = true;
+        window.addLocalHistoryMessage?.('agent', command.text);
+      };
+      const presentation = {
+        beforePlay: async () => {
+          if (command.animation?.file && command.animation.timing === 'during') {
+            const url = getAnimationUrl(command.animation.file);
+            if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(url)) return;
+            try { startAnimation = await window.prepareSpeakingAnimation?.(url); }
+            catch (error) { logger.warn('animation', 'Could not prepare animation:', error); }
           }
-        }
-      }
-      
-      // Expression is always applied DURING speaking (forced)
-      // Apply AFTER animation starts so the animation doesn't override the expression
-      if (command.expression && command.expression.name) {
-        logger.info('ws', 'Applying expression (always during):', command.expression.name);
-        if (window.applyFacialExpression) {
-          window.applyFacialExpression(command.expression.name);
-        }
-      }
+        },
+        onStart: () => {
+          addReplyToHistory();
+          startAnimation?.();
+          if (command.expression?.name) window.applyFacialExpression?.(command.expression.name);
+        },
+        onTextOnly: addReplyToHistory,
+      };
       
       if (command.text && window.lipSyncSystem) {
-        logger.info('ws', 'Starting lip sync with text:', command.text.substring(0, 30) + '...');
-        
-        if (window.hideAllPanels) {
+        logger.info('agent', 'Starting lip sync with text:', command.text.substring(0, 30) + '...');
+
+        const historyPanel = document.getElementById('history-panel');
+        const keepHistoryOpen = historyPanel && historyPanel.style.display !== 'none';
+        let panelsHiddenForSpeech = false;
+
+        if (!keepHistoryOpen && window.hideAllPanels) {
           window.hideAllPanels();
+          panelsHiddenForSpeech = true;
         }
         
         if (statusDiv) {
-          const displayText = command.text.length > 50 ? command.text.substring(0, 50) + '...' : command.text;
-          statusDiv.textContent = 'Speaking: ' + displayText;
+          statusDiv.textContent = '準備日文語音…';
         }
         
-        window.lipSyncSystem.startSpeaking(command.text);
-        
-        await new Promise((resolve) => {
-          let notTalkingCount = 0;
-          const checkInterval = setInterval(() => {
-            if (!window.lipSyncSystem.isTalking()) {
-              notTalkingCount++;
-              if (notTalkingCount >= 10) {
-                clearInterval(checkInterval);
-                logger.info('ws', 'Lip sync confirmed complete after 10 checks');
-                resolve();
-              }
-            } else {
-              notTalkingCount = 0;
-            }
-          }, 100);
-        });
+        await window.lipSyncSystem.startSpeaking(command.text, normalizeJapaneseText(command.text_ja), presentation);
         
         await new Promise(resolve => setTimeout(resolve, 500));
         
-        if (window.restorePanels) {
+        if (panelsHiddenForSpeech && window.restorePanels) {
           window.restorePanels();
         }
       }
@@ -3347,9 +3596,9 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
                 const animationUrl = getAnimationUrl(command.animation.file);
         // Check if this animation is enabled in settings
                 if (window.isAnimationUrlEnabled && !window.isAnimationUrlEnabled(animationUrl)) {
-          logger.info('ws', 'Animation disabled in settings, skipping (after):', command.animation.file);
+          logger.info('agent', 'Animation disabled in settings, skipping (after):', command.animation.file);
         } else {
-          logger.info('ws', 'Playing animation AFTER speaking:', command.animation.file);
+          logger.info('agent', 'Playing animation AFTER speaking:', command.animation.file);
           if (statusDiv) {
             statusDiv.textContent = 'Playing animation after speaking...';
           }
@@ -3359,42 +3608,37 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
                         animationUrl,
             { loopMode: 2200 }
           );
-          logger.info('ws', 'After animation started, action:', action);
-          
-          logger.info('ws', 'Waiting minimum 5 seconds for after animation...');
-          await new Promise(resolve => setTimeout(resolve, 5000));
+          logger.info('agent', 'After animation started, action:', action);
           
           if (action && window.waitForActionEnd) {
             try {
               await window.waitForActionEnd(action, 60000, false);
-              logger.info('ws', 'After animation finished event received');
+              logger.info('agent', 'After animation finished event received');
             } catch (e) {
-              logger.warn('ws', 'After animation wait timed out or failed (this is OK):', e);
+              logger.warn('agent', 'After animation wait timed out or failed (this is OK):', e);
             }
           }
           
-          logger.info('ws', 'Additional 3 second delay for after animation...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          logger.info('ws', 'After animation fully complete');
+          logger.info('agent', 'After animation fully complete');
           }
         }
       }
       
       if (command.expression && command.expression.timing === 'after') {
-        logger.info('ws', 'Applying expression AFTER speaking:', command.expression.name);
+        logger.info('agent', 'Applying expression AFTER speaking:', command.expression.name);
         if (window.applyFacialExpression) {
           window.applyFacialExpression(command.expression.name);
         }
         
         setTimeout(() => {
-          logger.info('ws', 'Resetting expression to neutral');
+          logger.info('agent', 'Resetting expression to neutral');
           if (window.resetExpressionToNeutral) {
             window.resetExpressionToNeutral();
           }
         }, 2000);
       }
       
-      logger.info('ws', 'Returning to idle loop with neutral expression');
+      logger.info('agent', 'Returning to idle loop with neutral expression');
       if (window.loadIdleLoop) {
         await window.loadIdleLoop();
       }
@@ -3405,113 +3649,8 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
       
       if (window.lipSyncSystem && window.lipSyncSystem.setAgentCommandActive) {
         window.lipSyncSystem.setAgentCommandActive(false);
-        logger.info('ws', 'Agent command complete - idle loop allowed again');
+        logger.info('agent', 'Agent command complete - idle loop allowed again');
       }
-    }
-
-    function handleSpeakCommand(data) {
-      logger.info('ws', 'Speak command:', data.text);
-      
-      if (window.lipSyncSystem && data.text) {
-        window.lipSyncSystem.startSpeaking(data.text);
-      }
-    }
-
-    function handleAnimateCommand(data) {
-      logger.info('ws', 'Animate command:', data.animation);
-      
-      if (data.animation && window.startSmoothTransition) {
-                window.startSmoothTransition(getAnimationUrl(data.animation))
-          .then(() => {
-          })
-          .catch(error => {
-            logger.error('ws', 'Animation error:', error);
-          });
-      }
-    }
-
-    function handleExpressCommand(data) {
-      logger.info('ws', 'Express command:', data.expression);
-      
-      if (window.applyFacialExpression && data.expression) {
-        window.applyFacialExpression(data.expression);
-      }
-    }
-
-    function handleError(error) {
-      logger.error('ws', 'WebSocket error:', error);
-      isConnected = false;
-    }
-
-    function handleClose(event) {
-      logger.info('ws', 'WebSocket closed:', event.code, event.reason);
-      isConnected = false;
-      
-      if (reconnectAttempts < CONFIG.maxReconnectAttempts) {
-        scheduleReconnect();
-      } else {
-        logger.error('ws', 'Max reconnection attempts reached');
-      }
-    }
-
-    function scheduleReconnect() {
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-      }
-      
-      reconnectAttempts++;
-      logger.info('ws', `Scheduling reconnect attempt ${reconnectAttempts}/${CONFIG.maxReconnectAttempts} in ${CONFIG.reconnectInterval}ms`);
-      
-      reconnectTimer = setTimeout(() => {
-        initWebSocket();
-      }, CONFIG.reconnectInterval);
-    }
-
-    function sendMessage(data) {
-      const message = JSON.stringify(data);
-      
-      if (isConnected && ws && ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send(message);
-          logger.info('ws', 'Sent message:', data);
-        } catch (error) {
-          logger.error('ws', 'Error sending message:', error);
-          queueMessage(data);
-        }
-      } else {
-        logger.info('ws', 'WebSocket not connected, queuing message');
-        queueMessage(data);
-      }
-    }
-
-    function queueMessage(data) {
-      messageQueue.push(data);
-      if (messageQueue.length > 50) {
-        messageQueue.shift();
-      }
-    }
-
-    function flushMessageQueue() {
-      while (messageQueue.length > 0) {
-        const message = messageQueue.shift();
-        sendMessage(message);
-      }
-    }
-
-    function closeWebSocket() {
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-      
-      isConnected = false;
-      messageQueue = [];
-      reconnectAttempts = 0;
     }
 
     /**
@@ -3521,28 +3660,35 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
      * @param {string} message - The message to send
      * @returns {Promise<string>} The raw reply text from the agent
      */
-    async function sendAgentMessageRaw(message) {
+    async function sendAgentMessageRaw(message, options = {}) {
       try {
         // Send with conversation history context, but don't add the system message or reply to history
         const baseUrl = getHttpBaseUrl();
         const token = localStorage.getItem('openclaw_token') || CONFIG.token;
         const url = `${baseUrl}/v1/chat/completions`;
         
-        // Build messages: conversation history + the system event message
-        const messagesToSend = [...conversationHistory, { role: 'user', content: message }];
+        // Every POST is independent, so include the instructions on every
+        // request instead of relying on a gateway session.
+        const messagesToSend = [
+          { role: 'system', content: SYSTEM_INSTRUCTIONS },
+          ...conversationHistory,
+          { role: 'user', content: message }
+        ];
         
         logger.info('http', 'Sending agent request (with history, not persisted):', url);
         
         const response = await fetch(url, {
           method: 'POST',
+          signal: options.signal,
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
           body: JSON.stringify({
-            model: 'openclaw',
-            messages: messagesToSend,
-            max_tokens: 4096
+            // Use the configured default agent without provider-level request
+            // overrides, preserving native Codex runtime/auth selection.
+            model: 'openclaw/default',
+            messages: messagesToSend
           })
         });
         
@@ -3564,17 +3710,22 @@ Just provide the raw JSON object directly. Separate your sentences with line bre
         // Don't add system message or reply to conversationHistory
         return replyText;
       } catch (error) {
-        logger.error('http', 'sendAgentMessageRaw failed:', error);
+        // Awareness requests are intentionally cancellable when the user
+        // interacts with Hikari, starts a direct message, or disables
+        // awareness.  Fetch surfaces that normal control flow as an
+        // AbortError; do not report it as an HTTP failure.  Other awareness
+        // errors, and all errors from regular requests, remain visible.
+        if (!isExpectedAwarenessAbort(error, options.requestType)) {
+          logger.error('http', 'sendAgentMessageRaw failed:', error);
+        }
         throw error;
       }
     }
 
     return {
-      initWebSocket,
-      sendMessage,
-      closeWebSocket,
       sendAgentMessage,
       sendAgentMessageRaw,
+      prepareInitialGreeting,
       startSession,
       parseAgentResponse,
       executeAgentCommand
@@ -3880,7 +4031,7 @@ const HistoryModule = (() => {
  */
 function initElectronFeatures() {
     logger.info('electron', 'Initializing Electron-specific features');
-    
+
     // Setup window resize handler
     window.addEventListener('resize', CoreModule.handleResize);
     
@@ -3911,13 +4062,100 @@ function setupWindowDragging() {
     let mouseDownActive = false;
     let dragTransitionedToWindow = false;
     let hangAction = null;
+    let dragUpdateId = 0;
+    let dragStartPromise = null;
+    let dragPositionReady = false;
+    let dragCurrentWindowPos = null;
+    let dragTargetWindowPos = null;
+    let dragAnimationFrame = null;
+    let dragPositionRequestInFlight = false;
+    let dragPointer = null;
+    let mouseDownPos = { x: 0, y: 0 };
+    const DRAG_THRESHOLD = 30; // pixels outside canvas before starting drag
+    const DRAG_SMOOTHING = 0.28;
     
-    function isInsideCanvas(clientX, clientY) {
+    function getCanvasBounds() {
         const canvas = document.querySelector('canvas');
-        if (!canvas) return false;
-        const rect = canvas.getBoundingClientRect();
-        return clientX >= rect.left && clientX <= rect.right &&
-               clientY >= rect.top && clientY <= rect.bottom;
+        if (!canvas) return null;
+        return canvas.getBoundingClientRect();
+    }
+
+    function getDistanceOutsideCanvas(clientX, clientY) {
+        const bounds = getCanvasBounds();
+        if (!bounds) return 0;
+
+        let dx = 0, dy = 0;
+        if (clientX < bounds.left) dx = bounds.left - clientX;
+        else if (clientX > bounds.right) dx = clientX - bounds.right;
+
+        if (clientY < bounds.top) dy = bounds.top - clientY;
+        else if (clientY > bounds.bottom) dy = clientY - bounds.bottom;
+
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function isInsideCanvas(clientX, clientY) {
+        const bounds = getCanvasBounds();
+        if (!bounds) return false;
+        return clientX >= bounds.left && clientX <= bounds.right &&
+               clientY >= bounds.top && clientY <= bounds.bottom;
+    }
+
+    function updateDragTarget(screenX, screenY) {
+        if (!dragPositionReady || !window.windowDragOffset) return;
+        dragPointer = { x: screenX, y: screenY };
+
+        // Recalculate the cursor-to-hand offset continuously. The hang pose
+        // moves the hand, so a fixed offset from mousedown will drift away
+        // from the pointer during the drag.
+        const handPosition = CoreModule.getRightHandScreenPosition?.();
+        const windowScreenX = Number.isFinite(window.screenX) ? window.screenX : dragCurrentWindowPos?.x;
+        const windowScreenY = Number.isFinite(window.screenY) ? window.screenY : dragCurrentWindowPos?.y;
+        const handOffset = handPosition && Number.isFinite(windowScreenX) && Number.isFinite(windowScreenY)
+            ? { x: handPosition.x - windowScreenX, y: handPosition.y - windowScreenY }
+            : window.windowDragOffset;
+
+        dragTargetWindowPos = {
+            x: screenX - handOffset.x,
+            y: screenY - handOffset.y
+        };
+
+        if (dragAnimationFrame === null) {
+            const animateDrag = () => {
+                dragAnimationFrame = null;
+                if (!dragTransitionedToWindow || !dragCurrentWindowPos || !dragTargetWindowPos) return;
+
+                // Keep tracking the hand even while the pointer is stationary
+                // and the hang pose is still moving it.
+                if (dragPointer) {
+                    const handPosition = CoreModule.getRightHandScreenPosition?.();
+                    const windowScreenX = Number.isFinite(window.screenX) ? window.screenX : dragCurrentWindowPos.x;
+                    const windowScreenY = Number.isFinite(window.screenY) ? window.screenY : dragCurrentWindowPos.y;
+                    if (handPosition) {
+                        dragTargetWindowPos.x = dragPointer.x - (handPosition.x - windowScreenX);
+                        dragTargetWindowPos.y = dragPointer.y - (handPosition.y - windowScreenY);
+                    }
+                }
+
+                dragCurrentWindowPos.x += (dragTargetWindowPos.x - dragCurrentWindowPos.x) * DRAG_SMOOTHING;
+                dragCurrentWindowPos.y += (dragTargetWindowPos.y - dragCurrentWindowPos.y) * DRAG_SMOOTHING;
+                if (!dragPositionRequestInFlight) {
+                    dragPositionRequestInFlight = true;
+                    window.electronAPI.setWindowPosition(dragCurrentWindowPos.x, dragCurrentWindowPos.y)
+                        .catch(() => {})
+                        .finally(() => {
+                            dragPositionRequestInFlight = false;
+                        });
+                }
+
+                if (Math.abs(dragTargetWindowPos.x - dragCurrentWindowPos.x) > 0.5 ||
+                    Math.abs(dragTargetWindowPos.y - dragCurrentWindowPos.y) > 0.5 ||
+                    dragPositionRequestInFlight) {
+                    dragAnimationFrame = requestAnimationFrame(animateDrag);
+                }
+            };
+            dragAnimationFrame = requestAnimationFrame(animateDrag);
+        }
     }
     
     document.addEventListener('mousedown', (e) => {
@@ -3932,151 +4170,56 @@ function setupWindowDragging() {
         mouseDownActive = true;
         dragTransitionedToWindow = false;
         hangAction = null;
+        mouseDownPos = { x: e.clientX, y: e.clientY };
         
-        // Pre-fetch window position for potential drag
-        // Calculate offset from character's right hand to window position
-        if (window.electronAPI && currentVrm && currentVrm.humanoid) {
-            // Get right hand bone (VRM humanoid standard: rightHand)
-            const rightHandBone = currentVrm.humanoid.getNormalizedBoneNode('rightHand');
-            
-            if (rightHandBone) {
-                // Get right hand position in world coordinates
-                const handWorldPos = new THREE.Vector3();
-                rightHandBone.getWorldPosition(handWorldPos);
-                
-                // Convert to screen coordinates
-                const canvas = document.querySelector('canvas');
-                if (canvas && renderer && camera) {
-                    const handScreenPos = handWorldPos.clone().project(camera);
-                    const canvasRect = canvas.getBoundingClientRect();
-                    
-                    // Convert from NDC (-1 to 1) to screen coordinates
-                    const handScreenX = (handScreenPos.x * 0.5 + 0.5) * canvasRect.width + canvasRect.left;
-                    const handScreenY = (-handScreenPos.y * 0.5 + 0.5) * canvasRect.height + canvasRect.top;
-                    
-                    // Get window position
-                    window.electronAPI.getWindowPosition().then((pos) => {
-                        // Save original position for drag event message
-                        window._dragStartWindowPos = { x: pos.x, y: pos.y };
-                        // Offset from window position to right hand position
-                        window.windowDragOffset = {
-                            x: handScreenX - pos.x,
-                            y: handScreenY - pos.y
-                        };
-                        logger.info('drag', 'Right hand drag offset calculated:', window.windowDragOffset);
-                    }).catch(() => {});
-                }
-            } else {
-                // Fallback to canvas top-left if no right hand bone
-                const canvas = document.querySelector('canvas');
-                if (canvas) {
-                    const canvasRect = canvas.getBoundingClientRect();
-                    const canvasScreenX = window.screenX + canvasRect.left;
-                    const canvasScreenY = window.screenY + canvasRect.top;
-                    
-                    window.electronAPI.getWindowPosition().then((pos) => {
-                        window._dragStartWindowPos = { x: pos.x, y: pos.y };
-                        window.windowDragOffset = {
-                            x: canvasScreenX - pos.x,
-                            y: canvasScreenY - pos.y
-                        };
-                    }).catch(() => {});
-                }
-            }
-        } else if (window.electronAPI) {
-            // Fallback to mouse position if no VRM
-            window.electronAPI.getWindowPosition().then((pos) => {
+        // Pre-fetch window position for potential drag. Anchor the window to
+        // the visible right hand (rather than the canvas/head position).
+        if (window.electronAPI) {
+            dragPositionReady = false;
+            dragStartPromise = window.electronAPI.getWindowPosition().then((pos) => {
+                // Save original position for drag event message
                 window._dragStartWindowPos = { x: pos.x, y: pos.y };
+                const handPosition = CoreModule.getRightHandScreenPosition?.();
+                const anchor = handPosition || { x: e.screenX, y: e.screenY };
+                // Offset from the window's top-left to the right hand.
                 window.windowDragOffset = {
-                    x: e.screenX - pos.x,
-                    y: e.screenY - pos.y
+                    x: anchor.x - pos.x,
+                    y: anchor.y - pos.y
                 };
-            }).catch(() => {});
+                dragCurrentWindowPos = { x: pos.x, y: pos.y };
+                dragTargetWindowPos = { x: pos.x, y: pos.y };
+                dragPositionReady = true;
+            }).catch(() => {
+                dragStartPromise = null;
+            });
         }
     });
     
     document.addEventListener('mousemove', (e) => {
         if (!mouseDownActive) return;
         
-        if (dragTransitionedToWindow) {
-            // Already in drag mode — keep character's right hand at mouse position
-            if (window.electronAPI && currentVrm && currentVrm.humanoid) {
-                e.preventDefault();
-                
-                // Recalculate right hand position dynamically during drag
-                const rightHandBone = currentVrm.humanoid.getNormalizedBoneNode('rightHand');
-                if (rightHandBone && renderer && camera) {
-                    const handWorldPos = new THREE.Vector3();
-                    rightHandBone.getWorldPosition(handWorldPos);
-                    
-                    const canvas = document.querySelector('canvas');
-                    if (canvas) {
-                        const handScreenPos = handWorldPos.clone().project(camera);
-                        const canvasRect = canvas.getBoundingClientRect();
-                        
-                        // Convert from NDC (-1 to 1) to screen coordinates
-                        const handScreenX = (handScreenPos.x * 0.5 + 0.5) * canvasRect.width + canvasRect.left;
-                        const handScreenY = (-handScreenPos.y * 0.5 + 0.5) * canvasRect.height + canvasRect.top;
-                        
-                        // Move window so right hand follows mouse
-                        // window position = mouse screen pos - (hand screen pos - window pos)
-                        // = mouse screen pos - hand screen pos + window pos
-                        // But we want: hand screen pos = mouse screen pos
-                        // So: window pos = mouse screen pos - (hand screen pos - window pos)
-                        // = mouse screen pos - hand screen pos + window pos
-                        // This means we need to track the offset from window to hand
-                        
-                        // Get current window position
-                        window.electronAPI.getWindowPosition().then((pos) => {
-                            const newX = e.screenX - (handScreenX - pos.x);
-                            const newY = e.screenY - (handScreenY - pos.y);
-                            try {
-                                window.electronAPI.setWindowPosition(newX, newY);
-                            } catch (err) {
-                                logger.warn('electron', 'failed to update window position:', err);
-                            }
-                        }).catch(() => {});
-                    }
-                } else {
-                    // Fallback to static offset
-                    const newX = e.screenX - (window.windowDragOffset?.x || 0);
-                    const newY = e.screenY - (window.windowDragOffset?.y || 0);
-                    try {
-                        window.electronAPI.setWindowPosition(newX, newY);
-                    } catch (err) {
-                        logger.warn('electron', 'failed to update window position:', err);
-                    }
-                }
-            } else if (window.electronAPI) {
-                // Fallback to static offset
-                e.preventDefault();
-                const newX = e.screenX - (window.windowDragOffset?.x || 0);
-                const newY = e.screenY - (window.windowDragOffset?.y || 0);
-                try {
-                    window.electronAPI.setWindowPosition(newX, newY);
-                } catch (err) {
-                    logger.warn('electron', 'failed to update window position:', err);
-                }
-            }
-            return;
-        }
+        // Check if mouse has moved outside canvas by threshold distance
+        const distanceOutside = getDistanceOutsideCanvas(e.clientX, e.clientY);
         
-        // Check if mouse has left the canvas while button is down
-        if (!isInsideCanvas(e.clientX, e.clientY)) {
-            // Mouse left canvas → switch to window drag mode
+        if (!dragTransitionedToWindow && distanceOutside >= DRAG_THRESHOLD) {
+            // Mouse moved outside canvas enough → switch to window drag mode
             dragTransitionedToWindow = true;
+            noteDirectHikariInteraction();
             window.isWindowDragging = true;
+            CoreModule.setWindowDragging?.(true);
+            window._dragTransitionedToWindow = true; // Signal to touch detection
             // Ensure window captures all mouse events during drag
             if (window.electronAPI?.setIgnoreMouseEvents) {
                 window.electronAPI.setIgnoreMouseEvents(false);
             }
-            logger.info('drag', 'Mouse left canvas, starting window drag');
+            logger.info('drag', 'Mouse left canvas area, starting window drag', { distanceOutside });
             
             // Play first half of hang.vrma
             if (window.startSmoothTransition) {
-                window.startSmoothTransition(window.getVRMAAnimationUrl?.('hang.vrma') || './assets/VRMA/hang.vrma', { 
+                window.startSmoothTransition(window.getVRMAAnimationUrl?.('hang.vrma') || './VRMA/hang.vrma', { 
                     loopMode: THREE.LoopOnce, 
-                    startOffset: 0 
+                    startOffset: 0,
+                    allowDuringDrag: true
                 })
                 .then((action) => {
                     hangAction = action;
@@ -4092,7 +4235,24 @@ function setupWindowDragging() {
                 .catch(() => {});
             }
         }
-        // If still inside canvas, touch detection on renderer handles it — do nothing here
+
+        if (dragTransitionedToWindow) {
+            if (window.electronAPI) {
+                e.preventDefault();
+                // Keep a stable cursor-to-window offset and ease toward the
+                // latest target. This avoids the jump caused by racing IPC
+                // position reads when the pointer leaves the canvas.
+                updateDragTarget(e.screenX, e.screenY);
+                if (!dragPositionReady && dragStartPromise) {
+                    dragStartPromise.then(() => {
+                        if (dragTransitionedToWindow) updateDragTarget(e.screenX, e.screenY);
+                    });
+                }
+            }
+            return;
+        }
+
+        // If still inside canvas or not far enough outside, touch detection on renderer handles it — do nothing here
     });
     
     document.addEventListener('mouseup', () => {
@@ -4101,6 +4261,7 @@ function setupWindowDragging() {
         
         if (dragTransitionedToWindow) {
             window.isWindowDragging = false;
+            window._dragTransitionedToWindow = false;
             logger.info('drag', 'Mouse up, ending window drag');
             
             // Get current window position for the event message
@@ -4120,6 +4281,9 @@ function setupWindowDragging() {
                 const callIdleLoop = () => {
                     if (!idleLoopCalled && window.loadIdleLoop) {
                         idleLoopCalled = true;
+                        // Release queued idle/reply animations only after the
+                        // hang animation has completed.
+                        CoreModule.setWindowDragging?.(false);
                         window.loadIdleLoop();
                     }
                 };
@@ -4140,14 +4304,35 @@ function setupWindowDragging() {
                 setTimeout(callIdleLoop, 6000);
             } else {
                 // Fallback: just return to idle
+                CoreModule.setWindowDragging?.(false);
                 if (window.loadIdleLoop) window.loadIdleLoop();
             }
             hangAction = null;
             dragTransitionedToWindow = false;
+            dragPositionReady = false;
+            dragStartPromise = null;
+            dragTargetWindowPos = null;
+            dragPointer = null;
+            dragPositionRequestInFlight = false;
+            if (dragAnimationFrame !== null) {
+                cancelAnimationFrame(dragAnimationFrame);
+                dragAnimationFrame = null;
+            }
         }
         // If mouse stayed inside canvas → touch event already handled by renderer
     });
     
+    // Reset drag state if mouse leaves the entire document
+    document.addEventListener('mouseleave', () => {
+        if (dragTransitionedToWindow) {
+            dragTransitionedToWindow = false;
+            window.isWindowDragging = false;
+            CoreModule.setWindowDragging?.(false);
+            window._dragTransitionedToWindow = false;
+            logger.info('drag', 'Mouse left document, resetting drag state');
+        }
+    });
+
     // Note: Don't reset on mouseleave — allow tracking even when mouse goes outside window bounds
 }
 
@@ -4161,7 +4346,7 @@ const animationToggleKeys = [
     'walk', 'touch', 'sit',
     'idle_airplane', 'idle_look', 'idle_loop', 'idle_shoot',
     'idle_sport', 'idle_stretch', 'idle_vSign',
-    'wave_both', 'wave_fast', 'wave_left', 'wave_right',
+    'wave_both', 'wave_fast',
     'start_2turnAround'
 ];
 
@@ -4257,10 +4442,16 @@ window.isAnimationUrlEnabled = isAnimationUrlEnabled;
 function setupUIEventListeners() {
 logger.info('electron', 'Setting up UI event listeners');
 
+    document.addEventListener('pointerdown', (event) => {
+        if (event.target.closest?.('.controls, .settings-panel, .toggle-btn, #history-panel')) {
+            noteDirectHikariInteraction();
+        }
+    }, { capture: true });
+
     // Animation toggle settings
     setupAnimationToggles();
 
-    // WebSocket URL + Token configuration (combined button)
+    // Gateway URL and token configuration
     setupWebSocketUrlInput();
     
     // Lip sync panel
@@ -4312,6 +4503,23 @@ logger.info('electron', 'Setting up UI event listeners');
             }
         });
     }
+
+    // Eye-follow angle control
+    const eyeFollowSlider = document.getElementById('eyeFollowSlider');
+    const eyeFollowValue = document.getElementById('eyeFollowValue');
+    if (eyeFollowSlider && eyeFollowValue) {
+        const savedAngle = Number.parseFloat(localStorage.getItem('electron_eye_follow_degrees'));
+        const initialAngle = Number.isFinite(savedAngle) ? savedAngle : Number.parseFloat(eyeFollowSlider.value);
+        const appliedAngle = CoreModule.setMouseLookMaxAngle(initialAngle);
+        eyeFollowSlider.value = String(appliedAngle);
+        eyeFollowValue.textContent = `${appliedAngle.toFixed(0)}°`;
+
+        eyeFollowSlider.addEventListener('input', (event) => {
+            const angle = CoreModule.setMouseLookMaxAngle(event.target.value);
+            eyeFollowValue.textContent = `${angle.toFixed(0)}°`;
+            logger.info('electron', 'Eye-follow angle set to:', angle);
+        });
+    }
     
     // Light controls
     setupLightControls();
@@ -4360,9 +4568,6 @@ function setupToggleButtons() {
         if (panel) {
             const wasHidden = panel.style.display === 'none';
             panel.style.display = wasHidden ? 'block' : 'none';
-            // Send event to agent when settings panel is manually toggled
-            const action = wasHidden ? 'shown' : 'hidden';
-            sendEventToAgent('panel_toggle', `The settings panel has been manually ${action} by the user.`);
         }
     });
     document.body.appendChild(toggleSettingsBtn);
@@ -4377,10 +4582,22 @@ function setupToggleButtons() {
     toggleHistoryBtn.style.left = '10px';
     toggleHistoryBtn.addEventListener('click', () => {
         const historyPanel = document.getElementById('history-panel');
-        const wasHidden = !historyPanel || historyPanel.style.display === 'none';
-        HistoryModule.toggleHistoryPanel();
+        const messagingPanel = document.getElementById('lipSyncPanel');
+        const historyVisible = historyPanel && historyPanel.style.display !== 'none';
+        const messagingVisible = messagingPanel && messagingPanel.style.display !== 'none';
+
+        if (historyVisible) {
+            HistoryModule.hideHistoryPanel();
+        } else if (messagingVisible) {
+            // When only the composer is visible, the button closes it without
+            // opening conversation history.
+            CoreModule.hideMessagingPanel();
+        } else {
+            HistoryModule.showHistoryPanel();
+        }
+
         // Send event to agent when history panel is manually toggled
-        const action = wasHidden ? 'shown' : 'hidden';
+        const action = historyVisible || messagingVisible ? 'hidden' : 'shown';
         sendEventToAgent('panel_toggle', `The conversation history panel has been manually ${action} by the user.`);
     });
     document.body.appendChild(toggleHistoryBtn);
@@ -4393,17 +4610,17 @@ function setupToggleButtons() {
 }
 
 /**
- * Setup WebSocket URL input
+ * Setup gateway URL input
  */
 function setupWebSocketUrlInput() {
-    logger.info('electron', 'Setting up WebSocket URL input + Save & Connect button');
+    logger.info('electron', 'Setting up gateway URL input');
     
     const wsUrlInput = document.getElementById('websocketUrlInput');
     const tokenInput = document.getElementById('tokenInput');
     // Use the actual button ID from the HTML (id="saveConnectBtn")
     const saveConnectBtn = document.getElementById('saveConnectBtn');
     
-    // Load saved WebSocket URL and token into inputs
+    // Load the saved gateway URL and token into the inputs.
     const savedWsUrl = localStorage.getItem('websocket_url');
     if (wsUrlInput) {
         wsUrlInput.value = savedWsUrl || '';
@@ -4414,14 +4631,14 @@ function setupWebSocketUrlInput() {
     
     if (saveConnectBtn) {
         saveConnectBtn.addEventListener('click', () => {
-            // 1. Save WebSocket URL
+            // Save the gateway URL used by the HTTP chat API.
             const url = wsUrlInput ? wsUrlInput.value.trim() : '';
             if (url) {
                 localStorage.setItem('websocket_url', url);
-                logger.info('electron', 'WebSocket URL saved:', url);
+                logger.info('electron', 'Gateway URL saved:', url);
             } else {
                 localStorage.removeItem('websocket_url');
-                logger.info('electron', 'WebSocket URL cleared');
+                logger.info('electron', 'Gateway URL cleared');
             }
             
             // 2. Save OpenClaw token
@@ -4437,15 +4654,10 @@ function setupWebSocketUrlInput() {
             // 3. Show status message
             const statusDiv = document.getElementById('status');
             if (statusDiv) {
-                statusDiv.textContent = 'Settings saved! Reconnecting...';
+                statusDiv.textContent = 'Settings saved!';
                 statusDiv.style.color = '#4CAF50';
             }
             
-            // 4. Reconnect with new URL + token
-            WebSocketModule.closeWebSocket();
-            setTimeout(() => {
-                WebSocketModule.initWebSocket();
-            }, 500);
         });
         
         // Allow Enter key to trigger connect from either input
@@ -4461,7 +4673,7 @@ function setupWebSocketUrlInput() {
             tokenInput.addEventListener('keypress', triggerSave);
         }
     } else {
-        logger.warn('electron', 'Save & Connect button (#saveConnectBtn) not found in DOM');
+        logger.warn('electron', 'Save button (#saveConnectBtn) not found in DOM');
     }
 }
 
@@ -4496,7 +4708,7 @@ function exposeCoreObjects() {
             window.camera = window.camera;
             window.controls = window.controls;
             
-            // Attach messaging control functions to window for WebSocket access
+            // Attach messaging control functions to window for agent API access.
             window.enableMessaging = CoreModule.enableMessaging;
             window.disableMessaging = CoreModule.disableMessaging;
             window.setMessagingThinking = CoreModule.setMessagingThinking;
@@ -4512,16 +4724,6 @@ function exposeCoreObjects() {
     });
 }
 
-/**
- * Initialize WebSocket connection
- */
-function initWebSocket() {
-    // Initialize WebSocket after a short delay to ensure DOM is ready
-    setTimeout(() => {
-        WebSocketModule.initWebSocket();
-    }, 1000);
-}
-
 // ============================================================
 // INITIALIZATION
 // ============================================================
@@ -4529,6 +4731,10 @@ async function initElectronApp() {
     logger.info('electron', 'Initializing Hikari Electron App');
     
     try {
+        // Start the greeting HTTP request before the VRM download. The reply
+        // is held for presentation until the renderer is ready.
+        AgentApiModule.prepareInitialGreeting();
+
         // Setup toggle buttons
         setupToggleButtons();
         
@@ -4549,24 +4755,38 @@ async function initElectronApp() {
         HistoryModule.initHistoryPanel();
         
         // Expose HTTP-based agent messaging (bypasses WS scope issue)
-        window.sendAgentMessage = WebSocketModule.sendAgentMessage;
+        window.sendAgentMessage = AgentApiModule.sendAgentMessage;
         // Expose local history function
         window.addLocalHistoryMessage = HistoryModule.addLocalHistoryMessage;
-        // Expose startSession function
-        window.startSession = WebSocketModule.startSession;
-        logger.info('electron', 'WebSocket sendMessage + sendAgentMessage + startSession exposed to window');
+        // Compatibility name; this processes the already-started greeting and
+        // does not create or reset an OpenClaw session.
+        window.startSession = AgentApiModule.startSession;
+        logger.info('electron', 'HTTP agent messaging exposed');
         
         logger.info('electron', 'History functions exposed to window');
         
-        // Initialize WebSocket connection
-        initWebSocket();
-        
-        // Start OpenClaw session (reset + send system instructions once)
-        setTimeout(() => {
-            if (window.startSession) {
-                window.startSession();
-            }
-        }, 3000);
+        // Present the greeting as soon as the VRM/core systems are ready.
+        AgentApiModule.startSession();
+
+        awarenessController = new AwarenessController({
+            api: window.electronAPI?.awareness,
+            logger,
+            sendAgentMessageRaw: AgentApiModule.sendAgentMessageRaw,
+            parseAgentResponse: AgentApiModule.parseAgentResponse,
+            executeAgentCommand: AgentApiModule.executeAgentCommand,
+            addHistoryMessage: HistoryModule.addLocalHistoryMessage,
+            isAgentBusy: () => (
+                isAgentRequestInProgress ||
+                Boolean(window._agentRequestPending) ||
+                Boolean(window._directAgentRequestPending)
+            ),
+            isSpeaking: () => Boolean(window.lipSyncSystem?.isTalking?.())
+        });
+        await awarenessController.init();
+        window.addEventListener('beforeunload', () => {
+            window.lipSyncSystem?.stopSpeaking();
+            awarenessController?.destroy();
+        }, { once: true });
         
         logger.info('electron', 'Hikari Electron App initialized successfully');
         

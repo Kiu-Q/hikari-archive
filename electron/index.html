@@ -55,6 +55,36 @@
             align-items: center;
             gap: 12px;
         }
+        .awareness-control {
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .awareness-toggle {
+            min-width: 0 !important;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+        .awareness-toggle input[type="checkbox"] {
+            flex: 0 0 auto;
+            width: auto;
+            min-width: 0;
+            accent-color: #4CAF50;
+        }
+        .awareness-status {
+            margin-left: auto;
+            color: #aaa;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .awareness-permission-btn {
+            width: 100%;
+            padding: 7px 10px !important;
+            font-size: 11px;
+            letter-spacing: 0.2px !important;
+            text-transform: none !important;
+        }
         .controls label {
             min-width: 110px;
             font-weight: 500;
@@ -398,9 +428,9 @@
     <!-- Main Settings Panel (can be toggled with ⚙️ button) -->
     <div class="controls" id="settingsPanel" style="display: none;">
         <div>
-            <label>WebSocket URL:</label>
+            <label>Gateway URL:</label>
             <input type="text" id="websocketUrlInput"
-                placeholder="ws://localhost:18789" />
+                placeholder="http://localhost:18789" />
         </div>
         <div>
             <label>OpenClaw Token:</label>
@@ -411,7 +441,24 @@
             <label>Speaking Speed: <span id="speakingSpeedValue">1.0x</span></label>
             <input type="range" id="speakingSpeedSlider" min="0.5" max="2.0" step="0.1" value="1" style="flex: 1;" />
         </div>
-        <button id="saveConnectBtn" class="full-width-btn">Save & Connect</button>
+        <div class="light-control">
+            <label>Eye Follow: <span id="eyeFollowValue">20°</span></label>
+            <input type="range" id="eyeFollowSlider" min="0" max="45" step="1" value="20" style="flex: 1;" />
+        </div>
+        <div class="awareness-control">
+            <label class="awareness-toggle" for="desktopAwarenessToggle">
+                <input type="checkbox" id="desktopAwarenessToggle">
+                <span>Desktop Awareness</span>
+            </label>
+            <span class="awareness-status" id="desktopAwarenessStatus">Off</span>
+        </div>
+        <button id="desktopAwarenessScreenPermission" class="awareness-permission-btn" type="button" hidden>
+            Open Screen Recording Settings
+        </button>
+        <button id="desktopAwarenessInputPermission" class="awareness-permission-btn" type="button" hidden>
+            Open Keyboard Monitoring Settings
+        </button>
+        <button id="saveConnectBtn" class="full-width-btn">Save Settings</button>
 
         <!-- Animation Toggles -->
         <div class="anim-toggles">
@@ -434,8 +481,6 @@
                     <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_vSign" checked> V-Sign</label>
                     <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_both" checked> Wave Both</label>
                     <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_fast" checked> Wave Fast</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_left" checked> Wave Left</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_right" checked> Wave Right</label>
                     <label class="anim-checkbox-item"><input type="checkbox" id="anim-start_2turnAround" checked> Turn Around</label>
                 </div>
             </div>
