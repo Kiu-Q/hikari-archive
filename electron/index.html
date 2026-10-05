@@ -32,125 +32,291 @@
             height: 100% !important;
         }
 
-        /* Main settings panel (top-left) - moved further right to avoid button overlap */
+        /* Compact settings panel */
         .controls {
             position: absolute;
             top: 10px;
             left: 100px;
-            background: rgba(0, 0, 0, 0.6);
-            color: white;
-            padding: 24px;
-            border-radius: 12px;
             z-index: 100;
             display: flex;
             flex-direction: column;
-            gap: 16px;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            width: 360px;
+            gap: 0;
             box-sizing: border-box;
+            width: min(360px, calc(100vw - 110px));
+            max-height: calc(100vh - 20px);
+            overflow: hidden;
+            padding: 16px;
+            border: 1px solid rgba(195, 220, 214, 0.16);
+            border-radius: 18px;
+            color: #f1f5f4;
+            background: linear-gradient(155deg, rgba(23, 31, 34, 0.96), rgba(12, 17, 20, 0.94));
+            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.38), inset 0 1px rgba(255, 255, 255, 0.06);
+            -webkit-backdrop-filter: blur(22px);
+            backdrop-filter: blur(22px);
         }
-        .controls > div {
+        .settings-header {
             display: flex;
             align-items: center;
-            gap: 12px;
-        }
-        .awareness-control {
             justify-content: space-between;
-            gap: 10px;
+            gap: 12px;
+            margin-bottom: 14px;
         }
-        .awareness-toggle {
-            min-width: 0 !important;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
+        .settings-kicker {
+            display: block;
+            margin-bottom: 3px;
+            color: #9bb8ad;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1.8px;
+        }
+        .settings-title {
+            margin: 0;
+            color: #f5f8f7;
+            font-size: 20px;
+            font-weight: 650;
+            letter-spacing: -0.3px;
+        }
+        .controls button.settings-close {
+            display: grid;
+            flex: 0 0 32px;
+            place-items: center;
+            width: 32px;
+            height: 32px;
+            padding: 0;
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            border-radius: 10px;
+            color: #c9d3d0;
+            background: rgba(255, 255, 255, 0.055);
+            font-size: 20px;
+            font-weight: 400;
+            line-height: 1;
             cursor: pointer;
         }
-        .awareness-toggle input[type="checkbox"] {
-            flex: 0 0 auto;
-            width: auto;
+        .settings-tabs {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 3px;
+            margin: 0 -2px 14px;
+            padding: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.055);
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+        .controls button.settings-tab {
             min-width: 0;
-            accent-color: #4CAF50;
+            padding: 8px 3px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            color: #9eaaa7;
+            background: transparent;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0;
+            line-height: 1.1;
+            text-transform: none;
+            cursor: pointer;
+        }
+        .controls button.settings-tab:hover:not(:disabled) {
+            color: #e5eeea;
+            background: rgba(255, 255, 255, 0.055);
+            transform: none;
+        }
+        .controls button.settings-tab.is-active {
+            border-color: rgba(138, 211, 177, 0.2);
+            color: #d7f6e6;
+            background: rgba(74, 153, 112, 0.22);
+            box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+        }
+        .settings-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: calc(100vh - 174px);
+            overflow: auto;
+            overscroll-behavior: contain;
+            scrollbar-color: rgba(195, 220, 214, 0.25) transparent;
+            scrollbar-width: thin;
+        }
+        .settings-pane {
+            display: none;
+            min-width: 0;
+        }
+        .settings-pane.is-active {
+            display: block;
+        }
+        .settings-pane[hidden] { display: none !important; }
+        .settings-section-title {
+            margin: 0 0 10px;
+            color: #aebbb7;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        .settings-section-title.is-spaced { margin-top: 20px; }
+        .settings-field {
+            margin-bottom: 16px;
+        }
+        .settings-field.is-spaced { margin-top: 13px; }
+        .settings-field:last-child { margin-bottom: 4px; }
+        .settings-field-label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 7px;
+            color: #e2e9e6;
+            font-size: 12px;
+            font-weight: 550;
+        }
+        .settings-value {
+            color: #a7d9bf;
+            font-variant-numeric: tabular-nums;
+        }
+        .settings-text-input {
+            display: block;
+            width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
+            padding: 10px 11px;
+            border: 1px solid rgba(218, 233, 226, 0.13);
+            border-radius: 10px;
+            outline: none;
+            color: #f2f7f4;
+            background: rgba(255, 255, 255, 0.055);
+            font: inherit;
+            font-size: 12px;
+            transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+        }
+        .settings-text-input::placeholder { color: #74827d; }
+        .settings-text-input:focus-visible {
+            border-color: rgba(130, 216, 172, 0.75);
+            background: rgba(255, 255, 255, 0.085);
+            box-shadow: 0 0 0 3px rgba(105, 202, 151, 0.13);
+        }
+        .settings-range {
+            display: block;
+            width: 100%;
+            margin: 0;
+            accent-color: #77c99a;
+            cursor: pointer;
+        }
+        .settings-switch-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            min-height: 42px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+        }
+        .settings-switch-row:last-child { border-bottom: 0; }
+        .awareness-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            min-width: 0;
+            color: #e1e9e5;
+            font-size: 12px;
+            line-height: 1.35;
+            cursor: pointer;
+        }
+        .awareness-toggle input[type="checkbox"],
+        .anim-checkbox-item input[type="checkbox"] {
+            flex: 0 0 auto;
+            width: 15px;
+            height: 15px;
+            margin: 0;
+            accent-color: #77c99a;
+            cursor: pointer;
         }
         .awareness-status {
+            flex: 0 1 auto;
             margin-left: auto;
-            color: #aaa;
-            font-size: 12px;
-            white-space: nowrap;
+            color: #93a49d;
+            font-size: 10px;
+            line-height: 1.4;
+            text-align: right;
+        }
+        .status-line {
+            display: block;
+            padding: 7px 0 0;
+            color: #8d9e97;
+            font-size: 10px;
+            line-height: 1.45;
+            overflow-wrap: anywhere;
         }
         .awareness-permission-btn {
             width: 100%;
-            padding: 7px 10px !important;
-            font-size: 11px;
-            letter-spacing: 0.2px !important;
+            margin: 7px 0 1px;
+            padding: 8px 10px !important;
+            border: 1px solid rgba(190, 213, 202, 0.12) !important;
+            color: #cbd8d1 !important;
+            background: rgba(255, 255, 255, 0.055) !important;
+            font-size: 10px !important;
+            font-weight: 550 !important;
+            letter-spacing: 0 !important;
+            text-align: left;
             text-transform: none !important;
         }
-        .controls label {
-            min-width: 110px;
-            font-weight: 500;
-            color: #e0e0e0;
-            font-size: 13px;
+        .awareness-permission-btn:hover:not(:disabled) {
+            border-color: rgba(130, 216, 172, 0.3) !important;
+            background: rgba(255, 255, 255, 0.09) !important;
+            transform: none !important;
         }
-        .controls input[type="text"],
-        .controls input[type="password"] {
-            flex: 1;
+        .controls button[hidden] { display: none; }
+        .controls button.primary-action {
+            width: 100%;
+            padding: 11px 14px;
+            border: 1px solid rgba(173, 241, 200, 0.23);
+            border-radius: 10px;
+            color: #effbf3;
+            background: linear-gradient(145deg, #388960, #236747);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+            text-transform: none;
+            cursor: pointer;
+            transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+        }
+        .controls button.primary-action:hover:not(:disabled) {
+            background: linear-gradient(145deg, #429a6c, #2b7752);
+            box-shadow: 0 5px 16px rgba(25, 107, 65, 0.24);
+            transform: translateY(-1px);
+        }
+        .controls button:disabled { cursor: not-allowed; opacity: 0.5; }
+        .controls :focus-visible {
+            outline: 2px solid rgba(133, 225, 174, 0.8);
+            outline-offset: 2px;
+        }
+        .anim-toggles {
+            padding-top: 2px;
+        }
+        .anim-toggles .anim-section-label { display: none; }
+        .anim-toggles .anim-category { margin: 0 0 15px; }
+        .anim-toggles .anim-category:last-child { margin-bottom: 0; }
+        .anim-toggles .anim-checkbox-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 7px;
+        }
+        .anim-toggles .anim-checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
             min-width: 0;
-            padding: 10px 14px;
-            border: 1px solid #555;
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            font-size: 14px;
-            box-sizing: border-box;
-        }
-        .controls input[type="text"]::placeholder,
-        .controls input[type="password"]::placeholder {
-            color: #aaa;
-        }
-        .controls input[type="text"]:focus,
-        .controls input[type="password"]:focus {
-            outline: none;
-            border-color: #4CAF50;
-            background: rgba(255, 255, 255, 0.2);
+            color: #d0dad5;
+            font-size: 11px;
+            line-height: 1.25;
+            cursor: pointer;
         }
         .status-message {
-            text-align: center;
-            padding: 8px 0;
-            font-size: 12px;
-            color: #ccc;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            margin-top: 4px;
-        }
-
-        /* Button styles - green buttons */
-        .controls button {
-            padding: 10px 15px;
-            background: linear-gradient(145deg, #4CAF50, #2e8b57);
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: background 0.3s ease, transform 0.1s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .controls button:hover:not(:disabled) {
-            background: linear-gradient(145deg, #45a049, #228b22);
-            transform: translateY(-2px);
-        }
-        .controls button:active {
-            transform: translateY(0);
-        }
-        .controls button:disabled {
-            background: #666;
-            cursor: not-allowed;
-            opacity: 0.5;
-        }
-        .controls .full-width-btn {
-            width: 100%;
-            padding: 12px 15px;
-            font-size: 14px;
+            margin-top: 12px;
+            padding: 10px 1px 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            color: #9aa9a2;
+            font-size: 10px;
+            line-height: 1.4;
+            overflow-wrap: anywhere;
         }
 
         /* Status display */
@@ -301,58 +467,6 @@
             transform: translateY(0);
         }
 
-       /* Light control sliders */
-        .light-control {
-            margin-top: 8px;
-        }
-        .light-control label {
-            display: block;
-            font-size: 12px;
-            color: #e0e0e0;
-            margin-bottom: 4px;
-        }
-        .light-control input[type="range"] {
-            width: 100%;
-            cursor: pointer;
-        }
-
-        /* Animation toggles section */
-        .anim-toggles {
-            margin-top: 8px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            padding-top: 12px;
-        }
-        .anim-toggles .anim-section-label {
-            font-size: 12px;
-            font-weight: bold;
-            color: #e0e0e0;
-            margin-bottom: 6px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .anim-toggles .anim-checkbox-grid {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px 12px;
-        }
-        .anim-toggles .anim-checkbox-item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 12px;
-            color: #ccc;
-            cursor: pointer;
-        }
-        .anim-toggles .anim-checkbox-item input[type="checkbox"] {
-            width: 14px;
-            height: 14px;
-            cursor: pointer;
-            accent-color: #4CAF50;
-        }
-        .anim-toggles .anim-category {
-            margin-bottom: 8px;
-        }
-
         /* Glass overlay - covers everything */
         #glassOverlay {
             position: fixed !important;
@@ -427,76 +541,175 @@
     
     <!-- Main Settings Panel (can be toggled with ⚙️ button) -->
     <div class="controls" id="settingsPanel" style="display: none;">
-        <div>
-            <label>Gateway URL:</label>
-            <input type="text" id="websocketUrlInput"
-                placeholder="http://localhost:18789" />
-        </div>
-        <div>
-            <label>OpenClaw Token:</label>
-            <input type="password" id="tokenInput"
-                placeholder="Enter token..." />
-        </div>
-        <div class="light-control">
-            <label>Speaking Speed: <span id="speakingSpeedValue">1.0x</span></label>
-            <input type="range" id="speakingSpeedSlider" min="0.5" max="2.0" step="0.1" value="1" style="flex: 1;" />
-        </div>
-        <div class="light-control">
-            <label>Eye Follow: <span id="eyeFollowValue">20°</span></label>
-            <input type="range" id="eyeFollowSlider" min="0" max="45" step="1" value="20" style="flex: 1;" />
-        </div>
-        <div class="awareness-control">
-            <label class="awareness-toggle" for="desktopAwarenessToggle">
-                <input type="checkbox" id="desktopAwarenessToggle">
-                <span>Desktop Awareness</span>
-            </label>
-            <span class="awareness-status" id="desktopAwarenessStatus">Off</span>
-        </div>
-        <button id="desktopAwarenessScreenPermission" class="awareness-permission-btn" type="button" hidden>
-            Open Screen Recording Settings
-        </button>
-        <button id="desktopAwarenessInputPermission" class="awareness-permission-btn" type="button" hidden>
-            Open Keyboard Monitoring Settings
-        </button>
-        <button id="saveConnectBtn" class="full-width-btn">Save Settings</button>
-
-        <!-- Animation Toggles -->
-        <div class="anim-toggles">
-            <div class="anim-section-label">Animation Toggles</div>
-            <div class="anim-category">
-                <div class="anim-checkbox-grid">
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-walk" checked> Walk</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-touch" checked> Touch</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-sit" checked> Sit</label>
-                </div>
+        <header class="settings-header">
+            <div>
+                <span class="settings-kicker">HIKARI DESKTOP</span>
+                <h2 class="settings-title">Settings</h2>
             </div>
-            <div class="anim-category">
-                <div class="anim-checkbox-grid">
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_airplane" checked> Airplane</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_look" checked> Look</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_loop" checked> Idle Loop</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_shoot" checked> Shoot</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_sport" checked> Sport</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_stretch" checked> Stretch</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_vSign" checked> V-Sign</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_both" checked> Wave Both</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_fast" checked> Wave Fast</label>
-                    <label class="anim-checkbox-item"><input type="checkbox" id="anim-start_2turnAround" checked> Turn Around</label>
+            <button id="settingsCloseBtn" class="settings-close" type="button" aria-label="Close settings">×</button>
+        </header>
+
+        <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
+            <button id="settingsTabGeneral" class="settings-tab is-active" type="button" role="tab"
+                data-settings-tab="general" aria-controls="settingsPaneGeneral" aria-selected="true">General</button>
+            <button id="settingsTabAwareness" class="settings-tab" type="button" role="tab"
+                data-settings-tab="awareness" aria-controls="settingsPaneAwareness" aria-selected="false">Awareness</button>
+            <button id="settingsTabMotion" class="settings-tab" type="button" role="tab"
+                data-settings-tab="motion" aria-controls="settingsPaneMotion" aria-selected="false">Motion</button>
+            <button id="settingsTabConnection" class="settings-tab" type="button" role="tab"
+                data-settings-tab="connection" aria-controls="settingsPaneConnection" aria-selected="false">Connection</button>
+        </nav>
+
+        <div class="settings-body">
+            <section class="settings-pane is-active" id="settingsPaneGeneral" role="tabpanel"
+                data-settings-pane="general" aria-labelledby="settingsTabGeneral">
+                <div class="settings-field">
+                    <label class="settings-field-label" for="speakingSpeedSlider">
+                        <span>Speaking speed</span><span class="settings-value" id="speakingSpeedValue">1.0x</span>
+                    </label>
+                    <input class="settings-range" type="range" id="speakingSpeedSlider" min="0.5" max="2.0" step="0.1" value="1" />
                 </div>
-            </div>
+                <div class="settings-field">
+                    <label class="settings-field-label" for="eyeFollowSlider">
+                        <span>Eye follow</span><span class="settings-value" id="eyeFollowValue">20°</span>
+                    </label>
+                    <input class="settings-range" type="range" id="eyeFollowSlider" min="0" max="45" step="1" value="20" />
+                </div>
+                <div class="settings-switch-row">
+                    <label class="awareness-toggle" for="desktopCursorGazeToggle">
+                        <input type="checkbox" id="desktopCursorGazeToggle" checked>
+                        <span>Desktop Cursor Gaze</span>
+                    </label>
+                </div>
+            </section>
+
+            <section class="settings-pane" id="settingsPaneAwareness" role="tabpanel"
+                data-settings-pane="awareness" aria-labelledby="settingsTabAwareness">
+                <h3 class="settings-section-title">Desktop awareness</h3>
+                <div class="settings-switch-row">
+                    <label class="awareness-toggle" for="desktopAwarenessToggle">
+                        <input type="checkbox" id="desktopAwarenessToggle">
+                        <span>Desktop Awareness</span>
+                    </label>
+                    <span class="awareness-status" id="desktopAwarenessStatus">Off</span>
+                </div>
+                <button id="desktopAwarenessScreenPermission" class="awareness-permission-btn" type="button" hidden>
+                    Open Screen Recording Settings
+                </button>
+                <button id="desktopAwarenessInputPermission" class="awareness-permission-btn" type="button" hidden>
+                    Open Keyboard Monitoring Settings
+                </button>
+                <div class="settings-switch-row">
+                    <label class="awareness-toggle" for="environmentReactionsToggle">
+                        <input type="checkbox" id="environmentReactionsToggle" checked>
+                        <span>Environment Reactions</span>
+                    </label>
+                </div>
+                <span class="status-line" id="worldStateStatus" aria-live="polite">World state starting…</span>
+
+                <h3 class="settings-section-title is-spaced">Voice listening</h3>
+                <div class="settings-switch-row">
+                    <label class="awareness-toggle" for="voiceListeningToggle">
+                        <input type="checkbox" id="voiceListeningToggle">
+                        <span>Voice Listening</span>
+                    </label>
+                    <span class="awareness-status" id="voiceListeningStatus">Off</span>
+                </div>
+                <div class="settings-switch-row">
+                    <label class="awareness-toggle" for="systemAudioAwarenessToggle" title="System-audio capture is unavailable in this build.">
+                        <input type="checkbox" id="systemAudioAwarenessToggle" disabled>
+                        <span>System Audio Awareness</span>
+                    </label>
+                </div>
+                <span class="status-line" id="systemAudioStatus">System audio detail unavailable</span>
+                <div class="settings-field is-spaced">
+                    <label class="settings-field-label" for="wakeWordInput">Wake word</label>
+                    <input class="settings-text-input" type="text" id="wakeWordInput" value="Hikari" maxlength="32" autocomplete="off">
+                </div>
+                <div class="settings-switch-row">
+                    <label class="awareness-toggle" for="voiceFollowUpToggle">
+                        <input type="checkbox" id="voiceFollowUpToggle">
+                        <span>Allow short follow-up for 5 seconds</span>
+                    </label>
+                </div>
+            </section>
+
+            <section class="settings-pane" id="settingsPaneMotion" role="tabpanel"
+                data-settings-pane="motion" aria-labelledby="settingsTabMotion">
+                <h3 class="settings-section-title">Animation toggles</h3>
+                <div class="anim-toggles">
+                    <div class="anim-category">
+                        <div class="anim-checkbox-grid">
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-walk" checked> Walk</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-touch" checked> Touch</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-sit" checked> Sit</label>
+                        </div>
+                    </div>
+                    <div class="anim-category">
+                        <div class="anim-checkbox-grid">
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_airplane" checked> Airplane</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_look" checked> Look</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_loop" checked> Idle Loop</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_shoot" checked> Shoot</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_sport" checked> Sport</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_stretch" checked> Stretch</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_vSign" checked> V-Sign</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_both" checked> Wave Both</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_fast" checked> Wave Fast</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-start_2turnAround" checked> Turn Around</label>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="settings-pane" id="settingsPaneConnection" role="tabpanel"
+                data-settings-pane="connection" aria-labelledby="settingsTabConnection">
+                <h3 class="settings-section-title">OpenClaw gateway</h3>
+                <div class="settings-field">
+                    <label class="settings-field-label" for="websocketUrlInput">Gateway URL</label>
+                    <input class="settings-text-input" type="text" id="websocketUrlInput"
+                        placeholder="http://localhost:18789" />
+                </div>
+                <div class="settings-field">
+                    <label class="settings-field-label" for="tokenInput">OpenClaw token</label>
+                    <input class="settings-text-input" type="password" id="tokenInput"
+                        placeholder="Enter token..." />
+                </div>
+                <button id="saveConnectBtn" class="primary-action" type="button">Save Connection</button>
+            </section>
         </div>
 
-        <!-- Status message (full width) -->
         <div class="status-message" id="status">Loading VRM model...</div>
     </div>
     
+    <style>
+        #lipSyncPanel [hidden] { display: none !important; }
+        #lipSyncPanel .composer-row { flex-wrap: nowrap; gap: 6px; }
+        #lipSyncPanel .composer-row input { min-width: 0; width: 180px; }
+        #lipSyncPanel .composer-row button { min-width: 36px; padding: 8px; }
+        #lipSyncPanel .screenshot-preview { position: relative; }
+        #screenshotPreviewImage { width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; background: #111; }
+        #lipSyncPanel #removeScreenshotBtn { position: absolute; top: 4px; right: 4px; min-width: 28px; padding: 4px; background: #222; }
+        #screenshotStatus { max-width: 300px; font-size: 12px; line-height: 1.4; }
+        #screenshotStatus:empty { display: none; }
+        #lipSyncPanel #screenshotPermissionBtn { font-size: 12px; }
+        .history-screenshot { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: #ccc; }
+        .history-screenshot img { max-width: 100%; max-height: 130px; object-fit: contain; border-radius: 4px; }
+    </style>
     <!-- Lip Sync Panel (bottom-left, can be toggled with 💬 button) -->
     <div class="settings-panel" id="lipSyncPanel">
-        <div>
+        <div class="composer-row">
             <input type="text" id="textInputPanel"
                 placeholder="Message" />
-            <button id="speakBtnPanel" disabled>➤</button>
+            <button id="captureScreenBtn" type="button" aria-label="Capture current screen" title="Capture current screen">📷</button>
+            <button id="speakBtnPanel" type="button" aria-label="Send message" disabled>➤</button>
         </div>
+        <div id="screenshotPreview" class="screenshot-preview" hidden>
+            <img id="screenshotPreviewImage" alt="Screenshot attached to your next message">
+            <button id="removeScreenshotBtn" type="button" aria-label="Remove screenshot" title="Remove screenshot">×</button>
+        </div>
+        <span id="screenshotStatus" role="status" aria-live="polite"></span>
+        <button id="screenshotPermissionBtn" type="button" hidden>Open Screen Recording Settings</button>
     </div>
 
     <!-- ============================================================

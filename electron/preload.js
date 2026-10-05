@@ -3,8 +3,31 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
+  screenCapture: {
+    capture: () => ipcRenderer.invoke('screen:capture'),
+    openPermissionSettings: () => ipcRenderer.invoke('awareness:request-screen-capture'),
+  },
   tts: {
     synthesize: (input) => ipcRenderer.invoke('tts:synthesize', input),
+  },
+  replyAudio: {
+    begin: (options) => ipcRenderer.invoke('audio:begin-reply', options),
+    end: (sessionId) => ipcRenderer.invoke('audio:end-reply', sessionId),
+  },
+  worldState: {
+    get: () => ipcRenderer.invoke('world-state:get'),
+    onPatch: (callback) => {
+      if (typeof callback !== 'function') throw new TypeError('worldState.onPatch requires a callback');
+      const listener = (_event, patch) => callback(patch);
+      ipcRenderer.on('world-state:patch', listener);
+      return () => ipcRenderer.removeListener('world-state:patch', listener);
+    },
+    patchHikari: (hikari) => ipcRenderer.invoke('world-state:renderer-patch', { hikari }),
+    patchMicrophone: (voiceActive) => ipcRenderer.invoke('world-state:renderer-patch', { audio: { microphone: { voiceActive } } })
+  },
+  voice: {
+    setEnabled: (enabled) => ipcRenderer.invoke('voice:set-enabled', enabled),
+    transcribe: (samples) => ipcRenderer.invoke('voice:transcribe', samples)
   },
   // Window positioning APIs
   getWindowPosition: () => ipcRenderer.invoke('get-window-position'),
@@ -36,6 +59,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
 
     getStatus: () => ipcRenderer.invoke('awareness:get-status'),
+
+    getGreetingContext: () => ipcRenderer.invoke('awareness:get-greeting-context'),
 
     refreshStatus: () => ipcRenderer.invoke('awareness:refresh-status'),
 

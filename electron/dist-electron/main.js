@@ -1,14 +1,24 @@
-import { desktopCapturer, systemPreferences, shell, app, screen, nativeImage, ipcMain, BrowserWindow } from "electron";
+import { desktopCapturer, systemPreferences, shell, app, screen, nativeImage, ipcMain, session, BrowserWindow, powerMonitor } from "electron";
 import path$1 from "path";
 import { fileURLToPath as fileURLToPath$1 } from "url";
 import { existsSync as existsSync$1 } from "fs";
-import { execFile as execFile$1, spawn } from "node:child_process";
+import { execFile as execFile$2, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+const activeWindowOptions = Object.freeze({
+  accessibilityPermission: false,
+  // get-windows' native helper has its own macOS TCC identity. Keep it from
+  // requesting Screen Recording; Electron's desktopCapturer owns that access.
+  screenRecordingPermission: false
+});
 const awarenessConfig = {
   enabledByDefault: false,
+  idleReturn: {
+    minimumIdleMs: 90 * 1e3,
+    greetingCooldownMs: 5 * 60 * 1e3
+  },
   activity: {
     // Short, deliberate bursts should still produce an observation while the
     // pause keeps every individual key from becoming its own candidate.
@@ -43,17 +53,17 @@ const awarenessConfig = {
   },
   observation: {
     minimumCandidateIntervalMs: 4e3,
-    minimumAgentAnalysisIntervalMs: 6e3,
+    minimumAgentAnalysisIntervalMs: 4e3,
     candidateMaxAgeMs: 1e4
   },
   reaction: {
-    normalSpeechCooldownMs: 3e4,
+    normalSpeechCooldownMs: 2e4,
     importantSpeechCooldownMs: 15e3,
-    normalBudgetCount: 4,
+    normalBudgetCount: 6,
     normalBudgetWindowMs: 10 * 60 * 1e3
   },
   dedupe: {
-    sameContextReactionCooldownMs: 12e4
+    sameContextReactionCooldownMs: 9e4
   },
   hikariInteraction: {
     suppressionMs: 1500
@@ -70,6 +80,22 @@ function parseMediaPlaybackOutput(value) {
   if (normalized === "1") return true;
   if (normalized === "0") return false;
   return null;
+}
+function parseSystemAudioOutput(value) {
+  try {
+    const parsed = JSON.parse(String(value ?? "").trim());
+    if (parsed?.available !== true) return { available: false, running: false, volume: null, muted: null };
+    const volume = parsed.volume == null ? null : Number(parsed.volume);
+    return {
+      available: true,
+      running: Boolean(parsed.running),
+      volume: Number.isFinite(volume) && volume >= 0 && volume <= 1 ? volume : null,
+      muted: typeof parsed.muted === "boolean" ? parsed.muted : null,
+      deviceId: Number.isSafeInteger(parsed.deviceId) && parsed.deviceId > 0 ? parsed.deviceId : null
+    };
+  } catch {
+    return null;
+  }
 }
 class MediaPlaybackStateTracker {
   constructor({ debounceSamples = 2 } = {}) {
@@ -104,11 +130,209 @@ class MediaPlaybackStateTracker {
     };
   }
 }
+const EMPTY_STATE = {
+  revision: 0,
+  updatedAt: 0,
+  desktop: {
+    appName: "",
+    bundleId: "",
+    windowTitle: "",
+    windowId: null,
+    windowBounds: null,
+    contextUpdatedAt: 0,
+    contextStale: true,
+    pointer: { x: null, y: null, displayId: null, updatedAt: 0, stale: true },
+    activity: { typing: false, scrolling: false, clicking: false, lastInputAt: 0, idleForMs: 0, idle: false, updatedAt: 0, stale: true },
+    screen: { changeLevel: "unknown", changeAt: 0, changeStale: true, lastSummary: "", summaryAt: 0, summaryStale: true, summaryContextKey: "", available: false, visionAvailable: false }
+  },
+  browser: { available: false, activeTab: null, tabs: [], updatedAt: 0 },
+  audio: {
+    microphone: { enabled: false, permission: "unknown", voiceActive: false, lastSpeechAt: 0 },
+    wake: { active: false, expiresAt: 0 },
+    stt: { status: "unavailable", language: "", lastAddressedAt: 0 },
+    system: { available: false, captureAvailable: false, running: false, volume: null, muted: null, level: null, classification: "unknown", confidence: 0, updatedAt: 0 }
+  },
+  hikari: { speaking: false, listening: false, thinking: false, dragging: false, directInteraction: false, currentBehavior: "idle", attentionTarget: "none", semanticReaction: null, updatedAt: 0, stale: true }
+};
+function clone(value) {
+  return structuredClone(value);
+}
+function createWorldState() {
+  return clone(EMPTY_STATE);
+}
+function deriveDesktopActivityState({ typingSession, scrollSession, clickSession, lastInputAt = 0 } = {}, now = Date.now()) {
+  const idleForMs = lastInputAt ? Math.max(0, now - lastInputAt) : 0;
+  return {
+    typing: Boolean(typingSession),
+    scrolling: Boolean(scrollSession),
+    clicking: Boolean(clickSession),
+    lastInputAt,
+    idleForMs,
+    idle: idleForMs >= 6e4
+  };
+}
+function mergeObject(target, patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return target;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && target[key] && typeof target[key] === "object") {
+      mergeObject(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  }
+  return target;
+}
+function mergeWorldStatePatch(state, patch, now = Date.now()) {
+  const next = mergeObject(clone(state || EMPTY_STATE), sanitizeWorldStatePatch(patch));
+  if (patch?.hikari && typeof patch.hikari === "object" && patch.hikari.updatedAt === void 0 && patch.hikari.stale === void 0) {
+    next.hikari.updatedAt = now;
+    next.hikari.stale = false;
+  }
+  next.revision = Math.max(Number(next.revision) || 0, Number(state?.revision) || 0) + 1;
+  next.updatedAt = now;
+  return next;
+}
+const RENDERER_HIKARI_FIELDS = /* @__PURE__ */ new Set(["speaking", "listening", "thinking", "dragging", "directInteraction", "currentBehavior", "attentionTarget", "semanticReaction"]);
+function sanitizeRendererWorldPatch(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return {};
+  const safe = {};
+  if (patch.hikari && typeof patch.hikari === "object" && !Array.isArray(patch.hikari)) {
+    safe.hikari = {};
+    for (const [key, value] of Object.entries(patch.hikari)) {
+      if (!RENDERER_HIKARI_FIELDS.has(key)) continue;
+      if (["speaking", "listening", "thinking", "dragging", "directInteraction"].includes(key) && typeof value === "boolean") safe.hikari[key] = value;
+      else if (key === "currentBehavior" && typeof value === "string") safe.hikari[key] = value.slice(0, 64);
+      else if (key === "attentionTarget" && ["none", "user-pointer", "screen-center"].includes(value)) safe.hikari[key] = value;
+      else if (key === "semanticReaction" && (value === null || typeof value === "string")) safe.hikari[key] = typeof value === "string" ? value.slice(0, 64) : null;
+    }
+    if (!Object.keys(safe.hikari).length) delete safe.hikari;
+  }
+  if (typeof patch.audio?.microphone?.voiceActive === "boolean") {
+    safe.audio = { microphone: { voiceActive: patch.audio.microphone.voiceActive } };
+  }
+  return safe;
+}
+const PATCH_SHAPE = EMPTY_STATE;
+function sanitizeWorldStatePatch(patch, shape = PATCH_SHAPE) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return {};
+  const clean = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype" || !(key in shape)) continue;
+    const expected = shape[key];
+    if (expected && typeof expected === "object" && !Array.isArray(expected)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) clean[key] = sanitizeWorldStatePatch(value, expected);
+      continue;
+    }
+    if (Array.isArray(expected)) {
+      if (Array.isArray(value)) clean[key] = value.slice(0, 50).map((item) => sanitizeLooseValue(item)).filter((item) => item !== void 0);
+      continue;
+    }
+    if (expected === null) {
+      if (value === null) clean[key] = null;
+      else if (typeof value === "string") clean[key] = value.slice(0, 1e3);
+      else if (typeof value === "number" && Number.isFinite(value)) clean[key] = value;
+      else if (value && typeof value === "object" && !Array.isArray(value)) clean[key] = sanitizeLooseValue(value);
+    } else if (typeof expected === "number") {
+      if (typeof value === "number" && Number.isFinite(value)) clean[key] = value;
+    } else if (typeof expected === "boolean") {
+      if (typeof value === "boolean") clean[key] = value;
+    } else if (typeof expected === "string" && typeof value === "string") {
+      clean[key] = value.slice(0, 1e3);
+    }
+  }
+  return clean;
+}
+function sanitizeLooseValue(value, depth = 0) {
+  if (depth > 4) return void 0;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : void 0;
+  if (typeof value === "string") return value.slice(0, 1e3);
+  if (Array.isArray(value)) return value.slice(0, 50).map((item) => sanitizeLooseValue(item, depth + 1)).filter((item) => item !== void 0);
+  if (value && typeof value === "object") {
+    const clean = {};
+    for (const [key, item] of Object.entries(value).slice(0, 50)) {
+      if (["__proto__", "constructor", "prototype"].includes(key)) continue;
+      const sanitized = sanitizeLooseValue(item, depth + 1);
+      if (sanitized !== void 0) clean[key] = sanitized;
+    }
+    return clean;
+  }
+  return void 0;
+}
+function expireWorldStateFields(state, now = Date.now(), { screenSummaryMaxAgeMs = 12e4, screenChangeMaxAgeMs = 12e4, pointerMaxAgeMs = 2e3, activityMaxAgeMs = 3e3, contextMaxAgeMs = 5e3 } = {}) {
+  const next = clone(state || EMPTY_STATE);
+  const activity = next.desktop?.activity;
+  if (activity) {
+    activity.idleForMs = activity.lastInputAt ? Math.max(0, now - activity.lastInputAt) : 0;
+    activity.stale = !activity.updatedAt || now - activity.updatedAt > activityMaxAgeMs;
+    if (activity.stale) activity.typing = activity.scrolling = activity.clicking = false;
+  }
+  if (next.desktop) next.desktop.contextStale = !next.desktop.contextUpdatedAt || now - next.desktop.contextUpdatedAt > contextMaxAgeMs;
+  const screen2 = next.desktop?.screen;
+  if (screen2) {
+    screen2.changeStale = !screen2.changeAt || now - screen2.changeAt > screenChangeMaxAgeMs;
+    if (screen2.changeStale) screen2.changeLevel = "unknown";
+  }
+  if (screen2?.summaryAt && now - screen2.summaryAt > screenSummaryMaxAgeMs) {
+    screen2.lastSummary = "";
+    screen2.summaryAt = 0;
+    screen2.summaryStale = true;
+    screen2.summaryContextKey = "";
+  }
+  if (screen2 && !screen2.summaryAt) screen2.summaryStale = true;
+  const pointer = next.desktop?.pointer;
+  if (pointer && (!pointer.updatedAt || now - pointer.updatedAt > pointerMaxAgeMs)) {
+    pointer.x = null;
+    pointer.y = null;
+    pointer.displayId = null;
+    pointer.stale = true;
+  }
+  const systemAudio = next.audio?.system;
+  if (systemAudio) systemAudio.stale = !systemAudio.updatedAt || now - systemAudio.updatedAt > 15e3;
+  const hikari = next.hikari;
+  if (hikari) {
+    hikari.stale = !hikari.updatedAt || now - hikari.updatedAt > 6e4;
+    if (hikari.stale) {
+      hikari.speaking = hikari.listening = hikari.thinking = hikari.dragging = hikari.directInteraction = false;
+      hikari.semanticReaction = null;
+      hikari.currentBehavior = "idle";
+      hikari.attentionTarget = "none";
+    }
+  }
+  if (next.audio?.wake?.expiresAt && now >= next.audio.wake.expiresAt) next.audio.wake = { active: false, expiresAt: 0 };
+  return next;
+}
+class IdleReturnTracker {
+  constructor({ minimumIdleMs = 9e4, greetingCooldownMs = 3e5, now = () => Date.now() } = {}) {
+    this.minimumIdleMs = Math.max(6e4, minimumIdleMs);
+    this.greetingCooldownMs = greetingCooldownMs;
+    this.now = now;
+    this.reset();
+  }
+  reset() {
+    this.lastInputAt = this.now();
+    this.lastReturnAt = -Infinity;
+  }
+  record(inputType, timestamp = this.now()) {
+    const idleDurationMs = Math.max(0, timestamp - this.lastInputAt);
+    this.lastInputAt = timestamp;
+    if (idleDurationMs < this.minimumIdleMs || timestamp - this.lastReturnAt < this.greetingCooldownMs) return null;
+    this.lastReturnAt = timestamp;
+    return { idleDurationMs, inputType, resumedAt: timestamp, eventCount: 1 };
+  }
+}
 const PRIORITY_RANK = { low: 0, normal: 1, important: 2 };
 const PIXEL_CHANGE_DELTA = 24;
 const MACOS_SCREEN_CAPTURE_SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 const MACOS_ACCESSIBILITY_SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-const execFile = promisify(execFile$1);
+const BACKGROUND_WINDOW_EXCLUSIONS = /* @__PURE__ */ new Set([
+  "com.apple.notificationcenterui",
+  "com.apple.WindowManager",
+  "com.apple.dock",
+  "com.apple.controlcenter",
+  "com.apple.systemuiserver"
+]);
+const execFile$1 = promisify(execFile$2);
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -219,6 +443,7 @@ class DesktopAwarenessService {
     getHikariBounds,
     config = awarenessConfig,
     activeWindowProvider,
+    openWindowsProvider,
     captureSourcesProvider,
     mediaPlaybackProvider
   } = {}) {
@@ -227,6 +452,7 @@ class DesktopAwarenessService {
     };
     this.getHikariBounds = typeof getHikariBounds === "function" ? getHikariBounds : () => null;
     this.activeWindowProvider = activeWindowProvider || null;
+    this.openWindowsProvider = openWindowsProvider || null;
     this.captureSourcesProvider = captureSourcesProvider || ((options) => desktopCapturer.getSources(options));
     this.mediaPlaybackProvider = mediaPlaybackProvider || null;
     this.mediaPlaybackTracker = new MediaPlaybackStateTracker({
@@ -250,6 +476,8 @@ class DesktopAwarenessService {
     this.pendingCandidateTimer = null;
     this.mediaPlaybackTimer = null;
     this.mediaPlaybackPollRunning = false;
+    this.lastInputAt = 0;
+    this.idleReturnTracker = new IdleReturnTracker(this.config.idleReturn);
     this.status = {
       enabled: false,
       inputMonitoringAvailable: false,
@@ -274,6 +502,37 @@ class DesktopAwarenessService {
       errors: { ...this.status.errors }
     };
   }
+  getActivityState(now = Date.now()) {
+    return deriveDesktopActivityState(this, now);
+  }
+  async getGreetingContext() {
+    const activeWindowPromise = (async () => {
+      if (!this.activeWindowProvider) await this.initializeActiveWindowProvider();
+      const context = await this.getActiveContext();
+      let foreground = context && !this.isHikariContext(context) ? context : this.currentContext;
+      if (!foreground && this.openWindowsProvider) {
+        const windows = await this.openWindowsProvider();
+        foreground = (Array.isArray(windows) ? windows : []).map(normalizeActiveWindow).find((window) => window && !this.isHikariContext(window) && !BACKGROUND_WINDOW_EXCLUSIONS.has(window.bundleId)) || null;
+      }
+      return publicContext(foreground);
+    })().catch((error) => {
+      this.debug("GREETING", "foreground context unavailable", error?.message || error);
+      return null;
+    });
+    const mediaPromise = (async () => {
+      if (!this.ensureMediaPlaybackProvider()) return null;
+      const isPlaying = await this.mediaPlaybackProvider();
+      return typeof isPlaying === "boolean" ? isPlaying ? "playing" : "stopped" : null;
+    })().catch((error) => {
+      this.debug("GREETING", "media context unavailable", error?.message || error);
+      return null;
+    });
+    const [activeWindow, mediaPlaybackState] = await Promise.all([
+      activeWindowPromise,
+      mediaPromise
+    ]);
+    return { activeWindow, mediaPlaybackState };
+  }
   async setEnabled(enabled) {
     if (enabled) await this.start();
     else this.stop();
@@ -284,6 +543,7 @@ class DesktopAwarenessService {
     this.enabled = true;
     this.status.enabled = true;
     this.status.errors = {};
+    this.idleReturnTracker.reset();
     this.refreshScreenCaptureStatus();
     await this.initializeActiveWindowProvider();
     await this.initializeInputMonitoring();
@@ -293,8 +553,8 @@ class DesktopAwarenessService {
     return this.getStatus();
   }
   stop() {
-    for (const session of [this.typingSession, this.scrollSession, this.clickSession]) {
-      if (session?.timer) clearTimeout(session.timer);
+    for (const session2 of [this.typingSession, this.scrollSession, this.clickSession]) {
+      if (session2?.timer) clearTimeout(session2.timer);
     }
     if (this.inputHook) {
       this.inputHook.removeListener("keydown", this.handleKeydown);
@@ -460,19 +720,24 @@ class DesktopAwarenessService {
         );
         this.activeWindowProvider = async () => {
           const args = ["--no-accessibility-permission", "--no-screen-recording-permission"];
-          const { stdout } = await execFile(helperPath, args, { encoding: "utf8" });
+          const { stdout } = await execFile$1(helperPath, args, { encoding: "utf8" });
+          return JSON.parse(stdout);
+        };
+        this.openWindowsProvider = async () => {
+          const args = [
+            "--no-accessibility-permission",
+            "--no-screen-recording-permission",
+            "--open-windows-list"
+          ];
+          const { stdout } = await execFile$1(helperPath, args, { encoding: "utf8" });
           return JSON.parse(stdout);
         };
         this.status.activeWindowAvailable = true;
         return;
       }
-      const { activeWindow } = await import("./index-D7v8WbNU.js");
-      this.activeWindowProvider = () => activeWindow({
-        accessibilityPermission: false,
-        // Without Screen Recording permission get-windows can still provide the
-        // owning application; it simply omits the protected window title.
-        screenRecordingPermission: this.status.screenCaptureAvailable
-      });
+      const { activeWindow, openWindows } = await import("./index-D7v8WbNU.js");
+      this.activeWindowProvider = () => activeWindow(activeWindowOptions);
+      this.openWindowsProvider = () => openWindows(activeWindowOptions);
       this.status.activeWindowAvailable = true;
     } catch (error) {
       this.status.activeWindowAvailable = false;
@@ -513,10 +778,14 @@ class DesktopAwarenessService {
     }
   }
   initializeMediaPlaybackMonitoring() {
+    if (!this.ensureMediaPlaybackProvider()) return;
+    void this.pollMediaPlayback();
+  }
+  ensureMediaPlaybackProvider() {
     if (process.platform !== "darwin") {
       this.status.mediaPlaybackAvailable = false;
       this.status.errors.mediaPlayback = "System audio activity detection is currently available on macOS only.";
-      return;
+      return false;
     }
     if (!this.mediaPlaybackProvider) {
       const candidates = app.isPackaged ? [path.join(process.resourcesPath, "media-state", "media-state")] : [
@@ -527,10 +796,10 @@ class DesktopAwarenessService {
       if (!helperPath) {
         this.status.mediaPlaybackAvailable = false;
         this.status.errors.mediaPlayback = "Media-state helper is missing. Run npm run build.";
-        return;
+        return false;
       }
       this.mediaPlaybackProvider = async () => {
-        const { stdout } = await execFile(helperPath, [], {
+        const { stdout } = await execFile$1(helperPath, [], {
           encoding: "utf8",
           timeout: Math.max(1e3, this.config.media.pollIntervalMs)
         });
@@ -541,7 +810,7 @@ class DesktopAwarenessService {
     }
     this.status.mediaPlaybackAvailable = true;
     delete this.status.errors.mediaPlayback;
-    void this.pollMediaPlayback();
+    return true;
   }
   async pollMediaPlayback() {
     if (!this.enabled || !this.mediaPlaybackProvider || this.mediaPlaybackPollRunning) return;
@@ -598,14 +867,36 @@ class DesktopAwarenessService {
     this.debug("CONTEXT", `${resolvedContext.appName} / ${resolvedContext.windowTitle || "(untitled window)"}`);
   }
   isHikariContext(context) {
-    return context?.processId === process.pid;
+    return context?.processId === process.pid || context?.bundleId === "com.electron.hikari";
   }
   isDirectInteractionSuppressed(now = Date.now()) {
     return now - this.lastDirectInteractionAt < this.config.hikariInteraction.suppressionMs;
   }
+  recordInputActivity(inputType, now) {
+    this.lastInputAt = now;
+    const activity = this.idleReturnTracker.record(inputType, now);
+    if (activity) {
+      void this.observeIdleReturn(activity).catch((error) => this.debug("IDLE", "return context unavailable", error?.message || error));
+    }
+  }
+  async observeIdleReturn(activity) {
+    if (!this.enabled || this.isDirectInteractionSuppressed()) return;
+    const context = await this.getActiveContext();
+    if (!this.enabled || this.isHikariContext(context)) return;
+    this.offerCandidate({
+      id: createId(),
+      timestamp: activity.resumedAt,
+      trigger: "idle_return",
+      activity,
+      context: publicContext(context || this.currentContext),
+      visualChange: null,
+      priority: "important"
+    }, null);
+  }
   recordKeyboardActivity() {
     if (!this.enabled) return;
     const now = Date.now();
+    this.recordInputActivity("typing", now);
     this.debug("RAW", "keyboard activity");
     this.scheduleContextInspection();
     if (!this.typingSession) this.typingSession = { startedAt: now, lastAt: now, count: 0, timer: null };
@@ -615,15 +906,15 @@ class DesktopAwarenessService {
     this.typingSession.timer = setTimeout(() => this.endTypingSession(), this.config.activity.typingPauseMs);
   }
   endTypingSession() {
-    const session = this.typingSession;
+    const session2 = this.typingSession;
     this.typingSession = null;
-    if (!session || session.count < this.config.activity.minimumTypingKeys) {
-      this.debug("SESSION", "typing session rejected: too few keys", session?.count || 0);
+    if (!session2 || session2.count < this.config.activity.minimumTypingKeys) {
+      this.debug("SESSION", "typing session rejected: too few keys", session2?.count || 0);
       return;
     }
     const activity = {
-      durationMs: Math.max(0, session.lastAt - session.startedAt),
-      eventCount: session.count
+      durationMs: Math.max(0, session2.lastAt - session2.startedAt),
+      eventCount: session2.count
     };
     this.debug("SESSION", "typing session ended", activity);
     this.queueObservation("typing_session_end", activity);
@@ -631,6 +922,7 @@ class DesktopAwarenessService {
   recordWheelActivity() {
     if (!this.enabled) return;
     const now = Date.now();
+    this.recordInputActivity("scrolling", now);
     this.debug("RAW", "wheel activity");
     this.scheduleContextInspection();
     if (!this.scrollSession) this.scrollSession = { startedAt: now, lastAt: now, count: 0, timer: null };
@@ -640,15 +932,15 @@ class DesktopAwarenessService {
     this.scrollSession.timer = setTimeout(() => this.endScrollSession(), this.config.activity.scrollPauseMs);
   }
   endScrollSession() {
-    const session = this.scrollSession;
+    const session2 = this.scrollSession;
     this.scrollSession = null;
-    if (!session || session.count < this.config.activity.minimumWheelEvents) {
-      this.debug("SESSION", "scroll session rejected: too few wheel events", session?.count || 0);
+    if (!session2 || session2.count < this.config.activity.minimumWheelEvents) {
+      this.debug("SESSION", "scroll session rejected: too few wheel events", session2?.count || 0);
       return;
     }
     const activity = {
-      durationMs: Math.max(0, session.lastAt - session.startedAt),
-      eventCount: session.count
+      durationMs: Math.max(0, session2.lastAt - session2.startedAt),
+      eventCount: session2.count
     };
     this.debug("SESSION", "scroll session ended", activity);
     this.queueObservation("scroll_session_end", activity);
@@ -656,6 +948,7 @@ class DesktopAwarenessService {
   recordClickActivity() {
     if (!this.enabled) return;
     const now = Date.now();
+    this.recordInputActivity("clicking", now);
     this.debug("RAW", "mouse click activity");
     this.scheduleContextInspection();
     if (!this.clickSession) this.clickSession = { startedAt: now, lastAt: now, count: 0, timer: null };
@@ -665,12 +958,12 @@ class DesktopAwarenessService {
     this.clickSession.timer = setTimeout(() => this.endClickSession(), this.config.activity.clickObservationDelayMs);
   }
   endClickSession() {
-    const session = this.clickSession;
+    const session2 = this.clickSession;
     this.clickSession = null;
-    if (!session) return;
+    if (!session2) return;
     const activity = {
-      durationMs: Math.max(0, session.lastAt - session.startedAt),
-      eventCount: session.count
+      durationMs: Math.max(0, session2.lastAt - session2.startedAt),
+      eventCount: session2.count
     };
     this.debug("SESSION", "click activity settled", activity);
     this.queueObservation("click_caused_screen_change", activity);
@@ -769,7 +1062,7 @@ class DesktopAwarenessService {
       this.debug("CANDIDATE", `${trigger} rejected: visual change below threshold`);
       return;
     }
-    let priority = trigger === "scroll_session_end" ? "low" : "normal";
+    let priority = trigger === "scroll_session_end" ? difference.ratio >= this.config.screen.significantChangeThreshold ? "normal" : "low" : "normal";
     if (difference.ratio >= this.config.screen.majorChangeThreshold) priority = "important";
     const candidate = {
       id: createId(),
@@ -1103,7 +1396,7 @@ function validateMetadata(metadata) {
   }
   return { audioUrl, durationSeconds, sampleRate, channels, voice };
 }
-function validateWav(audio, sampleRate, channels) {
+function validateWav$1(audio, sampleRate, channels) {
   if (audio.byteLength < 44 || String.fromCharCode(...audio.subarray(0, 4)) !== "RIFF" || String.fromCharCode(...audio.subarray(8, 12)) !== "WAVE") {
     throw new Error("Local TTS adapter returned invalid WAV audio");
   }
@@ -1309,7 +1602,7 @@ function createLocalTtsService(options = {}) {
       const audio = await withRequest(absoluteAudioUrl, { method: "GET" }, async (response, signal) => {
         if (!isSuccessfulResponse(response)) throw new Error("Local TTS audio request failed");
         const bytes = await readBoundedBody(response, maxAudioBytes, signal);
-        validateWav(bytes, metadata.sampleRate, metadata.channels);
+        validateWav$1(bytes, metadata.sampleRate, metadata.channels);
         return bytes;
       });
       return {
@@ -1355,13 +1648,629 @@ function createLocalTtsService(options = {}) {
   }
   return { synthesize, dispose };
 }
+const MAX_TEXT_LENGTH = 500;
+const MAX_ERROR_BYTES = 1024;
+const MAX_AUDIO_BYTES = 32 * 1024 * 1024;
+const HTTP_TTS_TIMEOUT_MS = 45e4;
+function validateSynthesisInput(input) {
+  if (!input || typeof input !== "object") {
+    throw new TypeError("Synthesis request must be an object");
+  }
+  if (typeof input.text !== "string") {
+    throw new TypeError("Synthesis text must be a string");
+  }
+  const text = input.text.trim();
+  const length = Array.from(text).length;
+  if (length < 1 || length > MAX_TEXT_LENGTH) {
+    throw new RangeError(`Synthesis text must contain 1 to ${MAX_TEXT_LENGTH} characters`);
+  }
+  if (typeof input.speed !== "number" || !Number.isFinite(input.speed) || input.speed < 0.5 || input.speed > 2) {
+    throw new RangeError("Synthesis speed must be between 0.5 and 2");
+  }
+  return { text, speed: input.speed };
+}
+function serviceError(message, { code, status, statusText, bodySnippet, cause } = {}) {
+  const error = new Error(message, cause === void 0 ? void 0 : { cause });
+  if (code) error.code = code;
+  if (status !== void 0) error.status = status;
+  if (statusText) error.statusText = String(statusText).slice(0, 128);
+  if (bodySnippet) error.bodySnippet = bodySnippet.slice(0, MAX_ERROR_BYTES);
+  return error;
+}
+async function readBoundedBytes(response, limit) {
+  const declaredLength = Number(response.headers?.get?.("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > limit) {
+    throw serviceError("Response exceeded the allowed size", { code: "RESPONSE_TOO_LARGE" });
+  }
+  if (response.body?.getReader) {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > limit) {
+          await reader.cancel().catch(() => {
+          });
+          throw serviceError("Response exceeded the allowed size", { code: "RESPONSE_TOO_LARGE" });
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock?.();
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  }
+  if (typeof response.arrayBuffer === "function") {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > limit) {
+      throw serviceError("Response exceeded the allowed size", { code: "RESPONSE_TOO_LARGE" });
+    }
+    return new Uint8Array(buffer);
+  }
+  return new Uint8Array();
+}
+async function readErrorSnippet(response) {
+  try {
+    const bytes = await readBoundedBytes(response, MAX_ERROR_BYTES);
+    return new TextDecoder().decode(bytes).slice(0, MAX_ERROR_BYTES).trim();
+  } catch (error) {
+    if (error?.code === "RESPONSE_TOO_LARGE") return "[error response truncated]";
+    return "";
+  }
+}
+async function throwForResponse(response, context) {
+  const bodySnippet = await readErrorSnippet(response);
+  const status = Number.isInteger(response.status) ? response.status : void 0;
+  const message = `${context} request failed${status === void 0 ? "" : ` (HTTP ${status})`}` + (bodySnippet ? `: ${bodySnippet}` : "");
+  throw serviceError(message, {
+    code: `${context.toUpperCase()}_HTTP_ERROR`,
+    status,
+    statusText: response.statusText,
+    bodySnippet
+  });
+}
+function validateSpeechMetadata(durationSeconds, sampleRate, channels) {
+  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || durationSeconds > 600) {
+    throw serviceError("TTS service returned invalid audio duration", { code: "INVALID_TTS_METADATA" });
+  }
+  if (!Number.isInteger(sampleRate) || sampleRate < 8e3 || sampleRate > 192e3) {
+    throw serviceError("TTS service returned invalid sample rate", { code: "INVALID_TTS_METADATA" });
+  }
+  if (!Number.isInteger(channels) || channels < 1 || channels > 2) {
+    throw serviceError("TTS service returned invalid channel count", { code: "INVALID_TTS_METADATA" });
+  }
+}
+function validateWav(audio, sampleRate, channels) {
+  const fail = () => {
+    throw serviceError("TTS service returned invalid WAV audio", { code: "INVALID_TTS_AUDIO" });
+  };
+  if (audio.byteLength < 44) fail();
+  const ascii = (offset2, count) => String.fromCharCode(...audio.subarray(offset2, offset2 + count));
+  if (ascii(0, 4) !== "RIFF" || ascii(8, 4) !== "WAVE") fail();
+  const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
+  if (view.getUint32(4, true) + 8 !== audio.byteLength) fail();
+  let offset = 12;
+  let formatFound = false;
+  let dataFound = false;
+  while (offset + 8 <= audio.byteLength) {
+    const chunkName = ascii(offset, 4);
+    const chunkSize = view.getUint32(offset + 4, true);
+    const chunkStart = offset + 8;
+    const chunkEnd = chunkStart + chunkSize;
+    if (chunkEnd > audio.byteLength) fail();
+    if (chunkName === "fmt ") {
+      if (chunkSize < 16) fail();
+      if (view.getUint16(chunkStart + 2, true) !== channels || view.getUint32(chunkStart + 4, true) !== sampleRate) {
+        throw serviceError("TTS metadata does not match its WAV audio", { code: "TTS_METADATA_MISMATCH" });
+      }
+      formatFound = true;
+    }
+    if (chunkName === "data") dataFound = true;
+    offset = chunkEnd + chunkSize % 2;
+  }
+  if (offset !== audio.byteLength || !formatFound || !dataFound) fail();
+}
+function makeRequestController(signal, timeoutMs, activeControllers) {
+  const controller = new AbortController();
+  activeControllers.add(controller);
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abortFromCaller();
+  else signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(serviceError("TTS request timed out", { code: "TTS_TIMEOUT" })), timeoutMs) : null;
+  return {
+    signal: controller.signal,
+    dispose() {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", abortFromCaller);
+      activeControllers.delete(controller);
+    }
+  };
+}
+function createHttpTtsClient({
+  fetchImpl = globalThis.fetch,
+  endpoint = "/api/tts",
+  timeoutMs = HTTP_TTS_TIMEOUT_MS,
+  maxAudioBytes = MAX_AUDIO_BYTES
+} = {}) {
+  if (typeof fetchImpl !== "function") throw new TypeError("A fetch implementation is required");
+  const activeControllers = /* @__PURE__ */ new Set();
+  let disposed = false;
+  return {
+    async synthesize(input, { signal } = {}) {
+      if (disposed) throw serviceError("TTS client is disposed", { code: "SERVICE_DISPOSED" });
+      const request = validateSynthesisInput(input);
+      const requestController = makeRequestController(signal, timeoutMs, activeControllers);
+      try {
+        const response = await fetchImpl(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "audio/wav" },
+          body: JSON.stringify(request),
+          signal: requestController.signal
+        });
+        if (!response.ok) await throwForResponse(response, "TTS");
+        const contentType = response.headers?.get?.("content-type")?.split(";", 1)[0].trim().toLowerCase();
+        if (contentType && contentType !== "audio/wav" && contentType !== "audio/x-wav" && contentType !== "application/octet-stream") {
+          throw serviceError("TTS service returned a non-WAV response", { code: "INVALID_TTS_AUDIO" });
+        }
+        const durationSeconds = Number(response.headers?.get?.("x-audio-duration"));
+        const sampleRate = Number(response.headers?.get?.("x-audio-sample-rate"));
+        const channels = Number(response.headers?.get?.("x-audio-channels"));
+        validateSpeechMetadata(durationSeconds, sampleRate, channels);
+        const audio = await readBoundedBytes(response, maxAudioBytes);
+        validateWav(audio, sampleRate, channels);
+        return { audio, durationSeconds, sampleRate, channels, voice: "custom_voice" };
+      } finally {
+        requestController.dispose();
+      }
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const controller of activeControllers) controller.abort(serviceError("TTS client is disposed", { code: "SERVICE_DISPOSED" }));
+    }
+  };
+}
+const DEFAULT_TIMEOUT_MS = 45e4;
+function isLoopbackAddress(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host === "::1") return true;
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  return Boolean(ipv4 && Number(ipv4[1]) === 127 && ipv4.slice(1).every((part) => Number(part) <= 255));
+}
+function validateRemoteTtsUrl(value) {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > 2048) {
+    throw new TypeError("Remote TTS requires a configured loopback URL");
+  }
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch (cause) {
+    throw new TypeError("Remote TTS URL must be a valid loopback HTTP URL", { cause });
+  }
+  if (url.protocol !== "http:" || url.username || url.password || url.search || url.hash || !isLoopbackAddress(url.hostname)) {
+    throw new TypeError("Remote TTS URL must use HTTP on a loopback address");
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+function createRemoteTtsService({
+  url,
+  fetch: fetchImpl = globalThis.fetch,
+  timeoutMs = DEFAULT_TIMEOUT_MS
+} = {}) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 9e5) {
+    throw new RangeError("Remote TTS timeout must be between 1 and 900000 milliseconds");
+  }
+  const baseUrl = validateRemoteTtsUrl(url);
+  const client = createHttpTtsClient({
+    fetchImpl,
+    endpoint: `${baseUrl}/api/tts`,
+    timeoutMs
+  });
+  return {
+    synthesize(input, options) {
+      return client.synthesize(input, options);
+    },
+    dispose() {
+      client.dispose();
+    }
+  };
+}
+const execFile = promisify(execFile$2);
+function parseOutputVolume(value) {
+  const match = /^(\d+)\s+((?:\d+(?:\.\d*)?|\.\d+))\s*$/.exec(String(value ?? ""));
+  if (!match) return null;
+  const deviceId = Number(match[1]);
+  const scalar = Number(match[2]);
+  return Number.isSafeInteger(deviceId) && deviceId > 0 && Number.isFinite(scalar) && scalar >= 0 && scalar <= 1 ? { deviceId, scalar } : null;
+}
+class ReplyVolumeService {
+  constructor({ helperPath, execute = execFile, fadeMs = 350 } = {}) {
+    this.helperPath = helperPath;
+    this.execute = execute;
+    this.fadeMs = fadeMs;
+    this.active = null;
+    this.nextSessionId = 1;
+    this.chain = Promise.resolve();
+  }
+  serialize(operation) {
+    const result = this.chain.catch(() => {
+    }).then(operation);
+    this.chain = result.catch(() => {
+    });
+    return result;
+  }
+  async call(args) {
+    const result = await this.execute(this.helperPath, args, {
+      encoding: "utf8",
+      timeout: 3e3
+    });
+    return result?.stdout ?? "";
+  }
+  async readVolume() {
+    return parseOutputVolume(await this.call(["volume-get"]));
+  }
+  async ramp(deviceId, scalar) {
+    await this.call([
+      "volume-ramp",
+      String(deviceId),
+      String(Math.max(0, Math.min(1, scalar))),
+      String(this.fadeMs)
+    ]);
+  }
+  begin({ canBoost = true } = {}) {
+    return this.serialize(async () => {
+      if (this.active) await this.restoreActive();
+      const sessionId = String(this.nextSessionId++);
+      const fallback = { sessionId, voiceGain: 0.9, mediaDucked: false };
+      this.active = { sessionId, duck: null };
+      if (!this.helperPath || !canBoost) return fallback;
+      try {
+        const mediaPlaying = String(await this.call([])).trim() === "1";
+        if (!mediaPlaying) return fallback;
+        const volume = await this.readVolume();
+        if (!volume || volume.scalar <= 0.01) return fallback;
+        const targetScalar = volume.scalar * 0.7;
+        const duck = { ...volume, targetScalar };
+        this.active.duck = duck;
+        await this.ramp(volume.deviceId, targetScalar);
+        return { sessionId, voiceGain: 0.9 / 0.7, mediaDucked: true };
+      } catch {
+        await this.restoreActive({ allowPartialRamp: true });
+        this.active = { sessionId, duck: null };
+        return fallback;
+      }
+    });
+  }
+  end(sessionId) {
+    return this.serialize(async () => {
+      if (!this.active || this.active.sessionId !== sessionId) return;
+      await this.restoreActive();
+    });
+  }
+  restore() {
+    return this.serialize(() => this.restoreActive());
+  }
+  async restoreActive({ allowPartialRamp = false } = {}) {
+    const active = this.active;
+    this.active = null;
+    if (!active?.duck) return;
+    try {
+      const current = await this.readVolume();
+      if (!current || current.deviceId !== active.duck.deviceId) return;
+      const atTarget = Math.abs(current.scalar - active.duck.targetScalar) <= 5e-3;
+      const betweenRampEndpoints = current.scalar >= Math.min(
+        active.duck.targetScalar,
+        active.duck.scalar
+      ) - 5e-3 && current.scalar <= Math.max(
+        active.duck.targetScalar,
+        active.duck.scalar
+      ) + 5e-3;
+      if (!atTarget && !(allowPartialRamp && betweenRampEndpoints)) return;
+      await this.ramp(active.duck.deviceId, active.duck.scalar);
+    } catch {
+    }
+  }
+}
+class SpeechToTextService {
+  constructor({ executable = "", spawn: spawn$1 = spawn, platform = process.platform, locale = process.env.HIKARI_STT_LOCALE || "", timeoutMs = 45e3 } = {}) {
+    this.executable = executable;
+    this.spawn = spawn$1;
+    this.platform = platform;
+    this.locale = locale;
+    this.timeoutMs = timeoutMs;
+    this.running = false;
+  }
+  getStatus() {
+    const available = this.platform === "darwin" && Boolean(this.executable && existsSync(this.executable));
+    return { available, status: available ? "ready" : "unavailable", language: this.locale || "system", backend: "apple-speech-on-device", reason: available ? "" : "native_speech_helper_missing" };
+  }
+  async transcribe(samples) {
+    const status = this.getStatus();
+    if (!status.available) throw new Error(status.reason);
+    if (this.running) throw new Error("transcription_busy");
+    if (!(samples instanceof Float32Array) || samples.length < 1600 || samples.length > 16e5) throw new TypeError("Expected 0.1 to 100 seconds of 16 kHz mono audio");
+    this.running = true;
+    const wav = encodeFloat32Wav(samples, 16e3);
+    try {
+      return await new Promise((resolve, reject) => {
+        const args = this.locale ? ["--locale", this.locale] : [];
+        const child = this.spawn(this.executable, args, { stdio: ["pipe", "pipe", "pipe"] });
+        let stdout = "";
+        let stderr = "";
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(new Error("transcription_timeout"));
+        }, this.timeoutMs);
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk) => {
+          stdout += chunk;
+          if (stdout.length > 65536) child.kill("SIGKILL");
+        });
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk.slice(0, 4096);
+        });
+        child.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.once("close", (code) => {
+          clearTimeout(timer);
+          let result;
+          try {
+            result = JSON.parse(stdout);
+          } catch {
+            result = null;
+          }
+          if (code !== 0 || !result || result.error) reject(new Error(result?.error || stderr.trim() || `speech_exit_${code}`));
+          else resolve(String(result.text || "").trim());
+        });
+        child.stdin.end(wav);
+      });
+    } finally {
+      this.running = false;
+      wav.fill(0);
+      samples.fill(0);
+    }
+  }
+}
+function encodeFloat32Wav(samples, sampleRate = 16e3) {
+  const buffer = Buffer.alloc(44 + samples.length * 2);
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + samples.length * 2, 4);
+  buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(samples.length * 2, 40);
+  for (let i = 0; i < samples.length; i++) buffer.writeInt16LE(Math.round(Math.max(-1, Math.min(1, samples[i])) * 32767), 44 + i * 2);
+  return buffer;
+}
+const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+const MAX_DIMENSION = 1920;
+function captureError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+function createScreenCaptureService({ getSources, getDisplay, getPermissionStatus = () => "granted", platform = process.platform, now = () => Date.now(), captureTimeoutMs = 15e3 }) {
+  let capturing = false;
+  return {
+    async capture() {
+      if (capturing) throw captureError("CAPTURE_BUSY", "A screenshot is already being captured.");
+      capturing = true;
+      try {
+        if (platform === "darwin" && getPermissionStatus() !== "granted") {
+          throw captureError("SCREEN_PERMISSION_REQUIRED", "Allow Screen Recording for Hikari in macOS Settings, then capture again.");
+        }
+        const display = getDisplay();
+        if (!display?.size?.width || !display?.size?.height) throw captureError("CAPTURE_UNAVAILABLE", "The current display is unavailable.");
+        const scale = Math.min(1, MAX_DIMENSION / Math.max(display.size.width, display.size.height));
+        let captureTimer;
+        let sources;
+        try {
+          sources = await Promise.race([
+            getSources({
+              types: ["screen"],
+              fetchWindowIcons: false,
+              thumbnailSize: { width: Math.max(1, Math.round(display.size.width * scale)), height: Math.max(1, Math.round(display.size.height * scale)) }
+            }),
+            new Promise((_, reject) => {
+              captureTimer = setTimeout(() => reject(captureError("CAPTURE_TIMEOUT", "Screen capture timed out. Check Screen Recording permission and try again.")), captureTimeoutMs);
+            })
+          ]);
+        } finally {
+          clearTimeout(captureTimer);
+        }
+        const source = sources.find((item) => String(item.display_id) === String(display.id));
+        let image = source?.thumbnail;
+        if (!image || image.isEmpty()) throw captureError("CAPTURE_UNAVAILABLE", "No screenshot was returned for the current display.");
+        let size = image.getSize();
+        if (Math.max(size.width, size.height) > MAX_DIMENSION) {
+          const ratio = MAX_DIMENSION / Math.max(size.width, size.height);
+          image = image.resize({ width: Math.round(size.width * ratio), height: Math.round(size.height * ratio), quality: "good" });
+        }
+        let jpeg;
+        for (const quality of [80, 65, 50]) {
+          jpeg = image.toJPEG(quality);
+          if (jpeg.length <= MAX_SCREENSHOT_BYTES) break;
+        }
+        if (!jpeg?.length || jpeg.length > MAX_SCREENSHOT_BYTES) throw captureError("SCREENSHOT_TOO_LARGE", "The screenshot is too large. Try capturing a smaller display.");
+        size = image.getSize();
+        const thumbnail = image.resize({ width: Math.min(320, size.width), quality: "good" }).toJPEG(65);
+        return {
+          mimeType: "image/jpeg",
+          width: size.width,
+          height: size.height,
+          capturedAt: now(),
+          dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}`,
+          thumbnailDataUrl: `data:image/jpeg;base64,${thumbnail.toString("base64")}`
+        };
+      } finally {
+        capturing = false;
+      }
+    }
+  };
+}
 const __filename$1 = fileURLToPath$1(import.meta.url);
 const __dirname$1 = path$1.dirname(__filename$1);
 const isDev = process.env.NODE_ENV === "development" || !existsSync$1(path$1.join(__dirname$1, "../dist/index.html"));
 let mainWindow = null;
 let awarenessService = null;
 let localTtsService = null;
+let replyVolumeService = null;
+let restoringVolumeForQuit = false;
+let worldState = createWorldState();
+let pointerPoll = null;
+let contextPoll = null;
+let audioPoll = null;
+let activityPoll = null;
+let sttService = null;
+let voiceListeningEnabled = false;
+let lastPointer = null;
+let lastDesktopContextKey = "";
+const manualScreenCapture = createScreenCaptureService({
+  getSources: (options) => desktopCapturer.getSources(options),
+  getDisplay: () => mainWindow && !mainWindow.isDestroyed() ? screen.getDisplayMatching(mainWindow.getBounds()) : null,
+  getPermissionStatus: () => systemPreferences.getMediaAccessStatus("screen")
+});
+function publishWorldPatch(patch) {
+  worldState = mergeWorldStatePatch(worldState, patch);
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send("world-state:patch", patch);
+  }
+}
+async function pollDesktopContext() {
+  const service = awarenessService;
+  if (!service) return;
+  if (!service.activeWindowProvider) await service.initializeActiveWindowProvider();
+  service.refreshScreenCaptureStatus();
+  let context = await service.getActiveContext().catch(() => null);
+  if (context && service.isHikariContext(context)) {
+    const windows = await service.openWindowsProvider?.().catch(() => null);
+    context = (Array.isArray(windows) ? windows : []).map((window) => ({
+      appName: window?.owner?.name || "",
+      bundleId: window?.owner?.bundleId || "",
+      windowTitle: window?.title || "",
+      windowId: Number.isFinite(Number(window?.id)) ? Number(window.id) : null,
+      bounds: window?.bounds || null,
+      processId: Number(window?.owner?.processId) || null
+    })).find((window) => window.appName && !service.isHikariContext(window)) || null;
+  }
+  const contextKey = context ? `${context.bundleId || context.appName || "unknown"}:${context.windowId ?? context.windowTitle ?? "unknown"}` : "";
+  const contextChanged = Boolean(lastDesktopContextKey && contextKey && contextKey !== lastDesktopContextKey);
+  lastDesktopContextKey = contextKey || lastDesktopContextKey;
+  const observedAt = Date.now();
+  publishWorldPatch({ desktop: {
+    appName: context?.appName || "",
+    bundleId: context?.bundleId || "",
+    windowTitle: context?.windowTitle || "",
+    windowId: context?.windowId ?? null,
+    windowBounds: context?.bounds || null,
+    contextUpdatedAt: observedAt,
+    contextStale: !context,
+    screen: contextChanged ? { available: Boolean(service.getStatus().screenCaptureAvailable), visionAvailable: Boolean(service.getStatus().screenCaptureAvailable), changeLevel: "unknown", changeAt: 0, changeStale: true, lastSummary: "", summaryAt: 0, summaryStale: true, summaryContextKey: "" } : { available: Boolean(service.getStatus().screenCaptureAvailable), visionAvailable: Boolean(service.getStatus().screenCaptureAvailable) }
+  }, browser: { available: false } });
+}
+function pollActivityState() {
+  if (!awarenessService) return;
+  const idleForMs = Math.max(0, (Number(powerMonitor.getSystemIdleTime()) || 0) * 1e3);
+  publishWorldPatch({ desktop: { activity: { ...awarenessService.getActivityState(), idleForMs, idle: idleForMs >= 6e4, updatedAt: Date.now(), stale: false } } });
+}
+async function pollSystemAudio(service) {
+  if (process.platform !== "darwin" || !service.ensureMediaPlaybackProvider()) {
+    publishWorldPatch({ audio: { system: { available: false, updatedAt: Date.now() } } });
+    return;
+  }
+  try {
+    const [rawAudioState, output] = await Promise.all([
+      getReplyVolumeService().call(["audio-state"]).catch(() => ""),
+      getReplyVolumeService().readVolume().catch(() => null)
+    ]);
+    const audioState = parseSystemAudioOutput(rawAudioState);
+    publishWorldPatch({ audio: { system: {
+      available: audioState?.available ?? false,
+      stale: false,
+      captureAvailable: false,
+      running: audioState?.running ?? false,
+      volume: audioState?.volume ?? output?.scalar ?? null,
+      muted: audioState?.muted ?? null,
+      level: null,
+      classification: "unknown",
+      confidence: 0,
+      updatedAt: Date.now()
+    } } });
+  } catch {
+    publishWorldPatch({ audio: { system: { available: false, updatedAt: Date.now() } } });
+  }
+}
+function startWorldStatePolling() {
+  if (pointerPoll || contextPoll || activityPoll) return;
+  void pollDesktopContext();
+  pollActivityState();
+  void pollSystemAudio(awarenessService);
+  contextPoll = setInterval(() => void pollDesktopContext(), 1500);
+  activityPoll = setInterval(pollActivityState, 500);
+  audioPoll = setInterval(() => void pollSystemAudio(awarenessService), 5e3);
+  pointerPoll = setInterval(() => {
+    const point = screen.getCursorScreenPoint();
+    const moved = !lastPointer || Math.abs(point.x - lastPointer.x) >= 4 || Math.abs(point.y - lastPointer.y) >= 4;
+    if (!moved) return;
+    lastPointer = point;
+    const display = screen.getDisplayNearestPoint(point);
+    publishWorldPatch({ desktop: { pointer: { ...point, displayId: display?.id ?? null, updatedAt: Date.now(), stale: false } } });
+  }, 100);
+}
+function stopWorldStatePolling() {
+  clearInterval(pointerPoll);
+  clearInterval(contextPoll);
+  clearInterval(activityPoll);
+  clearInterval(audioPoll);
+  pointerPoll = null;
+  contextPoll = null;
+  activityPoll = null;
+  audioPoll = null;
+}
+function getSttService() {
+  if (!sttService) {
+    const candidates = app.isPackaged ? [path$1.join(process.resourcesPath, "voice-stt", "voice-stt")] : [
+      path$1.join(app.getAppPath(), "tools", "voice-stt", "voice-stt"),
+      path$1.resolve(__dirname$1, "../../tools/voice-stt/voice-stt"),
+      path$1.resolve(__dirname$1, "../tools/voice-stt/voice-stt")
+    ];
+    sttService = new SpeechToTextService({ executable: process.env.HIKARI_SPEECH_HELPER || candidates.find((candidate) => existsSync$1(candidate)) || candidates[0] });
+  }
+  return sttService;
+}
+function getReplyVolumeService() {
+  if (!replyVolumeService) {
+    const candidates = app.isPackaged ? [path$1.join(process.resourcesPath, "media-state", "media-state")] : [
+      path$1.join(app.getAppPath(), "tools", "media-state", "media-state"),
+      path$1.resolve(__dirname$1, "../tools/media-state/media-state")
+    ];
+    replyVolumeService = new ReplyVolumeService({
+      helperPath: candidates.find((candidate) => existsSync$1(candidate))
+    });
+  }
+  return replyVolumeService;
+}
 function getLocalTtsService() {
+  if (!localTtsService && process.env.HIKARI_SERVICE_URL) {
+    localTtsService = createRemoteTtsService({ url: process.env.HIKARI_SERVICE_URL });
+  }
   if (!localTtsService) {
     const candidates = app.isPackaged ? [path$1.join(process.resourcesPath, "companion-tts")] : [
       path$1.join(app.getAppPath(), "tools/companion-tts"),
@@ -1383,6 +2292,47 @@ function createAwarenessService() {
   awarenessService = new DesktopAwarenessService({
     getHikariBounds: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null,
     emitCandidate: (candidate) => {
+      const context = candidate.context || {};
+      const contextKey = `${context.bundleId || context.appName || "unknown"}:${candidate.windowId ?? context.windowId ?? context.windowTitle ?? "unknown"}`;
+      const appWindow = [context.appName, context.windowTitle].filter(Boolean).join(" — ");
+      const observedAt = candidate.timestamp || Date.now();
+      const idleForMs = Math.max(0, (Number(powerMonitor.getSystemIdleTime()) || 0) * 1e3);
+      const activityLabel = candidate.trigger === "typing_session_end" ? "a typing session was observed" : candidate.trigger === "scroll_session_end" ? "a scrolling session was observed" : "desktop activity changed";
+      const patch = { desktop: {
+        appName: context.appName || "",
+        bundleId: context.bundleId || "",
+        windowTitle: context.windowTitle || "",
+        windowId: context.windowId ?? candidate.windowId ?? null,
+        contextUpdatedAt: observedAt,
+        contextStale: !context.appName,
+        activity: {
+          ...awarenessService?.getActivityState?.() || {},
+          idleForMs,
+          idle: idleForMs >= 6e4,
+          updatedAt: observedAt,
+          stale: false
+        },
+        screen: {
+          available: Boolean(awarenessService?.getStatus().screenCaptureAvailable),
+          visionAvailable: Boolean(awarenessService?.getStatus().screenCaptureAvailable)
+        }
+      } };
+      if (candidate.visualChange || ["application_changed", "window_changed", "typing_session_end", "scroll_session_end", "click_caused_screen_change"].includes(candidate.trigger)) {
+        patch.desktop.screen = {
+          ...patch.desktop.screen,
+          changeLevel: candidate.visualChange?.level || "unknown",
+          changeAt: observedAt,
+          changeStale: false,
+          lastSummary: appWindow ? `Active window: ${appWindow}; ${activityLabel}. Window content was not interpreted.` : `${activityLabel}. Window content was not interpreted.`,
+          summaryAt: observedAt,
+          summaryStale: false,
+          summaryContextKey: contextKey
+        };
+      }
+      if (candidate.media?.state === "playing" || candidate.media?.state === "stopped") {
+        patch.audio = { system: { available: true, running: candidate.media.state === "playing", updatedAt: observedAt, stale: false } };
+      }
+      publishWorldPatch(patch);
       if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send("awareness:candidate", candidate);
       }
@@ -1415,6 +2365,9 @@ function createWindow() {
   }
   mainWindow.once("closed", () => {
     awarenessService?.stop();
+    stopWorldStatePolling();
+    voiceListeningEnabled = false;
+    void replyVolumeService?.restore();
     localTtsService?.dispose();
     localTtsService = null;
     mainWindow = null;
@@ -1423,6 +2376,41 @@ function createWindow() {
 ipcMain.handle("tts:synthesize", async (event, input) => {
   if (!isMainRenderer(event)) throw new TypeError("Invalid voice request");
   return getLocalTtsService().synthesize(input);
+});
+ipcMain.handle("world-state:get", (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid world-state request");
+  return expireWorldStateFields(worldState);
+});
+ipcMain.handle("voice:set-enabled", (event, enabled) => {
+  if (!isMainRenderer(event) || typeof enabled !== "boolean") throw new TypeError("Invalid voice request");
+  voiceListeningEnabled = enabled;
+  const permission = process.platform === "darwin" ? systemPreferences.getMediaAccessStatus("microphone") : "unknown";
+  const stt = getSttService().getStatus();
+  publishWorldPatch({ audio: { microphone: { enabled, permission }, stt: { status: stt.status, language: "auto" } } });
+  return { enabled, permission, stt };
+});
+ipcMain.handle("voice:transcribe", async (event, input) => {
+  if (!isMainRenderer(event) || !voiceListeningEnabled) throw new TypeError("Voice listening is disabled");
+  if (!(input instanceof Float32Array)) throw new TypeError("Invalid voice audio segment");
+  return getSttService().transcribe(new Float32Array(input));
+});
+ipcMain.handle("world-state:renderer-patch", (event, patch) => {
+  if (!isMainRenderer(event) || !patch || typeof patch !== "object") throw new TypeError("Invalid world-state update");
+  const safePatch = sanitizeRendererWorldPatch(patch);
+  if (!Object.keys(safePatch).length) throw new TypeError("Invalid world-state update");
+  publishWorldPatch(safePatch);
+});
+ipcMain.handle("audio:begin-reply", async (event, options) => {
+  if (!isMainRenderer(event) || typeof options?.canBoost !== "boolean") {
+    throw new TypeError("Invalid reply-audio request");
+  }
+  return getReplyVolumeService().begin(options);
+});
+ipcMain.handle("audio:end-reply", async (event, sessionId) => {
+  if (!isMainRenderer(event) || typeof sessionId !== "string") {
+    throw new TypeError("Invalid reply-audio request");
+  }
+  await getReplyVolumeService().end(sessionId);
 });
 ipcMain.handle("get-window-position", () => {
   if (!mainWindow) return { x: 0, y: 0 };
@@ -1465,6 +2453,10 @@ ipcMain.handle("awareness:get-status", async (event) => {
   const service = createAwarenessService();
   return service.refreshPermissionStatus();
 });
+ipcMain.handle("awareness:get-greeting-context", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness request");
+  return createAwarenessService().getGreetingContext();
+});
 ipcMain.handle("awareness:refresh-status", async (event) => {
   if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness request");
   const service = createAwarenessService();
@@ -1478,6 +2470,14 @@ ipcMain.handle("awareness:request-input-monitoring", async (event) => {
   if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness request");
   return createAwarenessService().requestInputMonitoringPermission();
 });
+ipcMain.handle("screen:capture", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid screenshot request");
+  try {
+    return { ok: true, attachment: await manualScreenCapture.capture() };
+  } catch (error) {
+    return { ok: false, error: { code: error.code || "CAPTURE_FAILED", message: error.message || "Screenshot capture failed." } };
+  }
+});
 ipcMain.handle("awareness:request-snapshot", (event, candidateId) => {
   if (!isMainRenderer(event) || typeof candidateId !== "string" || !candidateId.trim()) {
     throw new TypeError("Invalid desktop-awareness snapshot request");
@@ -1489,7 +2489,12 @@ ipcMain.on("awareness:direct-interaction", (event) => {
 });
 app.whenReady().then(() => {
   createAwarenessService();
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    const audioOnly = permission === "media" && details?.mediaTypes?.includes("audio") && !details?.mediaTypes?.includes("video");
+    callback(Boolean(audioOnly && voiceListeningEnabled));
+  });
   createWindow();
+  startWorldStatePolling();
   if (awarenessConfig.enabledByDefault) {
     awarenessService.start();
   }
@@ -1501,11 +2506,21 @@ app.whenReady().then(() => {
 });
 app.on("window-all-closed", () => {
   awarenessService?.stop();
+  stopWorldStatePolling();
   if (process.platform !== "darwin") {
     app.quit();
   }
 });
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (replyVolumeService?.active && !restoringVolumeForQuit) {
+    event.preventDefault();
+    restoringVolumeForQuit = true;
+    void replyVolumeService.restore().finally(() => {
+      replyVolumeService = null;
+      app.quit();
+    });
+    return;
+  }
   awarenessService?.stop();
   localTtsService?.dispose();
 });

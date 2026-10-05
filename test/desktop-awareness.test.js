@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { awarenessConfig } from '../electron/awareness-config.js';
-import { MediaPlaybackStateTracker, parseMediaPlaybackOutput } from '../electron/media-playback-state.js';
+import { activeWindowOptions } from '../electron/active-window-options.js';
+import { MediaPlaybackStateTracker, parseMediaPlaybackOutput, parseSystemAudioOutput } from '../electron/media-playback-state.js';
 import {
   AwarenessController,
   awarenessDedupeKey,
@@ -20,9 +21,16 @@ test('awareness activity tuning catches short typing bursts without lowering scr
 });
 
 test('awareness reaction tuning allows modestly more timely normal reactions', () => {
-  assert.equal(awarenessConfig.observation.minimumAgentAnalysisIntervalMs, 6000);
-  assert.equal(awarenessConfig.reaction.normalSpeechCooldownMs, 30000);
-  assert.equal(awarenessConfig.reaction.normalBudgetCount, 4);
+  assert.equal(awarenessConfig.observation.minimumAgentAnalysisIntervalMs, 4000);
+  assert.equal(awarenessConfig.reaction.normalSpeechCooldownMs, 20000);
+  assert.equal(awarenessConfig.reaction.normalBudgetCount, 6);
+});
+
+test('active-window metadata stays owner-only and avoids helper Screen Recording checks', () => {
+  assert.deepEqual(activeWindowOptions, {
+    accessibilityPermission: false,
+    screenRecordingPermission: false
+  });
 });
 
 let desktopAwarenessMain;
@@ -32,6 +40,15 @@ try {
 } catch (error) {
   desktopAwarenessMainImportError = error;
 }
+
+test('world activity exposes aggregated typing and measured last input time', { skip: !desktopAwarenessMain }, () => {
+  const service = new desktopAwarenessMain.DesktopAwarenessService();
+  service.lastInputAt = 500;
+  service.typingSession = { startedAt: 500 };
+  assert.deepEqual(service.getActivityState(2500), {
+    typing: true, scrolling: false, clicking: false, lastInputAt: 500, idleForMs: 2000, idle: false
+  });
+});
 
 test('parseAwarenessResponse accepts an explicit silent decision', () => {
   assert.deepEqual(parseAwarenessResponse('{"react":false}'), { react: false });
@@ -63,6 +80,23 @@ test('parseAwarenessResponse rejects malformed or incomplete decisions', () => {
   assert.equal(parseAwarenessResponse('{"react":"false","text":"Nope"}'), null);
 });
 
+test('parseAwarenessResponse accepts a visual-only reaction without spoken text', () => {
+  assert.deepEqual(
+    parseAwarenessResponse('{"react":true,"speak":false,"visualReaction":"surprised"}'),
+    { react: true, speak: false, visualReaction: 'surprised', expression: { name: 'surprised', timing: 'during' } }
+  );
+});
+
+test('system audio state parser preserves unknown volume and mute availability', () => {
+  assert.deepEqual(parseSystemAudioOutput('{"available":true,"deviceId":22,"running":true,"volume":0.35,"muted":false}'), {
+    available: true, deviceId: 22, running: true, volume: 0.35, muted: false
+  });
+  assert.deepEqual(parseSystemAudioOutput('{"available":true,"running":false,"volume":null,"muted":null}'), {
+    available: true, deviceId: null, running: false, volume: null, muted: null
+  });
+  assert.equal(parseSystemAudioOutput('invalid'), null);
+});
+
 test('expected awareness AbortErrors are distinguishable from real request failures', () => {
   assert.equal(isExpectedAwarenessAbort({ name: 'AbortError' }, 'awareness'), true);
   assert.equal(isExpectedAwarenessAbort({ name: 'TypeError' }, 'awareness'), false);
@@ -90,21 +124,25 @@ test('awarenessDedupeKey normalizes app identity and window-title noise', () => 
   assert.equal(equivalent, first);
 });
 
-test('buildAwarenessPrompt carries transient desktop context and an explicit silence contract', () => {
+test('buildAwarenessPrompt carries functional context without imposing an agent persona', () => {
   const prompt = buildAwarenessPrompt({
     trigger: 'typing_session_end',
     activity: { durationMs: 34_200, eventCount: 72 },
-    context: { appName: 'Visual Studio Code', windowTitle: 'app.js — hikari-archive' },
+    context: { appName: 'Visual Studio Code', windowTitle: 'app.js — project-alpha' },
     visualChange: { ratio: 0.16, level: 'significant' }
   }, [{ reactionText: 'Back to that bug again?' }]);
 
   assert.match(prompt, /Desktop awareness event:/);
-  assert.match(prompt, /passively noticed this action/);
+  assert.match(prompt, /passively observed this event/);
   assert.match(prompt, /Visual Studio Code/);
-  assert.match(prompt, /app\.js — hikari-archive/);
-  assert.match(prompt, /Recent proactive Hikari reactions:[\s\S]*Back to that bug again\?/);
-  assert.match(prompt, /Prefer silence/);
+  assert.match(prompt, /app\.js — project-alpha/);
+  assert.match(prompt, /Recent reactions:[\s\S]*Back to that bug again\?/);
+  assert.doesNotMatch(prompt, /Hikari|companion|personality|persona/i);
+  assert.match(prompt, /Use silence for brief\/trivial activity/);
+  assert.match(prompt, /do not infer private content/i);
   assert.match(prompt, /\{"react":false\}/);
+  assert.match(prompt, /shared spoken-response protocol, including paired "segments"/);
+  assert.match(prompt, /add "react":true/);
   assert.match(prompt, /Return only one JSON object/);
 });
 
@@ -131,7 +169,7 @@ test('buildAwarenessPrompt describes media state and source without inventing tr
   assert.match(prompt, /Media playback state: playing/);
   assert.match(prompt, /Media playback source: system_audio_output/);
   assert.match(prompt, /media playback/);
-  assert.match(prompt, /Do not claim or guess the track, title, or content/);
+  assert.match(prompt, /Do not claim or guess the track,\s+title, or content/);
 });
 
 test('parseMediaPlaybackOutput accepts only trimmed binary status values', () => {
@@ -189,6 +227,31 @@ test('normalizeActiveWindow returns stable, normalized context', { skip: !deskto
       bounds: { x: 1, y: 2, width: 800, height: 600 }
     }
   );
+});
+
+test('getGreetingContext picks the first ordinary open window when Hikari has focus', { skip: !desktopAwarenessMain }, async () => {
+  const service = new desktopAwarenessMain.DesktopAwarenessService({
+    activeWindowProvider: async () => ({
+      title: 'Hikari',
+      owner: { name: 'Hikari', bundleId: 'com.electron.hikari', processId: process.pid }
+    }),
+    openWindowsProvider: async () => [
+      { title: 'Hikari', owner: { name: 'Hikari', bundleId: 'com.electron.hikari', processId: process.pid } },
+      { title: 'Notification Center', owner: { name: 'Notification Center', bundleId: 'com.apple.notificationcenterui', processId: 10 } },
+      { title: 'Morning playlist', owner: { name: 'Safari', bundleId: 'com.apple.Safari', processId: 20 } },
+      { title: 'app.js', owner: { name: 'Visual Studio Code', bundleId: 'com.microsoft.VSCode', processId: 30 } }
+    ],
+    mediaPlaybackProvider: async () => false
+  });
+
+  assert.deepEqual(await service.getGreetingContext(), {
+    activeWindow: {
+      appName: 'Safari',
+      bundleId: 'com.apple.Safari',
+      windowTitle: 'Morning playlist'
+    },
+    mediaPlaybackState: 'stopped'
+  });
 });
 
 test('enrichWindowTitleFromSource fills only a missing active-window title', { skip: !desktopAwarenessMain }, () => {

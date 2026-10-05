@@ -43,7 +43,7 @@
 > [!TIP]
 > Hikari Archive supports both Electron desktop and Web/Mobile versions with a shared codebase.
 >
-> Use the Electron version for desktop applications with window management, or the Web version for remote access via Tailscale.
+> Use the Electron version for desktop applications with window management, or the Web version for private phone access via Tailscale. See the [phone setup guide](docs/phone-web.md) for the local server, Japanese TTS, and HTTPS setup.
 
 > [!WARNING]
 > **This project is heavily vibe-coded**
@@ -178,8 +178,8 @@ npm run build:web
 # Run built Electron app
 npm run start:electron
 
-# Preview built Web app
-npm run preview
+# Serve built Web app and local API
+npm run serve:web
 ```
 
 ## Prerequisites
@@ -222,21 +222,9 @@ This will install:
 
 ### Step 3: Configure OpenClaw
 
-Edit OpenClaw configuration file at `~/.openclaw/config.json`:
+Keep OpenClaw local to this computer at `127.0.0.1:18789`. The phone connects to the Hikari server, which forwards chat requests and keeps the gateway token off the browser. The server reads `HIKARI_OPENCLAW_TOKEN` or `gateway.auth.token` from `~/.openclaw/openclaw.json`. Keep the gateway's chat-completions endpoint enabled for Hikari's existing HTTP integration.
 
-```json
-{
-  "gateway": {
-    "bind": "0.0.0.0:18789",
-    "token": "YOUR_GATEWAY_TOKEN_HERE"
-  }
-}
-```
-
-**Important:**
-- `"bind": "0.0.0.0:18789"` allows external connections
-- `"token"` is required for authentication
-- Keep your token secure - don't share it!
+See [phone setup](docs/phone-web.md) for private HTTPS access. Do not expose the raw OpenClaw or TTS ports for the phone.
 
 ### Step 4: Start OpenClaw Gateway
 
@@ -262,24 +250,15 @@ npm run dev:electron
 
 ### Option B: Web/Mobile Version
 
-**1. Get Your Tailscale IP**
+Follow the [phone setup guide](docs/phone-web.md) to enable Tailscale Serve, then run:
 
 ```bash
-tailscale ip -4
+HIKARI_PUBLIC_ORIGIN=https://your-computer.your-tailnet.ts.net npm run start:web
 ```
 
-**2. Start Web Version** (This automatically starts both asset server and web dev server)
+Open that HTTPS address on your phone with Tailscale connected. OpenClaw and Japanese TTS run on this computer; the phone renders the character and plays its voice. Keep the computer awake and the server running. Phone microphone input is not included yet.
 
-```bash
-npm run dev:web
-```
-
-**3. Access from Phone or Browser**
-
-Open browser and navigate to:
-```
-http://YOUR_TAILSCALE_IP:8081/index.html
-```
+For local development, run `npm run serve:web` and `npm run dev:web` in separate terminals. Web output uses `dist-web`, independently of Electron's `dist` output.
 
 ## Usage
 

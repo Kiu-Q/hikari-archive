@@ -9,6 +9,23 @@ export function parseMediaPlaybackOutput(value) {
   return null;
 }
 
+export function parseSystemAudioOutput(value) {
+  try {
+    const parsed = JSON.parse(String(value ?? '').trim());
+    if (parsed?.available !== true) return { available: false, running: false, volume: null, muted: null };
+    const volume = parsed.volume == null ? null : Number(parsed.volume);
+    return {
+      available: true,
+      running: Boolean(parsed.running),
+      volume: Number.isFinite(volume) && volume >= 0 && volume <= 1 ? volume : null,
+      muted: typeof parsed.muted === 'boolean' ? parsed.muted : null,
+      deviceId: Number.isSafeInteger(parsed.deviceId) && parsed.deviceId > 0 ? parsed.deviceId : null
+    };
+  } catch {
+    return null;
+  }
+}
+
 export class MediaPlaybackStateTracker {
   constructor({ debounceSamples = 2 } = {}) {
     this.debounceSamples = Math.max(1, Math.floor(Number(debounceSamples) || 1));

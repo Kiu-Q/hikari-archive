@@ -12,8 +12,16 @@ test('bilingual response instructions define the Traditional Chinese and Japanes
   assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /spoken Cantonese/);
   assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /faithful, natural spoken Japanese translation/);
   assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /same meaning and tone/);
+  assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /punctuation boundaries synchronized/);
+  assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /do not add or omit a boundary/);
+  assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /kana-only rule applies to words, not punctuation/);
+  assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /punctuation and line breaks are required in the Japanese VO transcript too/);
   assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /1 and 500 characters/);
+  assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /text_ja.*only.*Japanese script/i);
+  assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /foreign terms or proper names.*katakana/i);
+  assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /kana-only rule.*Japanese speech field/i);
   assert.match(BILINGUAL_RESPONSE_INSTRUCTIONS, /stage directions, ruby\/furigana markup, or romanization/);
+  assert.doesNotMatch(BILINGUAL_RESPONSE_INSTRUCTIONS, /Hikari|persona|act as.{0,20}\bhuman|personality|\b(?:my|your)\s+name\b|\bname\s+is\b|introduce yourself/i);
 });
 
 test('normalizeJapaneseText trims and converts literal escaped newlines', () => {
@@ -33,4 +41,13 @@ test('normalizeJapaneseText enforces the 500 character limit', () => {
   assert.equal(Array.from(normalizeJapaneseText('界'.repeat(500))).length, 500);
   assert.equal(normalizeJapaneseText('界'.repeat(501)), '');
   assert.equal(normalizeJapaneseText('🙂'.repeat(501)), '');
+});
+
+
+test('response example uses valid JSON with escaped, aligned segment breaks', () => {
+  const example = JSON.parse(BILINGUAL_RESPONSE_INSTRUCTIONS.split('Example: ')[1]);
+  assert.equal(example.text.split('\n').length, 2);
+  assert.equal(example.text_ja.split('\n').length, 2);
+  assert.equal(example.text, example.segments.map(item => item.text).join('\n'));
+  assert.equal(example.text_ja, example.segments.map(item => item.text_ja).join('\n'));
 });

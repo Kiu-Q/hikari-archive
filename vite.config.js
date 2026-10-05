@@ -4,14 +4,32 @@ import electron from 'vite-plugin-electron';
 export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd());
   
-  const isWeb = mode === 'web';
+  const isWeb = mode.startsWith('web');
   const isProduction = command === 'build';
+  const isLocalWebBuild = mode === 'web-local';
+  const publicOriginHosts = (process.env.HIKARI_PUBLIC_ORIGIN || '')
+    .split(',')
+    .flatMap((origin) => {
+      try {
+        return origin.trim() ? [new URL(origin.trim()).hostname] : [];
+      } catch {
+        return [];
+      }
+    });
+
+  // The canonical model and animation files live in electron/assets. Web
+  // builds read them directly so desktop and phone builds cannot drift.
+  const webAssetBase = (value) => {
+    if (!value) return '/';
+    const normalized = value.replace(/\/assets\/?$/, '/');
+    return normalized.endsWith('/') ? normalized : `${normalized}/`;
+  };
   
   // Set base path for GitHub Pages deployment
   // For web mode in production, use VITE_BASE_URL if set, otherwise '/'
   const base = !isWeb && isProduction
     ? './'
-    : (isWeb && isProduction && env.VITE_BASE_URL ? env.VITE_BASE_URL : '/');
+    : (isWeb && isProduction && !isLocalWebBuild ? (env.VITE_BASE_URL || '/') : '/');
   
   // Local Vite development always serves public assets from the server root.
   // `.env.web` contains the GitHub Pages prefix, which must only be applied
@@ -19,8 +37,8 @@ export default defineConfig(({ mode, command }) => {
   // the VRM URL resolve to an HTML fallback page instead of the model.
   let assetBaseUrl;
   if (isWeb) {
-    assetBaseUrl = isProduction
-      ? (env.VITE_ASSET_BASE_URL || '/assets/')
+    assetBaseUrl = isProduction && !isLocalWebBuild
+      ? webAssetBase(env.VITE_ASSET_BASE_URL || env.VITE_BASE_URL)
       : '/';
   } else {
     // Electron assets are served from the public root in dev and copied next
@@ -48,9 +66,9 @@ export default defineConfig(({ mode, command }) => {
       ])
     ],
     root: isWeb ? 'web' : 'electron',
-    publicDir: 'assets',
+    publicDir: isWeb ? '../electron/assets' : 'assets',
     build: {
-      outDir: isWeb ? '../dist' : '../dist',
+      outDir: isWeb ? '../dist-web' : '../dist',
       emptyOutDir: true,
       copyPublicDir: true,
       assetsInlineLimit: 4096,
@@ -71,16 +89,22 @@ export default defineConfig(({ mode, command }) => {
     },
     assetsInclude: ['**/*.vrm', '**/*.vrma', '**/*.gif'],
     server: {
-      port: mode === 'web' ? 8081 : 5174,
+      port: isWeb ? 8081 : 5174,
       open: false,
       host: '0.0.0.0',
-      allowedHosts: 'node.tail9eee8d.ts.net',
+      allowedHosts: [...new Set(['localhost', '127.0.0.1', ...publicOriginHosts])],
       proxy: {
-        '/__openclaw__': {
-          target: env.VITE_GATEWAY_URL || 'http://localhost:18789',
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/__openclaw__/, '')
-        }
+        '/api': {
+          target: 'http://127.0.0.1:3000',
+          changeOrigin: true
+        },
+        ...(!isWeb ? {
+          '/__openclaw__': {
+            target: env.VITE_GATEWAY_URL || 'http://localhost:18789',
+            changeOrigin: true,
+            rewrite: (path) => path.replace(/^\/__openclaw__/, '')
+          }
+        } : {})
       }
     },
     preview: {

@@ -22,40 +22,60 @@ try {
     backgroundThrottling: false,
   } });
   window.webContents.setAudioMuted(true);
-  let spokenText;
+  const spokenTexts = [];
   ipcMain.handle('tts:synthesize', (event, input) => {
     assert.equal(event.sender, window.webContents);
-    spokenText = input.text;
+    spokenTexts.push(input.text);
     return service.synthesize(input);
   });
   await window.loadURL('data:text/html,<html><body><div id="subtitle"></div></body></html>');
+  const preparationSource = readFileSync(path.join(root, 'shared/speech-preparation.js'), 'utf8')
+    .replaceAll('export function ', 'function ');
   const playerSource = readFileSync(path.join(root, 'electron/japanese-speech-player.js'), 'utf8')
+    .replace(/^import .*;$/m, '')
     .replace('export function createJapaneseSpeechPlayer', 'function createJapaneseSpeechPlayer');
   const evidence = await window.webContents.executeJavaScript(`(async () => {
+    ${preparationSource}
     ${playerSource}
-    const command = {text: '老師，早晨！', text_ja: '先生、おはよう。'};
+    const subtitles = ['老師，早晨！', '今日點呀？'];
+    const japanese = ['せんせい、おはよう。', 'きょうはどう？'];
+    const displayed = [], ready = new Set();
     const mouth = [];
     let prepared = false, synchronized = false;
     const player = createJapaneseSpeechPlayer({
       synthesize: async input => {
         const result = await window.electronAPI.tts.synthesize(input);
-        if (document.getElementById('subtitle').textContent !== '') throw new Error('Caption appeared before voice was ready');
+        ready.add(input.text);
         return result;
       },
       onMouth: shape => mouth.push(shape),
-      onPlaying: () => { synchronized = prepared && document.getElementById('subtitle').textContent === command.text; },
+      onPlaying: () => { synchronized = prepared && displayed.length > 0; },
     });
-    const completed = await player.speak(command.text_ja, 1, {
-      beforePlay: () => { prepared = true; },
-      onStart: () => { document.getElementById('subtitle').textContent = command.text; },
-    });
-    return { completed, synchronized, display: document.getElementById('subtitle').textContent,
+    const preparations = prepareSpeechSegments(input => window.electronAPI.tts.synthesize(input).then(result => {
+      ready.add(input.text);
+      return result;
+    }), japanese.join(String.fromCharCode(10)));
+    let completed = true;
+    for (let index = 0; index < japanese.length; index++) {
+      completed = await player.speak(japanese[index], 1, {
+        prepared: preparations[index], fadeIn: index === 0,
+        beforePlay: () => { prepared = true; },
+        onStart: () => {
+          if (!ready.has(japanese[index])) throw new Error('Caption appeared before voice was ready');
+          document.getElementById('subtitle').textContent = subtitles[index];
+          displayed.push(subtitles[index]);
+        },
+      });
+      if (!completed) break;
+    }
+    return { completed, synchronized, displayed, display: document.getElementById('subtitle').textContent,
       openFrames: mouth.filter(shape => shape === 'aa').length,
       closedFrames: mouth.filter(shape => shape === 'neutral').length,
       finalMouth: mouth.at(-1) };
   })()`);
-  assert.equal(spokenText, '先生、おはよう。');
-  assert.equal(evidence.display, '老師，早晨！');
+  assert.deepEqual(spokenTexts, ['せんせい、おはよう。', 'きょうはどう？']);
+  assert.deepEqual(evidence.displayed, ['老師，早晨！', '今日點呀？']);
+  assert.equal(evidence.display, '今日點呀？');
   assert.equal(evidence.completed, true);
   assert.equal(evidence.synchronized, true);
   assert.ok(evidence.openFrames > 0, 'Mouth must open on real audio');

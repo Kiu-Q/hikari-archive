@@ -3,13 +3,23 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { app, desktopCapturer, nativeImage, screen, shell, systemPreferences } from 'electron';
+import { activeWindowOptions } from './active-window-options.js';
 import { awarenessConfig } from './awareness-config.js';
 import { MediaPlaybackStateTracker, parseMediaPlaybackOutput } from './media-playback-state.js';
+import { deriveDesktopActivityState } from './world-state.js';
+import { IdleReturnTracker } from './idle-return.js';
 
 const PRIORITY_RANK = { low: 0, normal: 1, important: 2 };
 const PIXEL_CHANGE_DELTA = 24;
 const MACOS_SCREEN_CAPTURE_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
 const MACOS_ACCESSIBILITY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+const BACKGROUND_WINDOW_EXCLUSIONS = new Set([
+  'com.apple.notificationcenterui',
+  'com.apple.WindowManager',
+  'com.apple.dock',
+  'com.apple.controlcenter',
+  'com.apple.systemuiserver'
+]);
 const execFile = promisify(execFileCallback);
 
 function normalizeText(value) {
@@ -148,6 +158,7 @@ export class DesktopAwarenessService {
     getHikariBounds,
     config = awarenessConfig,
     activeWindowProvider,
+    openWindowsProvider,
     captureSourcesProvider,
     mediaPlaybackProvider
   } = {}) {
@@ -155,6 +166,7 @@ export class DesktopAwarenessService {
     this.emitCandidate = typeof emitCandidate === 'function' ? emitCandidate : () => {};
     this.getHikariBounds = typeof getHikariBounds === 'function' ? getHikariBounds : () => null;
     this.activeWindowProvider = activeWindowProvider || null;
+    this.openWindowsProvider = openWindowsProvider || null;
     this.captureSourcesProvider = captureSourcesProvider || ((options) => desktopCapturer.getSources(options));
     this.mediaPlaybackProvider = mediaPlaybackProvider || null;
     this.mediaPlaybackTracker = new MediaPlaybackStateTracker({
@@ -180,6 +192,8 @@ export class DesktopAwarenessService {
     this.pendingCandidateTimer = null;
     this.mediaPlaybackTimer = null;
     this.mediaPlaybackPollRunning = false;
+    this.lastInputAt = 0;
+    this.idleReturnTracker = new IdleReturnTracker(this.config.idleReturn);
 
     this.status = {
       enabled: false,
@@ -209,6 +223,54 @@ export class DesktopAwarenessService {
     };
   }
 
+  getActivityState(now = Date.now()) {
+    return deriveDesktopActivityState(this, now);
+  }
+
+  async getGreetingContext() {
+    // A greeting only needs coarse, transient context. In particular, do not
+    // capture a screenshot or initialize global input monitoring here.
+    const activeWindowPromise = (async () => {
+      if (!this.activeWindowProvider) await this.initializeActiveWindowProvider();
+      const context = await this.getActiveContext();
+      let foreground = context && !this.isHikariContext(context)
+        ? context
+        : this.currentContext;
+      if (!foreground && this.openWindowsProvider) {
+        // The companion's own always-on-top window often has focus at startup.
+        // The OS returns open windows front-to-back, so the first ordinary
+        // window behind it is useful greeting context without capturing it.
+        const windows = await this.openWindowsProvider();
+        foreground = (Array.isArray(windows) ? windows : [])
+          .map(normalizeActiveWindow)
+          .find((window) => window &&
+            !this.isHikariContext(window) &&
+            !BACKGROUND_WINDOW_EXCLUSIONS.has(window.bundleId)) || null;
+      }
+      return publicContext(foreground);
+    })().catch((error) => {
+      this.debug('GREETING', 'foreground context unavailable', error?.message || error);
+      return null;
+    });
+
+    const mediaPromise = (async () => {
+      if (!this.ensureMediaPlaybackProvider()) return null;
+      const isPlaying = await this.mediaPlaybackProvider();
+      return typeof isPlaying === 'boolean'
+        ? (isPlaying ? 'playing' : 'stopped')
+        : null;
+    })().catch((error) => {
+      this.debug('GREETING', 'media context unavailable', error?.message || error);
+      return null;
+    });
+
+    const [activeWindow, mediaPlaybackState] = await Promise.all([
+      activeWindowPromise,
+      mediaPromise
+    ]);
+    return { activeWindow, mediaPlaybackState };
+  }
+
   async setEnabled(enabled) {
     if (enabled) await this.start();
     else this.stop();
@@ -220,6 +282,7 @@ export class DesktopAwarenessService {
     this.enabled = true;
     this.status.enabled = true;
     this.status.errors = {};
+    this.idleReturnTracker.reset();
     this.refreshScreenCaptureStatus();
 
     await this.initializeActiveWindowProvider();
@@ -434,17 +497,22 @@ export class DesktopAwarenessService {
           const { stdout } = await execFile(helperPath, args, { encoding: 'utf8' });
           return JSON.parse(stdout);
         };
+        this.openWindowsProvider = async () => {
+          const args = [
+            '--no-accessibility-permission',
+            '--no-screen-recording-permission',
+            '--open-windows-list'
+          ];
+          const { stdout } = await execFile(helperPath, args, { encoding: 'utf8' });
+          return JSON.parse(stdout);
+        };
         this.status.activeWindowAvailable = true;
         return;
       }
 
-      const { activeWindow } = await import('get-windows');
-      this.activeWindowProvider = () => activeWindow({
-        accessibilityPermission: false,
-        // Without Screen Recording permission get-windows can still provide the
-        // owning application; it simply omits the protected window title.
-        screenRecordingPermission: this.status.screenCaptureAvailable
-      });
+      const { activeWindow, openWindows } = await import('get-windows');
+      this.activeWindowProvider = () => activeWindow(activeWindowOptions);
+      this.openWindowsProvider = () => openWindows(activeWindowOptions);
       this.status.activeWindowAvailable = true;
     } catch (error) {
       this.status.activeWindowAvailable = false;
@@ -488,10 +556,15 @@ export class DesktopAwarenessService {
   }
 
   initializeMediaPlaybackMonitoring() {
+    if (!this.ensureMediaPlaybackProvider()) return;
+    void this.pollMediaPlayback();
+  }
+
+  ensureMediaPlaybackProvider() {
     if (process.platform !== 'darwin') {
       this.status.mediaPlaybackAvailable = false;
       this.status.errors.mediaPlayback = 'System audio activity detection is currently available on macOS only.';
-      return;
+      return false;
     }
 
     if (!this.mediaPlaybackProvider) {
@@ -505,7 +578,7 @@ export class DesktopAwarenessService {
       if (!helperPath) {
         this.status.mediaPlaybackAvailable = false;
         this.status.errors.mediaPlayback = 'Media-state helper is missing. Run npm run build.';
-        return;
+        return false;
       }
 
       this.mediaPlaybackProvider = async () => {
@@ -521,7 +594,7 @@ export class DesktopAwarenessService {
 
     this.status.mediaPlaybackAvailable = true;
     delete this.status.errors.mediaPlayback;
-    void this.pollMediaPlayback();
+    return true;
   }
 
   async pollMediaPlayback() {
@@ -585,16 +658,36 @@ export class DesktopAwarenessService {
   }
 
   isHikariContext(context) {
-    return context?.processId === process.pid;
+    return context?.processId === process.pid || context?.bundleId === 'com.electron.hikari';
   }
 
   isDirectInteractionSuppressed(now = Date.now()) {
     return now - this.lastDirectInteractionAt < this.config.hikariInteraction.suppressionMs;
   }
 
+  recordInputActivity(inputType, now) {
+    this.lastInputAt = now;
+    const activity = this.idleReturnTracker.record(inputType, now);
+    if (activity) {
+      void this.observeIdleReturn(activity).catch(error => this.debug('IDLE', 'return context unavailable', error?.message || error));
+    }
+  }
+
+  async observeIdleReturn(activity) {
+    if (!this.enabled || this.isDirectInteractionSuppressed()) return;
+    const context = await this.getActiveContext();
+    if (!this.enabled || this.isHikariContext(context)) return;
+    this.offerCandidate({
+      id: createId(), timestamp: activity.resumedAt, trigger: 'idle_return',
+      activity, context: publicContext(context || this.currentContext),
+      visualChange: null, priority: 'important'
+    }, null);
+  }
+
   recordKeyboardActivity() {
     if (!this.enabled) return;
     const now = Date.now();
+    this.recordInputActivity('typing', now);
     this.debug('RAW', 'keyboard activity');
     this.scheduleContextInspection();
 
@@ -624,6 +717,7 @@ export class DesktopAwarenessService {
   recordWheelActivity() {
     if (!this.enabled) return;
     const now = Date.now();
+    this.recordInputActivity('scrolling', now);
     this.debug('RAW', 'wheel activity');
     this.scheduleContextInspection();
 
@@ -653,6 +747,7 @@ export class DesktopAwarenessService {
   recordClickActivity() {
     if (!this.enabled) return;
     const now = Date.now();
+    this.recordInputActivity('clicking', now);
     this.debug('RAW', 'mouse click activity');
     this.scheduleContextInspection();
 
@@ -792,7 +887,12 @@ export class DesktopAwarenessService {
       return;
     }
 
-    let priority = trigger === 'scroll_session_end' ? 'low' : 'normal';
+    // Tiny scrolls stay context-only. A clearly substantial viewport change is
+    // a useful content-awareness event even though the model must not infer
+    // what changed from the diff alone; reserve important for major changes.
+    let priority = trigger === 'scroll_session_end'
+      ? difference.ratio >= this.config.screen.significantChangeThreshold ? 'normal' : 'low'
+      : 'normal';
     if (difference.ratio >= this.config.screen.majorChangeThreshold) priority = 'important';
     const candidate = {
       id: createId(),

@@ -9,7 +9,7 @@ import {
 
 test('awareness prompt includes text_ja for reactions and keeps silence unchanged', () => {
   const prompt = buildAwarenessPrompt({ trigger: 'typing_session_end' });
-  assert.match(prompt, /\{"react":true,"text":"\.\.\.","text_ja":"\.\.\."/);
+  assert.match(prompt, /shared spoken-response protocol, including paired "segments"/);
   assert.match(prompt, /Silence:\n\{"react":false\}/);
 });
 
@@ -22,6 +22,40 @@ test('awareness parser preserves normalized Japanese text', () => {
 
   assert.equal(decision.text, '有新想法。');
   assert.equal(decision.text_ja, '新しい考えが浮かんだね。\nいいね。');
+});
+
+test('awareness accepts the same paired chunks as conversation and greeting', () => {
+  const segments = [{ text: '早晨，', text_ja: 'おはよう、' }, { text: '老師！😊', text_ja: 'せんせい！' }];
+  const decision = parseAwarenessResponse(JSON.stringify({ react: true, segments }));
+  assert.deepEqual(decision.segments, segments);
+  assert.equal(decision.text, '早晨，\n老師！😊');
+  assert.equal(decision.text_ja, 'おはよう、\nせんせい！');
+});
+
+test('Environment Reactions off suppresses analysis and a reply already in flight', async () => {
+  let reactionsEnabled = false, requests = 0, commands = 0, visuals = 0, release;
+  const controller = new AwarenessController({
+    logger: { info() {}, error() {} },
+    reactionsEnabled: () => reactionsEnabled,
+    sendAgentMessageRaw: () => { requests++; return new Promise(resolve => { release = resolve; }); },
+    parseAgentResponse: JSON.parse, executeAgentCommand: async () => { commands++; },
+    applyVisualReaction: () => { visuals++; }, isAgentBusy: () => false, isSpeaking: () => false,
+  });
+  controller.enabled = true;
+  const candidate = { trigger: 'typing_session_end', priority: 'normal', context: {} };
+  await controller.analyzeCandidate(candidate);
+  assert.equal(requests, 0);
+  for (const reply of [
+    '{"react":true,"text":"早晨！","text_ja":"おはよう！"}',
+    '{"react":true,"speak":false,"visualReaction":"surprised"}',
+  ]) {
+    reactionsEnabled = true;
+    const pending = controller.analyzeCandidate(candidate);
+    reactionsEnabled = false;
+    release(reply); await pending;
+  }
+  assert.equal(commands, 0);
+  assert.equal(visuals, 0);
 });
 
 test('legacy and invalid Japanese fields do not reject a valid awareness reaction', () => {

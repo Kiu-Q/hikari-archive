@@ -1,10 +1,16 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, desktopCapturer, ipcMain, powerMonitor, screen, session, systemPreferences } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import { DesktopAwarenessService } from './desktop-awareness-main.js';
 import { awarenessConfig } from './awareness-config.js';
 import { createLocalTtsService } from './local-tts-main.js';
+import { createRemoteTtsService } from './remote-tts-main.js';
+import { ReplyVolumeService } from './reply-volume-main.js';
+import { createWorldState, expireWorldStateFields, mergeWorldStatePatch, sanitizeRendererWorldPatch } from './world-state.js';
+import { SpeechToTextService } from './speech-to-text-main.js';
+import { parseSystemAudioOutput } from './media-playback-state.js';
+import { createScreenCaptureService } from './screen-capture-main.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,8 +22,144 @@ const isDev = process.env.NODE_ENV === 'development' ||
 let mainWindow = null;
 let awarenessService = null;
 let localTtsService = null;
+let replyVolumeService = null;
+let restoringVolumeForQuit = false;
+let worldState = createWorldState();
+let pointerPoll = null;
+let contextPoll = null;
+let audioPoll = null;
+let activityPoll = null;
+let sttService = null;
+let voiceListeningEnabled = false;
+let lastPointer = null;
+let lastDesktopContextKey = '';
+const manualScreenCapture = createScreenCaptureService({
+  getSources: options => desktopCapturer.getSources(options),
+  getDisplay: () => mainWindow && !mainWindow.isDestroyed() ? screen.getDisplayMatching(mainWindow.getBounds()) : null,
+  getPermissionStatus: () => systemPreferences.getMediaAccessStatus('screen')
+});
+
+function publishWorldPatch(patch) {
+  worldState = mergeWorldStatePatch(worldState, patch);
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('world-state:patch', patch);
+  }
+}
+
+async function pollDesktopContext() {
+  const service = awarenessService;
+  if (!service) return;
+  if (!service.activeWindowProvider) await service.initializeActiveWindowProvider();
+  service.refreshScreenCaptureStatus();
+  let context = await service.getActiveContext().catch(() => null);
+  if (context && service.isHikariContext(context)) {
+    const windows = await service.openWindowsProvider?.().catch(() => null);
+    context = (Array.isArray(windows) ? windows : []).map((window) => ({
+      appName: window?.owner?.name || '', bundleId: window?.owner?.bundleId || '', windowTitle: window?.title || '',
+      windowId: Number.isFinite(Number(window?.id)) ? Number(window.id) : null,
+      bounds: window?.bounds || null, processId: Number(window?.owner?.processId) || null
+    })).find((window) => window.appName && !service.isHikariContext(window)) || null;
+  }
+  const contextKey = context ? `${context.bundleId || context.appName || 'unknown'}:${context.windowId ?? context.windowTitle ?? 'unknown'}` : '';
+  const contextChanged = Boolean(lastDesktopContextKey && contextKey && contextKey !== lastDesktopContextKey);
+  lastDesktopContextKey = contextKey || lastDesktopContextKey;
+  const observedAt = Date.now();
+  publishWorldPatch({ desktop: {
+    appName: context?.appName || '', bundleId: context?.bundleId || '',
+    windowTitle: context?.windowTitle || '', windowId: context?.windowId ?? null,
+    windowBounds: context?.bounds || null, contextUpdatedAt: observedAt, contextStale: !context,
+    screen: contextChanged
+      ? { available: Boolean(service.getStatus().screenCaptureAvailable), visionAvailable: Boolean(service.getStatus().screenCaptureAvailable), changeLevel: 'unknown', changeAt: 0, changeStale: true, lastSummary: '', summaryAt: 0, summaryStale: true, summaryContextKey: '' }
+      : { available: Boolean(service.getStatus().screenCaptureAvailable), visionAvailable: Boolean(service.getStatus().screenCaptureAvailable) }
+  }, browser: { available: false } });
+}
+
+function pollActivityState() {
+  if (!awarenessService) return;
+  const idleForMs = Math.max(0, (Number(powerMonitor.getSystemIdleTime()) || 0) * 1000);
+  publishWorldPatch({ desktop: { activity: { ...awarenessService.getActivityState(), idleForMs, idle: idleForMs >= 60_000, updatedAt: Date.now(), stale: false } } });
+}
+
+async function pollSystemAudio(service) {
+  if (process.platform !== 'darwin' || !service.ensureMediaPlaybackProvider()) {
+    publishWorldPatch({ audio: { system: { available: false, updatedAt: Date.now() } } });
+    return;
+  }
+  try {
+    const [rawAudioState, output] = await Promise.all([
+      getReplyVolumeService().call(['audio-state']).catch(() => ''),
+      getReplyVolumeService().readVolume().catch(() => null)
+    ]);
+    const audioState = parseSystemAudioOutput(rawAudioState);
+    publishWorldPatch({ audio: { system: {
+      available: audioState?.available ?? false,
+      stale: false,
+      captureAvailable: false,
+      running: audioState?.running ?? false,
+      volume: audioState?.volume ?? output?.scalar ?? null,
+      muted: audioState?.muted ?? null,
+      level: null, classification: 'unknown', confidence: 0, updatedAt: Date.now()
+    } } });
+  } catch {
+    publishWorldPatch({ audio: { system: { available: false, updatedAt: Date.now() } } });
+  }
+}
+
+function startWorldStatePolling() {
+  if (pointerPoll || contextPoll || activityPoll) return;
+  void pollDesktopContext();
+  pollActivityState();
+  void pollSystemAudio(awarenessService);
+  contextPoll = setInterval(() => void pollDesktopContext(), 1500);
+  activityPoll = setInterval(pollActivityState, 500);
+  audioPoll = setInterval(() => void pollSystemAudio(awarenessService), 5000);
+  pointerPoll = setInterval(() => {
+    const point = screen.getCursorScreenPoint();
+    const moved = !lastPointer || Math.abs(point.x - lastPointer.x) >= 4 || Math.abs(point.y - lastPointer.y) >= 4;
+    if (!moved) return;
+    lastPointer = point;
+    const display = screen.getDisplayNearestPoint(point);
+    publishWorldPatch({ desktop: { pointer: { ...point, displayId: display?.id ?? null, updatedAt: Date.now(), stale: false } } });
+  }, 100);
+}
+
+function stopWorldStatePolling() {
+  clearInterval(pointerPoll); clearInterval(contextPoll); clearInterval(activityPoll); clearInterval(audioPoll); pointerPoll = null; contextPoll = null; activityPoll = null; audioPoll = null;
+}
+
+function getSttService() {
+  if (!sttService) {
+    const candidates = app.isPackaged
+      ? [path.join(process.resourcesPath, 'voice-stt', 'voice-stt')]
+      : [
+          path.join(app.getAppPath(), 'tools', 'voice-stt', 'voice-stt'),
+          path.resolve(__dirname, '../../tools/voice-stt/voice-stt'),
+          path.resolve(__dirname, '../tools/voice-stt/voice-stt')
+        ];
+    sttService = new SpeechToTextService({ executable: process.env.HIKARI_SPEECH_HELPER || candidates.find((candidate) => existsSync(candidate)) || candidates[0] });
+  }
+  return sttService;
+}
+
+function getReplyVolumeService() {
+  if (!replyVolumeService) {
+    const candidates = app.isPackaged
+      ? [path.join(process.resourcesPath, 'media-state', 'media-state')]
+      : [
+          path.join(app.getAppPath(), 'tools', 'media-state', 'media-state'),
+          path.resolve(__dirname, '../tools/media-state/media-state')
+        ];
+    replyVolumeService = new ReplyVolumeService({
+      helperPath: candidates.find((candidate) => existsSync(candidate))
+    });
+  }
+  return replyVolumeService;
+}
 
 function getLocalTtsService() {
+  if (!localTtsService && process.env.HIKARI_SERVICE_URL) {
+    localTtsService = createRemoteTtsService({ url: process.env.HIKARI_SERVICE_URL });
+  }
   if (!localTtsService) {
     const candidates = app.isPackaged
       ? [path.join(process.resourcesPath, 'companion-tts')]
@@ -43,6 +185,45 @@ function createAwarenessService() {
       mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null
     ),
     emitCandidate: (candidate) => {
+      const context = candidate.context || {};
+      const contextKey = `${context.bundleId || context.appName || 'unknown'}:${candidate.windowId ?? context.windowId ?? context.windowTitle ?? 'unknown'}`;
+      const appWindow = [context.appName, context.windowTitle].filter(Boolean).join(' — ');
+      const observedAt = candidate.timestamp || Date.now();
+      const idleForMs = Math.max(0, (Number(powerMonitor.getSystemIdleTime()) || 0) * 1000);
+      const activityLabel = candidate.trigger === 'typing_session_end'
+        ? 'a typing session was observed'
+        : candidate.trigger === 'scroll_session_end' ? 'a scrolling session was observed' : 'desktop activity changed';
+      const patch = { desktop: {
+        appName: context.appName || '', bundleId: context.bundleId || '', windowTitle: context.windowTitle || '',
+        windowId: context.windowId ?? candidate.windowId ?? null, contextUpdatedAt: observedAt, contextStale: !context.appName,
+        activity: {
+          ...(awarenessService?.getActivityState?.() || {}),
+          idleForMs,
+          idle: idleForMs >= 60_000,
+          updatedAt: observedAt,
+          stale: false
+        },
+        screen: {
+          available: Boolean(awarenessService?.getStatus().screenCaptureAvailable),
+          visionAvailable: Boolean(awarenessService?.getStatus().screenCaptureAvailable)
+        }
+      } };
+      if (candidate.visualChange || ['application_changed', 'window_changed', 'typing_session_end', 'scroll_session_end', 'click_caused_screen_change'].includes(candidate.trigger)) {
+        patch.desktop.screen = {
+          ...patch.desktop.screen,
+          changeLevel: candidate.visualChange?.level || 'unknown',
+          changeAt: observedAt,
+          changeStale: false,
+          lastSummary: appWindow ? `Active window: ${appWindow}; ${activityLabel}. Window content was not interpreted.` : `${activityLabel}. Window content was not interpreted.`,
+          summaryAt: observedAt,
+          summaryStale: false,
+          summaryContextKey: contextKey
+        };
+      }
+      if (candidate.media?.state === 'playing' || candidate.media?.state === 'stopped') {
+        patch.audio = { system: { available: true, running: candidate.media.state === 'playing', updatedAt: observedAt, stale: false } };
+      }
+      publishWorldPatch(patch);
       if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send('awareness:candidate', candidate);
       }
@@ -83,6 +264,9 @@ function createWindow() {
 
   mainWindow.once('closed', () => {
     awarenessService?.stop();
+    stopWorldStatePolling();
+    voiceListeningEnabled = false;
+    void replyVolumeService?.restore();
     localTtsService?.dispose();
     localTtsService = null;
     mainWindow = null;
@@ -93,6 +277,49 @@ function createWindow() {
 ipcMain.handle('tts:synthesize', async (event, input) => {
   if (!isMainRenderer(event)) throw new TypeError('Invalid voice request');
   return getLocalTtsService().synthesize(input);
+});
+
+ipcMain.handle('world-state:get', (event) => {
+  if (!isMainRenderer(event)) throw new TypeError('Invalid world-state request');
+  return expireWorldStateFields(worldState);
+});
+
+ipcMain.handle('voice:set-enabled', (event, enabled) => {
+  if (!isMainRenderer(event) || typeof enabled !== 'boolean') throw new TypeError('Invalid voice request');
+  voiceListeningEnabled = enabled;
+  const permission = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('microphone') : 'unknown';
+  const stt = getSttService().getStatus();
+  publishWorldPatch({ audio: { microphone: { enabled, permission }, stt: { status: stt.status, language: 'auto' } } });
+  return { enabled, permission, stt };
+});
+
+ipcMain.handle('voice:transcribe', async (event, input) => {
+  if (!isMainRenderer(event) || !voiceListeningEnabled) throw new TypeError('Voice listening is disabled');
+  if (!(input instanceof Float32Array)) throw new TypeError('Invalid voice audio segment');
+  return getSttService().transcribe(new Float32Array(input));
+});
+
+ipcMain.handle('world-state:renderer-patch', (event, patch) => {
+  if (!isMainRenderer(event) || !patch || typeof patch !== 'object') throw new TypeError('Invalid world-state update');
+  // Renderer may update only Hikari's local interaction state and the speech
+  // activity bit; desktop observations remain owned by this process.
+  const safePatch = sanitizeRendererWorldPatch(patch);
+  if (!Object.keys(safePatch).length) throw new TypeError('Invalid world-state update');
+  publishWorldPatch(safePatch);
+});
+
+ipcMain.handle('audio:begin-reply', async (event, options) => {
+  if (!isMainRenderer(event) || typeof options?.canBoost !== 'boolean') {
+    throw new TypeError('Invalid reply-audio request');
+  }
+  return getReplyVolumeService().begin(options);
+});
+
+ipcMain.handle('audio:end-reply', async (event, sessionId) => {
+  if (!isMainRenderer(event) || typeof sessionId !== 'string') {
+    throw new TypeError('Invalid reply-audio request');
+  }
+  await getReplyVolumeService().end(sessionId);
 });
 
 ipcMain.handle('get-window-position', () => {
@@ -145,6 +372,11 @@ ipcMain.handle('awareness:get-status', async (event) => {
   return service.refreshPermissionStatus();
 });
 
+ipcMain.handle('awareness:get-greeting-context', async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError('Invalid desktop-awareness request');
+  return createAwarenessService().getGreetingContext();
+});
+
 ipcMain.handle('awareness:refresh-status', async (event) => {
   if (!isMainRenderer(event)) throw new TypeError('Invalid desktop-awareness request');
   const service = createAwarenessService();
@@ -161,6 +393,12 @@ ipcMain.handle('awareness:request-input-monitoring', async (event) => {
   return createAwarenessService().requestInputMonitoringPermission();
 });
 
+ipcMain.handle('screen:capture', async event => {
+  if (!isMainRenderer(event)) throw new TypeError('Invalid screenshot request');
+  try { return { ok: true, attachment: await manualScreenCapture.capture() }; }
+  catch (error) { return { ok: false, error: { code: error.code || 'CAPTURE_FAILED', message: error.message || 'Screenshot capture failed.' } }; }
+});
+
 ipcMain.handle('awareness:request-snapshot', (event, candidateId) => {
   if (!isMainRenderer(event) || typeof candidateId !== 'string' || !candidateId.trim()) {
     throw new TypeError('Invalid desktop-awareness snapshot request');
@@ -175,7 +413,12 @@ ipcMain.on('awareness:direct-interaction', (event) => {
 // App lifecycle
 app.whenReady().then(() => {
   createAwarenessService();
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    const audioOnly = permission === 'media' && details?.mediaTypes?.includes('audio') && !details?.mediaTypes?.includes('video');
+    callback(Boolean(audioOnly && voiceListeningEnabled));
+  });
   createWindow();
+  startWorldStatePolling();
 
   if (awarenessConfig.enabledByDefault) {
     awarenessService.start();
@@ -190,12 +433,22 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   awarenessService?.stop();
+  stopWorldStatePolling();
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (replyVolumeService?.active && !restoringVolumeForQuit) {
+    event.preventDefault();
+    restoringVolumeForQuit = true;
+    void replyVolumeService.restore().finally(() => {
+      replyVolumeService = null;
+      app.quit();
+    });
+    return;
+  }
   awarenessService?.stop();
   localTtsService?.dispose();
 });

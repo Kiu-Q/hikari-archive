@@ -1,5 +1,6 @@
 import { awarenessConfig } from './awareness-config.js';
 import { normalizeJapaneseText } from './agent-response-contract.js';
+import { normalizePairedSegments } from './speech-segments.js';
 
 const STORAGE_KEY = 'desktop_awareness_enabled';
 const PRIORITY_RANK = { low: 0, normal: 1, important: 2 };
@@ -51,11 +52,26 @@ export function parseAwarenessResponse(value) {
   }
 
   if (parsed?.react === false) return { react: false };
-  if (parsed?.react !== true || typeof parsed.text !== 'string' || !parsed.text.trim()) return null;
+  if (parsed?.react !== true) return null;
+  const visualReaction = ['surprised', 'worry', 'relaxed', 'shy', 'neutral'].includes(parsed.visualReaction)
+    ? parsed.visualReaction
+    : null;
+  if (parsed?.speak === false) {
+    return visualReaction
+      ? { react: true, speak: false, visualReaction, expression: parsed.expression || { name: visualReaction, timing: 'during' } }
+      : null;
+  }
+  const segments = normalizePairedSegments(parsed.segments);
+  if (segments) {
+    parsed.text = segments.map(item => item.text).join('\n');
+    parsed.text_ja = segments.map(item => item.text_ja).join('\n');
+  }
+  if (typeof parsed.text !== 'string' || !parsed.text.trim()) return null;
   const response = {
     react: true,
     text: parsed.text.trim(),
     text_ja: normalizeJapaneseText(parsed.text_ja),
+    ...(segments ? { segments } : {}),
     animation: parsed.animation || null,
     expression: parsed.expression || null
   };
@@ -69,14 +85,33 @@ export function buildAwarenessPrompt(candidate, recentReactions = []) {
   const recent = recentReactions.length
     ? recentReactions.map((item) => `- ${item.reactionText}`).join('\n')
     : '- None';
-  const triggerGuidance = candidate.trigger === 'media_playback_started'
-    ? `The start of media playback is usually worth one natural reaction when Hikari is idle.
-The signal only proves that system audio output is active. Do not claim or guess the track, title, or content unless that information is explicitly present above.`
+  const triggerGuidance = candidate.trigger === 'idle_return'
+    ? `Deliberate input resumed after at least a minute without observed typing, clicking, or scrolling.
+When Hikari is free, give one short, warm welcome-back greeting in the shared bilingual response
+protocol. Make it casual and vary the wording; do not make a report about input events or the timer.
+Do not claim the user physically left, returned from somewhere, or that you know what they were doing.
+Do not add a second reaction about the resumed typing or clicking; this greeting covers that moment.`
+    : candidate.trigger === 'media_playback_started'
+    ? `When system media starts, normally give one brief, natural reaction if the assistant is idle
+and no recent reaction already covers this moment. Acknowledge the change without making it a
+report. The signal only proves that system audio output is active. Do not claim or guess the track,
+title, or content unless that information is explicitly present above.`
     : candidate.trigger === 'typing_session_end'
-      ? `A meaningful typing burst (especially 8 or more events) is usually worth one brief,
-supportive or contextual reaction when Hikari is idle. Do not claim to know what was typed;
-only use the application and window context shown above.`
-      : '';
+      ? `A sustained or meaningful typing burst (especially 8 or more key events, or a burst lasting
+several seconds) should usually receive one brief supportive or contextual reaction when the
+assistant is idle. A tiny burst of a few keys can stay silent. Do not claim to know what was typed;
+only use the application and window context shown above. Do not withhold a useful acknowledgment
+solely because the exact text is unavailable.`
+      : candidate.trigger === 'application_changed' || candidate.trigger === 'window_changed'
+        ? `A stable move into a meaningfully different application or window can merit one short,
+context-aware reaction when its visible title or app identity gives a useful clue (for example,
+returning to a recognizable project). Keep generic or ambiguous switches silent; do not merely
+announce that an app or window changed, and do not infer what is inside it.`
+        : candidate.trigger === 'click_caused_screen_change'
+          ? `A substantial screen change after interaction can merit a brief reaction when the
+application and available window context make the change socially meaningful. A large visual
+change alone does not reveal its contents, so do not guess what appeared.`
+          : '';
 
   return `Desktop awareness event:
 
@@ -85,28 +120,34 @@ Active application: ${context.appName || 'Unknown'}
 Active window: ${context.windowTitle || 'Unknown'}
 Activity duration: ${Number.isFinite(activity.durationMs) ? `${Math.round(activity.durationMs / 100) / 10}s` : 'Unknown'}
 Activity event count: ${Number.isFinite(activity.eventCount) ? activity.eventCount : 'Unknown'}
+${candidate.trigger === 'idle_return' ? `Quiet period before resumed input: ${Math.round(activity.idleDurationMs / 1000)}s\nResumed input: ${activity.inputType}\n` : ''}
 Visual change: ${Number.isFinite(candidate.visualChange?.ratio) ? `${Math.round(candidate.visualChange.ratio * 1000) / 10}% (${candidate.visualChange.level})` : 'Not measured'}
 Media playback state: ${media.state || 'Not observed'}
 Media playback source: ${media.source || 'Not observed'}
 
-Recent proactive Hikari reactions:
+Recent reactions:
 ${recent}
 
-You are Hikari, the user's desktop companion. You passively noticed this action.
-Decide whether it is worth proactively reacting. Prefer silence. React only when the
-observation is meaningfully interesting, helpful, surprising, concerning, contextual,
-or socially natural. Do not narrate obvious actions, repeatedly ask questions, or say
-that the user merely clicked, typed, scrolled, or switched applications. If reacting,
-keep it short, usually one sentence, and follow Hikari's existing personality.
+You passively observed this event. Decide whether it warrants a brief proactive reaction.
+For a clearly sustained typing session or a new media playback start, lean toward a natural
+acknowledgment; for a useful, recognizable app/window context, react when it adds warmth or help.
+Use silence for brief/trivial activity, generic switches, repeated moments, or when a response
+would interrupt the user. Do not narrate obvious actions, repeatedly ask questions, or say that
+the user merely clicked, typed, scrolled, or switched applications. If reacting, keep it short,
+usually one sentence. Use only the event context shown above; do not infer private content that
+is not provided.
 ${triggerGuidance}
 
 Return only one JSON object. Silence:
 {"react":false}
 
-Reaction:
-{"react":true,"text":"...","text_ja":"...","expression":{"name":"neutral","timing":"during"},"animation":{"file":"...","timing":"during"}}
+Spoken reaction:
+Use the shared spoken-response protocol, including paired "segments", and add "react":true.
 
-The expression and animation fields are optional. Do not add markdown.`;
+Visual-only reaction (no speech or history entry):
+{"react":true,"speak":false,"visualReaction":"surprised","expression":{"name":"surprised","timing":"during"}}
+
+The expression and animation fields are optional. Use the shared response protocol for speech. Do not add markdown.`;
 }
 
 export class AwarenessController {
@@ -119,6 +160,8 @@ export class AwarenessController {
     addHistoryMessage,
     isAgentBusy,
     isSpeaking,
+    reactionsEnabled = () => true,
+    applyVisualReaction = () => {},
     config = awarenessConfig
   }) {
     this.api = api;
@@ -129,6 +172,8 @@ export class AwarenessController {
     this.addHistoryMessage = addHistoryMessage;
     this.isAgentBusy = isAgentBusy;
     this.isSpeaking = isSpeaking;
+    this.reactionsEnabled = reactionsEnabled;
+    this.applyVisualReaction = applyVisualReaction;
     this.config = config;
 
     this.enabled = false;
@@ -379,6 +424,7 @@ export class AwarenessController {
     if (!this.enabled || !candidate?.id || !candidate?.timestamp) return;
     this.recentCandidates.push(candidate);
     this.recentCandidates = this.recentCandidates.slice(-this.config.memory.recentCandidateLimit);
+    if (!this.reactionsEnabled()) return;
 
     if (this.analysisRunning) {
       this.keepBestPending(candidate);
@@ -388,6 +434,7 @@ export class AwarenessController {
   }
 
   async considerCandidate(candidate) {
+    if (!this.enabled || !this.reactionsEnabled()) return;
     const now = Date.now();
     const age = now - candidate.timestamp;
     if (age > this.config.observation.candidateMaxAgeMs) {
@@ -478,14 +525,15 @@ export class AwarenessController {
   }
 
   async analyzeCandidate(candidate) {
+    if (!this.enabled || !this.reactionsEnabled()) return;
     this.analysisRunning = true;
     this.lastAnalysisAt = Date.now();
     this.analysisAbortController = new AbortController();
     this.debug('POLICY', 'candidate accepted for agent analysis', candidate.trigger);
 
     try {
-      // The current OpenClaw transport accepts string message content only.
-      // requestSnapshot remains available for a later verified multimodal path.
+      // Passive awareness stays metadata-only. Manual screenshots use the
+      // composer's explicit image attachment path through the same transport.
       const prompt = buildAwarenessPrompt(candidate, this.recentReactions);
       const reply = await this.sendAgentMessageRaw(prompt, {
         signal: this.analysisAbortController.signal,
@@ -501,14 +549,27 @@ export class AwarenessController {
         return;
       }
 
-      if (!this.enabled || this.userConversationDepth > 0 || this.isAgentBusy?.() || this.isSpeaking?.()) {
+      if (!this.enabled || !this.reactionsEnabled() || this.userConversationDepth > 0 || this.isAgentBusy?.() || this.isSpeaking?.()) {
         this.debug('RESULT', 'reaction dropped because awareness is disabled or Hikari became busy');
+        return;
+      }
+
+      if (decision.speak === false && decision.visualReaction) {
+        this.applyVisualReaction(decision.visualReaction, decision.expression);
+        this.recentReactions.push({
+          key: awarenessDedupeKey(candidate), trigger: candidate.trigger,
+          appName: candidate.context?.appName || '', windowTitle: candidate.context?.windowTitle || '',
+          timestamp: Date.now(), reactionText: ''
+        });
+        this.recentReactions = this.recentReactions.slice(-this.config.memory.recentReactionLimit);
+        this.debug('RESULT', 'visual-only reaction applied', decision.visualReaction);
         return;
       }
 
       const command = this.parseAgentResponse(JSON.stringify({
         text: decision.text,
         text_ja: decision.text_ja || '',
+        segments: decision.segments,
         expression: decision.expression,
         animation: decision.animation
       }));

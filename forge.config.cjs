@@ -29,7 +29,11 @@ module.exports = {
     appBundleId: 'com.electron.hikari',
     osxSign: macSignConfig,
     icon: './favicon.ico',
-    extraResource: ['./tools/companion-tts', './tools/media-state'],
+    extraResource: ['./tools/companion-tts', './tools/media-state', './tools/voice-stt'],
+    extendInfo: {
+      NSMicrophoneUsageDescription: 'Hikari uses the microphone only while Voice Listening is enabled.',
+      NSSpeechRecognitionUsageDescription: 'Hikari uses on-device speech recognition to transcribe addressed voice commands.'
+    },
     // Native Node addons cannot be loaded directly from an ASAR archive.
     // Keep the app archived while placing native addons and get-windows' helper
     // executable beside it.

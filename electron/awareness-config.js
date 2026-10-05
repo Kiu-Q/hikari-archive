@@ -4,6 +4,11 @@
 export const awarenessConfig = {
   enabledByDefault: false,
 
+  idleReturn: {
+    minimumIdleMs: 90 * 1000,
+    greetingCooldownMs: 5 * 60 * 1000
+  },
+
   activity: {
     // Short, deliberate bursts should still produce an observation while the
     // pause keeps every individual key from becoming its own candidate.
@@ -46,20 +51,20 @@ export const awarenessConfig = {
 
   observation: {
     minimumCandidateIntervalMs: 4000,
-    minimumAgentAnalysisIntervalMs: 6000,
+    minimumAgentAnalysisIntervalMs: 4000,
     candidateMaxAgeMs: 10000
   },
 
   reaction: {
-    normalSpeechCooldownMs: 30000,
+    normalSpeechCooldownMs: 20000,
     importantSpeechCooldownMs: 15000,
 
-    normalBudgetCount: 4,
+    normalBudgetCount: 6,
     normalBudgetWindowMs: 10 * 60 * 1000
   },
 
   dedupe: {
-    sameContextReactionCooldownMs: 120000
+    sameContextReactionCooldownMs: 90000
   },
 
   hikariInteraction: {

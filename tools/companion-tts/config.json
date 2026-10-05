@@ -1,5 +1,5 @@
 {
-  "engine_dir": "/Users/kiuq/Documents/Codex/2026-09-23/referenced-chatgpt-conversation-this-is-an-3/outputs/Style-Bert-VITS2",
+  "engine_dir": "/Users/kiuq/Library/Application Support/Style-Bert-VITS2/engine",
   "python": "/Users/kiuq/Library/Application Support/Style-Bert-VITS2/runtime/bin/python",
   "engine_port": 8000,
   "port": 8010,
