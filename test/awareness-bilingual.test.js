@@ -10,7 +10,7 @@ import {
 test('awareness prompt includes text_ja for reactions and keeps silence unchanged', () => {
   const prompt = buildAwarenessPrompt({ trigger: 'typing_session_end' });
   assert.match(prompt, /shared spoken-response protocol, including paired "segments"/);
-  assert.match(prompt, /Silence:\n\{"react":false\}/);
+  assert.match(prompt, /Silence:\n\{"reply":false\}/);
 });
 
 test('awareness parser preserves normalized Japanese text', () => {

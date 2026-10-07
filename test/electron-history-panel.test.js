@@ -28,7 +28,7 @@ function harness() {
     },
     logger: { info() {} },
     splitSpeechSegments, formatHistoryChunk,
-    sendEventToAgent: (type, message) => prompts.push({ type, message }),
+    sendEventToAgent: (type, message, options) => prompts.push({ type, message, options }),
     toggleHistoryBtn: element(),
   });
   const moduleStart = source.indexOf('const HistoryModule =');
@@ -65,6 +65,34 @@ test('history close button and automatic changes stay silent', () => {
   assert.equal(h.prompts.length, 0);
   vm.runInContext('HistoryModule.showHistoryPanel(); HistoryModule.hideHistoryPanel();', h.context);
   assert.equal(h.prompts.length, 0);
+});
+
+test('history opening reply guard expires on close and does not revive on reopening', () => {
+  const h = harness();
+  h.click(); h.click();
+  const first = h.prompts[0].options.shouldPresent;
+  assert.equal(first(), true);
+  h.click();
+  assert.equal(first(), false);
+  h.click(); h.click();
+  assert.equal(first(), false);
+  assert.equal(h.prompts.at(-1).options.shouldPresent(), true);
+});
+
+test('history reaction opt-out keeps the panel functional and cancels pending opening replies', () => {
+  const h = harness();
+  let enabled = false;
+  h.context.window.isAnimationEnabled = key => key !== 'history_panel' || enabled;
+  h.click(); h.click();
+  assert.equal(h.elements.get('history-panel').style.display, 'flex');
+  assert.equal(h.prompts.length, 0);
+  h.click();
+  enabled = true;
+  h.click(); h.click();
+  const pending = h.prompts[0].options.shouldPresent;
+  assert.equal(pending(), true);
+  enabled = false;
+  assert.equal(pending(), false);
 });
 
 test('history chunks hide ending punctuation, keep emoji, and preserve internal user punctuation', () => {

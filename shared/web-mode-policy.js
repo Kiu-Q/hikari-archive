@@ -1,4 +1,4 @@
-const DISALLOWED_PREFIX = /^(?:sit|walk)/i;
+const DISALLOWED_PREFIX = /^(?:idle_)?(?:sit|walk)/i;
 const DISALLOWED_STARTUP_ANIMATION = /^start_1standup(?:\.vrma)?$/i;
 
 function getAnimationName(value) {

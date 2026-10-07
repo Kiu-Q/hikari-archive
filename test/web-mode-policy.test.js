@@ -13,7 +13,8 @@ test('blocks all sitting and walking filename prefixes regardless of case or ext
     'WALK.vrma',
     'walk_left.vrma',
     'walkRight.vrma',
-    'walking_loop.vrma'
+    'walking_loop.vrma',
+    'idle_sit.vrma', 'IDLE_WALK.vrma'
   ]) {
     assert.equal(isWebAnimationAllowed(name), false, name);
   }
@@ -25,7 +26,8 @@ test('blocks seated startup clips in filenames and full URLs with query strings 
     'https://assets.example/VRMA/sitWave.vrma?v=2#main',
     'https://assets.example/VRMA/walk_right.vrma?build=9',
     'https://assets.example/VRMA/start_1standUp.vrma?rev=3#start',
-    'file:///app/VRMA/START_1STANDUP.VRMA'
+    'file:///app/VRMA/START_1STANDUP.VRMA',
+    'file:///app/VRMA/idle_sit.vrma', '/VRMA/idle_walk.vrma?rev=4'
   ]) {
     assert.equal(isWebAnimationAllowed(value), false, value);
   }
@@ -51,4 +53,3 @@ test('rejects invalid values and URLs without an animation filename', () => {
     assert.equal(isWebAnimationAllowed(value), false, String(value));
   }
 });
-

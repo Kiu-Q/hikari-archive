@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, powerMonitor, screen, session, systemPreferences } from 'electron';
+import { app, BrowserWindow, desktopCapturer, ipcMain, powerMonitor, screen, session, shell, systemPreferences } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
@@ -11,6 +11,8 @@ import { createWorldState, expireWorldStateFields, mergeWorldStatePatch, sanitiz
 import { SpeechToTextService } from './speech-to-text-main.js';
 import { parseSystemAudioOutput } from './media-playback-state.js';
 import { createScreenCaptureService } from './screen-capture-main.js';
+import { constrainWindow, keepWindowOnScreen } from './window-geometry.js';
+import { MusicBeatService } from './music-beat-main.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,6 +32,7 @@ let contextPoll = null;
 let audioPoll = null;
 let activityPoll = null;
 let sttService = null;
+let musicBeatService = null;
 let voiceListeningEnabled = false;
 let lastPointer = null;
 let lastDesktopContextKey = '';
@@ -94,7 +97,7 @@ async function pollSystemAudio(service) {
     publishWorldPatch({ audio: { system: {
       available: audioState?.available ?? false,
       stale: false,
-      captureAvailable: false,
+      captureAvailable: musicBeatService?.status.state === 'listening',
       running: audioState?.running ?? false,
       volume: audioState?.volume ?? output?.scalar ?? null,
       muted: audioState?.muted ?? null,
@@ -150,7 +153,13 @@ function getReplyVolumeService() {
           path.resolve(__dirname, '../tools/media-state/media-state')
         ];
     replyVolumeService = new ReplyVolumeService({
-      helperPath: candidates.find((candidate) => existsSync(candidate))
+      helperPath: candidates.find((candidate) => existsSync(candidate)),
+      // The voice player's own AudioContext opens the output device before
+      // playback. Exclude Hikari's processes so it cannot count as media.
+      mediaPlaying: async () => String(await replyVolumeService.call([
+        'playing-except', String(process.pid),
+        ...app.getAppMetrics().map(metric => String(metric.pid))
+      ])).trim() === '1'
     });
   }
   return replyVolumeService;
@@ -172,6 +181,25 @@ function getLocalTtsService() {
     localTtsService = createLocalTtsService({ toolDir });
   }
   return localTtsService;
+}
+
+function getMusicBeatService() {
+  if (!musicBeatService) {
+    const candidates = app.isPackaged
+      ? [path.join(process.resourcesPath, 'music-beat', 'music-beat')]
+      : [path.join(app.getAppPath(), 'tools/music-beat/music-beat'), path.resolve(__dirname, '../tools/music-beat/music-beat')];
+    const send = (channel, value) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send(channel, value);
+    };
+    musicBeatService = new MusicBeatService({
+      executable: candidates.find(candidate => existsSync(candidate)) || candidates[0],
+      excludePids: () => [process.pid, ...app.getAppMetrics().map(metric => metric.pid)],
+      mediaPlaying: () => getReplyVolumeService().mediaPlaying(),
+      onSignal: value => send('music-beat:signal', value),
+      onStatus: value => send('music-beat:status', value),
+    });
+  }
+  return musicBeatService;
 }
 
 function isMainRenderer(event) {
@@ -252,6 +280,8 @@ function createWindow() {
     }
   });
 
+  keepWindowOnScreen(mainWindow, screen);
+
   // Load the app
   if (isDev) {
     // In development, load from Vite dev server
@@ -263,6 +293,7 @@ function createWindow() {
   }
 
   mainWindow.once('closed', () => {
+    musicBeatService?.stop();
     awarenessService?.stop();
     stopWorldStatePolling();
     voiceListeningEnabled = false;
@@ -277,6 +308,17 @@ function createWindow() {
 ipcMain.handle('tts:synthesize', async (event, input) => {
   if (!isMainRenderer(event)) throw new TypeError('Invalid voice request');
   return getLocalTtsService().synthesize(input);
+});
+
+ipcMain.handle('music-beat:set-enabled', (event, enabled) => {
+  if (!isMainRenderer(event) || typeof enabled !== 'boolean') throw new TypeError('Invalid music analysis request');
+  const service = getMusicBeatService();
+  return enabled ? service.start() : service.stop();
+});
+
+ipcMain.handle('music-beat:open-permission', async event => {
+  if (!isMainRenderer(event)) throw new TypeError('Invalid music permission request');
+  await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture');
 });
 
 ipcMain.handle('world-state:get', (event) => {
@@ -330,9 +372,8 @@ ipcMain.handle('get-window-position', () => {
 
 ipcMain.handle('set-window-position', (event, x, y) => {
   if (!mainWindow) return false;
-  // Use setPosition to preserve current window size (which may differ from 600x900 due to zoom)
-  mainWindow.setPosition(Math.round(x), Math.round(y));
-  return true;
+  if (!isMainRenderer(event) || ![x, y].every(Number.isFinite)) throw new TypeError('Invalid window position');
+  return constrainWindow(mainWindow, screen, { ...mainWindow.getBounds(), x: Math.round(x), y: Math.round(y) });
 });
 
 ipcMain.handle('get-window-bounds', () => {
@@ -343,13 +384,13 @@ ipcMain.handle('get-window-bounds', () => {
 
 ipcMain.handle('set-window-bounds', (event, x, y, width, height) => {
   if (!mainWindow) return false;
-  mainWindow.setBounds({
+  if (!isMainRenderer(event) || ![x, y, width, height].every(Number.isFinite)) throw new TypeError('Invalid window bounds');
+  return constrainWindow(mainWindow, screen, {
     x: Math.round(x),
     y: Math.round(y),
     width: Math.max(200, Math.round(width)),
     height: Math.max(300, Math.round(height))
   });
-  return true;
 });
 
 // IPC handler for dynamic click-through (transparent areas let clicks pass through)
@@ -406,6 +447,11 @@ ipcMain.handle('awareness:request-snapshot', (event, candidateId) => {
   return createAwarenessService().requestSnapshot(candidateId);
 });
 
+ipcMain.handle('awareness:capture-screen', async event => {
+  if (!isMainRenderer(event)) throw new TypeError('Invalid desktop-awareness capture request');
+  return createAwarenessService().captureScreen();
+});
+
 ipcMain.on('awareness:direct-interaction', (event) => {
   if (isMainRenderer(event)) createAwarenessService().noteDirectInteraction();
 });
@@ -440,6 +486,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
+  musicBeatService?.stop();
   if (replyVolumeService?.active && !restoringVolumeForQuit) {
     event.preventDefault();
     restoringVolumeForQuit = true;

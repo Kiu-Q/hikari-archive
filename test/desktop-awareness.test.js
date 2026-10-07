@@ -140,9 +140,9 @@ test('buildAwarenessPrompt carries functional context without imposing an agent 
   assert.doesNotMatch(prompt, /Hikari|companion|personality|persona/i);
   assert.match(prompt, /Use silence for brief\/trivial activity/);
   assert.match(prompt, /do not infer private content/i);
-  assert.match(prompt, /\{"react":false\}/);
+  assert.match(prompt, /\{"reply":false\}/);
   assert.match(prompt, /shared spoken-response protocol, including paired "segments"/);
-  assert.match(prompt, /add "react":true/);
+  assert.match(prompt, /add "reply":true/);
   assert.match(prompt, /Return only one JSON object/);
 });
 

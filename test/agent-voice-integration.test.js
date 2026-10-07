@@ -11,11 +11,14 @@ import {
 } from '../electron/agent-response-contract.js';
 import { prepareReplySpeech, cancelSpeechPreparations, normalizePairedSegments, replyNeedsAlignmentRepair, buildAlignmentRepairPrompt } from '../electron/speech-segments.js';
 import { normalizeScreenshotAttachment, screenshotMessageContent } from '../electron/screenshot-attachment.js';
+import { AwarenessController } from '../electron/desktop-awareness-renderer.js';
 
 // Exercise the real API module in the existing monolithic renderer without loading Three.js.
 const source = readFileSync(new URL('../electron/app.js', import.meta.url), 'utf8');
+const tick = () => new Promise(resolve => setImmediate(resolve));
 const moduleSource = source.slice(source.indexOf('const AgentApiModule ='), source.indexOf('const HistoryModule ='))
   .replaceAll('import.meta.env', 'testEnv');
+const eventSource = source.slice(source.indexOf('async function sendEventToAgent('), source.indexOf('// CORE MODULE -'));
 
 function harness(reply, speak = async () => {}, awareness = null, { browser = false } = {}) {
   const requests = [], history = [], events = [], syntheses = [], presentations = [];
@@ -39,7 +42,8 @@ function harness(reply, speak = async () => {}, awareness = null, { browser = fa
   };
   const services = createServices({ electronAPI: window.electronAPI, fetchImpl: async (url, options) => {
     requests.push(JSON.parse(options.body));
-    const content = Array.isArray(reply) ? reply[Math.min(requests.length - 1, reply.length - 1)] : reply;
+    const content = typeof reply === 'function' ? await reply(requests.at(-1), options, requests.length)
+      : Array.isArray(reply) ? reply[Math.min(requests.length - 1, reply.length - 1)] : reply;
     return { ok: true, json: async () => ({ choices: [{ message: { content } }] }) };
   } });
   services.synthesize = async (input, options = {}) => {
@@ -47,6 +51,7 @@ function harness(reply, speak = async () => {}, awareness = null, { browser = fa
     return { audio: new Uint8Array([1]), durationSeconds: 0.1, sampleRate: 24_000, channels: 1 };
   };
   const context = vm.createContext({
+    agentRequestQueue: [], isAgentRequestInProgress: false,
     window, createReplyTimingRecorder, document: { getElementById: () => null },
     localStorage: { getItem: () => null }, testEnv: {},
     BILINGUAL_RESPONSE_INSTRUCTIONS, JAPANESE_TTS_INSTRUCTIONS, normalizeJapaneseText, prepareReplySpeech, cancelSpeechPreparations, normalizePairedSegments, replyNeedsAlignmentRepair, buildAlignmentRepairPrompt,
@@ -56,12 +61,81 @@ function harness(reply, speak = async () => {}, awareness = null, { browser = fa
     THREE: { LoopOnce: 2200 },
     logger: { info() {}, warn() {}, error() {} },
     setTimeout: callback => setTimeout(callback, 0),
-    clearTimeout,
+    clearTimeout, AbortController,
     services,
   });
-  const api = vm.runInContext(moduleSource + '\nAgentApiModule;', context);
+  const api = vm.runInContext(eventSource + moduleSource + '\nAgentApiModule;', context);
+  window.sendAgentMessage = api.sendAgentMessage;
   return { api, requests, history, events, syntheses, presentations, window };
 }
+
+for (const browser of [false, true]) {
+  test(`${browser ? 'web' : 'desktop'} skips touch and drag requests while a direct reply is queued, fetching or speaking`, async () => {
+    const reply = '{"text":"收到！","text_ja":"わかった！"}';
+    let finishRequest, finishSpeech;
+    let speechCount = 0;
+    const h = harness((_request, _options, index) => index === 1
+      ? new Promise(resolve => { finishRequest = resolve; }) : reply,
+    () => ++speechCount === 1 ? new Promise(resolve => { finishSpeech = resolve; }) : undefined,
+    null, { browser });
+
+    const first = h.api.sendAgentMessage('User touched your head');
+    // The second touch arrives before the first queued HTTP call has started.
+    assert.equal(await h.api.sendAgentMessage('User touched your arm'), false);
+    assert.equal(await h.window.sendEventToAgent('window_drag', 'First drag'), false);
+    await tick();
+    assert.equal(h.requests.length, 1);
+    assert.equal(await h.api.sendAgentMessage('User touched your leg'), false);
+    finishRequest(reply);
+    await tick();
+    assert.equal(h.presentations.length, 1);
+    assert.equal(await h.api.sendAgentMessage('User touched your head'), false);
+    assert.equal(await h.window.sendEventToAgent('window_drag', 'Second drag'), false);
+
+    const typed = h.api.sendAgentMessage('Ordinary typed message');
+    finishSpeech();
+    await Promise.all([first, typed]);
+    assert.equal(h.requests.length, 2, 'Typed messages still run, without replaying ignored interactions');
+    assert.equal(h.window._directAgentRequestsQueued, 0);
+    assert.equal(await h.api.sendAgentMessage('User touched your head'), true);
+    assert.equal(h.requests.length, 3, 'New touches are accepted after completion');
+  });
+}
+
+test('failed touch releases the busy state so a later interaction can run', async () => {
+  const h = harness((_request, _options, index) => {
+    if (index === 1) throw new Error('Simulated request failure');
+    return '{"text":"收到！","text_ja":"わかった！"}';
+  });
+  assert.equal(await h.api.sendAgentMessage('User touched your head'), false);
+  assert.equal(h.window.isAgentInteractionPending(), false);
+  assert.equal(await h.api.sendAgentMessage('User touched your arm'), true);
+  assert.equal(h.requests.length, 2);
+});
+
+test('pending drag reply blocks both new drag and touch requests through speech completion', async () => {
+  const reply = '{"text":"收到！","text_ja":"わかった！"}';
+  let finishRequest, finishSpeech;
+  const h = harness(() => new Promise(resolve => { finishRequest = resolve; }),
+    () => new Promise(resolve => { finishSpeech = resolve; }));
+  const first = h.window.sendEventToAgent('window_drag', 'Dragged once');
+  assert.equal(await h.window.sendEventToAgent('window_drag', 'Dragged twice'), false);
+  assert.equal(await h.api.sendAgentMessage('User touched your head'), false);
+  finishRequest(reply);
+  await tick();
+  assert.equal(await h.window.sendEventToAgent('window_drag', 'Dragged during speech'), false);
+  assert.equal(await h.api.sendAgentMessage('User touched your arm'), false);
+  finishSpeech();
+  await first;
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.window.isAgentInteractionPending(), false);
+  const second = h.window.sendEventToAgent('window_drag', 'Dragged after completion');
+  finishRequest(reply);
+  await tick();
+  finishSpeech();
+  await second;
+  assert.equal(h.requests.length, 2);
+});
 
 test('normal chat and awareness use the same functional response protocol', async () => {
   const spoken = [];
@@ -95,12 +169,65 @@ test('screenshots use the existing chat protocol only for their own turn, includ
   const first = h.requests[0].messages.at(-1);
   assert.equal(first.content[0].text, '睇吓畫面');
   assert.equal(first.content[1].image_url.url, attachment.dataUrl);
-  assert.equal(h.requests[1].messages.at(-1).content[1].image_url.url, attachment.dataUrl);
+  assert.equal(h.requests[1].messages.filter(message => Array.isArray(message.content)).length, 1);
+  assert.equal(h.requests[1].messages.find(message => Array.isArray(message.content)).content[1].image_url.url, attachment.dataUrl);
+  assert.equal(typeof h.requests[1].messages.at(-1).content, 'string');
   assert.equal(h.history[0].attachment.thumbnailDataUrl, attachment.thumbnailDataUrl);
   await h.api.sendAgentMessage('下一句');
   assert.ok(h.requests[2].messages.every(message => typeof message.content === 'string'));
   assert.ok(!JSON.stringify(h.requests[2]).includes(attachment.dataUrl));
   assert.match(h.requests[2].messages[1].content, /Screenshot attached to this turn/);
+});
+
+test('background awareness images use one-shot multimodal transport without history or speech', async () => {
+  const h = harness('{"reply":false}');
+  const attachment = { dataUrl: 'data:image/jpeg;base64,/9j/2Q==', width: 1120, height: 630 };
+  await h.api.sendAgentMessageRaw('Awareness event with capture', { requestType: 'awareness', attachment });
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].messages.length, 2);
+  assert.deepEqual(h.requests[0].messages.at(-1).content, [
+    { type: 'text', text: 'Awareness event with capture' },
+    { type: 'image_url', image_url: { url: attachment.dataUrl } }
+  ]);
+  assert.equal(h.history.length, 0);
+  assert.equal(h.presentations.length, 0);
+  await h.api.sendAgentMessageRaw('Next awareness event', { requestType: 'awareness' });
+  assert.ok(!JSON.stringify(h.requests[1]).includes(attachment.dataUrl));
+});
+
+test('silent awareness decisions do not trigger speech repair even with malformed speech fields', async () => {
+  const h = harness('{"reply":false,"segments":[{"text":"安靜。","text_ja":""}]}');
+  const response = await h.api.sendAgentMessageRaw('Awareness event with capture', {
+    requestType: 'awareness',
+    attachment: { dataUrl: 'data:image/jpeg;base64,/9j/2Q==', width: 1120, height: 630 },
+  });
+  assert.equal(JSON.parse(response).reply, false);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.history.length, 0);
+  assert.equal(h.presentations.length, 0);
+  assert.equal(h.syntheses.length, 0);
+});
+
+test('automatic awareness capture runs through real transport in one request and presents the bilingual reply', async () => {
+  const reply = '{"reply":true,"text":"有新進展。","text_ja":"すすんだね。"}';
+  const h = harness(reply);
+  let captures = 0;
+  const controller = new AwarenessController({
+    api: { captureScreen: async () => { captures++; return { dataUrl: 'data:image/jpeg;base64,/9j/2Q==', width: 1120, height: 630 }; } },
+    logger: { info() {}, error() {} }, sendAgentMessageRaw: h.api.sendAgentMessageRaw,
+    parseAgentResponse: h.api.parseAgentResponse, executeAgentCommand: h.api.executeAgentCommand,
+    isAgentBusy: () => false, isSpeaking: () => false,
+  });
+  controller.enabled = true;
+  await controller.analyzeCandidate({ trigger: 'window_changed', priority: 'normal', context: { appName: 'Editor' } });
+  assert.equal(captures, 1);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].messages.at(-1).content[1].type, 'image_url');
+  assert.match(h.requests[0].messages[0].content, /\{"reply":false\}/);
+  assert.doesNotMatch(h.requests[0].messages[0].content, /capture_screen|visual-only/);
+  assert.equal(h.presentations.length, 1);
+  assert.equal(h.syntheses.length, 1);
+  assert.deepEqual(h.history.map(item => [item.role, item.text]), [['agent', '有新進展。']]);
 });
 
 test('queued screenshot input is copied at enqueue time so later draft edits cannot replace it', async () => {
@@ -110,6 +237,17 @@ test('queued screenshot input is copied at enqueue time so later draft edits can
   attachment.dataUrl = 'changed-draft';
   await sending;
   assert.equal(h.requests[0].messages.at(-1).content[1].image_url.url, 'data:image/jpeg;base64,/9j/2Q==');
+});
+
+test('phone images use the same bilingual reply and speech path without retransmitting images on later turns', async () => {
+  const h = harness('{"text":"早晨！","text_ja":"おはよう！"}', async () => {}, null, { browser: true });
+  const attachment = { dataUrl: 'data:image/jpeg;base64,/9j/2Q==', thumbnailDataUrl: 'data:image/jpeg;base64,/9j/2Q==', width: 100, height: 100 };
+  assert.equal(await h.api.sendAgentMessage('睇吓圖片', { attachment }), true);
+  assert.equal(h.requests[0].messages.at(-1).content[1].image_url.url, attachment.dataUrl);
+  assert.equal(h.history[0].attachment.thumbnailDataUrl, attachment.thumbnailDataUrl);
+  assert.equal(await h.api.sendAgentMessage('下一句'), true);
+  assert.ok(h.requests[1].messages.every(message => typeof message.content === 'string'));
+  assert.match(h.requests[1].messages[1].content, /Image attached to this turn/);
 });
 
 test('greeting, touch, conversation, panel events and awareness share one system protocol', async () => {
@@ -138,6 +276,15 @@ test('mismatched normal reply is repaired once before synthesis and history pers
   assert.deepEqual(h.syntheses.map(item => item.input.text), ['おはよう、', 'せんせい！']);
   assert.deepEqual(h.presentations[0].segments, JSON.parse(fixed).segments);
   assert.equal(h.history.at(-1).text, '早晨，\n老師！😊');
+});
+
+test('segments-first prompt example completes chat and synthesis with no repair request', async () => {
+  const example = BILINGUAL_RESPONSE_INSTRUCTIONS.split('Example: ')[1];
+  const h = harness(example);
+  await h.api.sendAgentMessage('早晨');
+  assert.equal(h.requests.length, 1);
+  assert.match(h.requests[0].messages[0].content, /Generate segments first/);
+  assert.deepEqual(h.syntheses.map(item => item.input.text), JSON.parse(example).segments.map(item => item.text_ja));
 });
 
 test('alignment repair is bounded and retains the whole legacy reply instead of cancelling it', async () => {
@@ -325,6 +472,20 @@ test('queued command synthesis starts while an earlier command waits for its ani
   assert.equal(h.presentations.length, 2);
 });
 
+test('history reply closing while a prior command plays skips queued speech, history and animation', async () => {
+  let finishFirst, open = true;
+  const h = harness('{"text":"早晨！","text_ja":"おはよう！"}', () => new Promise(resolve => { finishFirst = resolve; }));
+  const first = h.api.executeAgentCommand({ text: '第一句！', text_ja: 'こんにちは！' });
+  await tick();
+  const historyReply = h.api.executeAgentCommand({ text: '歷史開咗！', text_ja: 'ひらいた！', animation: { file: 'wave_fast.vrma', timing: 'after' } }, { shouldPresent: () => open });
+  open = false;
+  finishFirst();
+  await Promise.all([first, historyReply]);
+  assert.deepEqual(h.history.map(message => message.text), ['第一句！']);
+  assert.equal(h.presentations.length, 1);
+  assert.deepEqual(h.events, []);
+});
+
 
 test('greeting is prepared and presented once even when desktop context never resolves', async () => {
   const h = harness('{"text":"早晨！","text_ja":"おはよう！"}', async () => {}, {
@@ -338,6 +499,43 @@ test('greeting is prepared and presented once even when desktop context never re
   assert.equal(h.requests.length, 1);
   assert.equal(h.syntheses.length, 1);
   assert.equal(h.presentations.length, 1);
+});
+
+test('phone Send bypasses a stalled greeting request and discards its eventual reply', async () => {
+  let releaseGreeting;
+  const h = harness((_request, _options, index) => index === 1
+    ? new Promise(resolve => { releaseGreeting = resolve; })
+    : '{"text":"收到","text_ja":"わかりました"}', async () => {}, null, { browser: true });
+  const prepared = h.api.prepareInitialGreeting();
+  const greeting = h.api.startSession();
+  await tick();
+  assert.equal(h.requests.length, 1);
+  const sent = h.api.sendAgentMessage('first phone message');
+  assert.equal(await Promise.race([sent, new Promise(resolve => setTimeout(() => resolve('blocked'), 250))]), true);
+  releaseGreeting('{"text":"遲來的問候","text_ja":"おはよう"}');
+  await Promise.all([prepared, greeting]);
+  assert.deepEqual(h.history.map(item => item.text), ['first phone message', '收到']);
+  assert.equal(h.syntheses.length, 1);
+  assert.equal(h.window._directAgentRequestPending, false);
+});
+
+test('phone Send interrupts greeting playback awaiting audio permission and preserves a typed draft', async () => {
+  const h = harness(['{"text":"早晨","text_ja":"おはよう"}', '{"text":"收到","text_ja":"わかりました"}'], async () => {}, null, { browser: true });
+  const play = h.window.lipSyncSystem.startSpeaking;
+  let releaseSpeech, stopped = 0, resets = 0;
+  h.window.resetMessagingPanel = () => { resets++; };
+  h.window.lipSyncSystem.startSpeaking = (text, japanese, presentation) => text === '早晨'
+    ? new Promise(resolve => { releaseSpeech = resolve; }) : play(text, japanese, presentation);
+  h.window.lipSyncSystem.stopSpeaking = () => { stopped++; releaseSpeech(); };
+  await h.api.prepareInitialGreeting();
+  const greeting = h.api.startSession();
+  await tick();
+  assert.equal(resets, 0, 'startup greeting must not erase a draft');
+  assert.equal(await h.api.sendAgentMessage('my first message'), true);
+  await greeting;
+  assert.equal(stopped, 1);
+  assert.deepEqual(h.history.map(item => item.text), ['my first message', '收到']);
+  assert.equal(h.syntheses[0].signal.aborted, true);
 });
 
 test('failed command cancels unused speech and releases command ownership for the next reply', async () => {

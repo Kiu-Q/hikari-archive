@@ -15,6 +15,34 @@
          Organized by component with descriptive comments
     ============================================================ -->
     <style>
+        :root {
+            --desktop-ui-scale: 1;
+            --desktop-ui-width: 100vw;
+            --desktop-ui-height: 100vh;
+            --desktop-min-font: 12px;
+        }
+        /* Scale only the UI; the avatar canvas keeps its screen coordinates. */
+        .controls, .settings-panel, .toggle-btn, #history-panel, #speakingBubble {
+            zoom: var(--desktop-ui-scale);
+        }
+        #history-panel {
+            box-sizing: border-box;
+            max-width: min(400px, calc(var(--desktop-ui-width) - 20px)) !important;
+            max-height: calc(var(--desktop-ui-height) * 0.4) !important;
+        }
+        .controls, .settings-panel, #history-panel {
+            font-size: max(16px, var(--desktop-min-font));
+            overflow-wrap: anywhere;
+        }
+        .desktop-compact .settings-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .desktop-compact .controls {
+            left: 10px;
+            width: calc(var(--desktop-ui-width) - 20px);
+        }
+        .desktop-compact .settings-toggle[aria-expanded="true"] { visibility: hidden; }
+        .desktop-compact .anim-toggles .anim-checkbox-grid { grid-template-columns: minmax(0, 1fr); }
+        .desktop-compact .settings-field-label { flex-wrap: wrap; }
+        .desktop-compact .awareness-status { max-width: 40%; }
         /* Base styles */
         html, body {
             margin: 0;
@@ -42,8 +70,8 @@
             flex-direction: column;
             gap: 0;
             box-sizing: border-box;
-            width: min(360px, calc(100vw - 110px));
-            max-height: calc(100vh - 20px);
+            width: min(360px, calc(var(--desktop-ui-width) - 110px));
+            max-height: calc(var(--desktop-ui-height) - 20px);
             overflow: hidden;
             padding: 16px;
             border: 1px solid rgba(195, 220, 214, 0.16);
@@ -65,14 +93,14 @@
             display: block;
             margin-bottom: 3px;
             color: #9bb8ad;
-            font-size: 9px;
+            font-size: max(9px, var(--desktop-min-font));
             font-weight: 700;
             letter-spacing: 1.8px;
         }
         .settings-title {
             margin: 0;
             color: #f5f8f7;
-            font-size: 20px;
+            font-size: max(20px, var(--desktop-min-font));
             font-weight: 650;
             letter-spacing: -0.3px;
         }
@@ -87,7 +115,7 @@
             border-radius: 10px;
             color: #c9d3d0;
             background: rgba(255, 255, 255, 0.055);
-            font-size: 20px;
+            font-size: max(20px, var(--desktop-min-font));
             font-weight: 400;
             line-height: 1;
             cursor: pointer;
@@ -109,7 +137,7 @@
             border-radius: 8px;
             color: #9eaaa7;
             background: transparent;
-            font-size: 10px;
+            font-size: max(10px, var(--desktop-min-font));
             font-weight: 600;
             letter-spacing: 0;
             line-height: 1.1;
@@ -130,7 +158,7 @@
         .settings-body {
             flex: 1 1 auto;
             min-height: 0;
-            max-height: calc(100vh - 174px);
+            max-height: calc(var(--desktop-ui-height) - 174px);
             overflow: auto;
             overscroll-behavior: contain;
             scrollbar-color: rgba(195, 220, 214, 0.25) transparent;
@@ -147,7 +175,7 @@
         .settings-section-title {
             margin: 0 0 10px;
             color: #aebbb7;
-            font-size: 10px;
+            font-size: max(10px, var(--desktop-min-font));
             font-weight: 700;
             letter-spacing: 1px;
             text-transform: uppercase;
@@ -165,7 +193,7 @@
             gap: 8px;
             margin-bottom: 7px;
             color: #e2e9e6;
-            font-size: 12px;
+            font-size: max(12px, var(--desktop-min-font));
             font-weight: 550;
         }
         .settings-value {
@@ -184,7 +212,7 @@
             color: #f2f7f4;
             background: rgba(255, 255, 255, 0.055);
             font: inherit;
-            font-size: 12px;
+            font-size: max(12px, var(--desktop-min-font));
             transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
         }
         .settings-text-input::placeholder { color: #74827d; }
@@ -216,7 +244,7 @@
             gap: 9px;
             min-width: 0;
             color: #e1e9e5;
-            font-size: 12px;
+            font-size: max(12px, var(--desktop-min-font));
             line-height: 1.35;
             cursor: pointer;
         }
@@ -233,7 +261,7 @@
             flex: 0 1 auto;
             margin-left: auto;
             color: #93a49d;
-            font-size: 10px;
+            font-size: max(10px, var(--desktop-min-font));
             line-height: 1.4;
             text-align: right;
         }
@@ -241,7 +269,7 @@
             display: block;
             padding: 7px 0 0;
             color: #8d9e97;
-            font-size: 10px;
+            font-size: max(10px, var(--desktop-min-font));
             line-height: 1.45;
             overflow-wrap: anywhere;
         }
@@ -252,7 +280,7 @@
             border: 1px solid rgba(190, 213, 202, 0.12) !important;
             color: #cbd8d1 !important;
             background: rgba(255, 255, 255, 0.055) !important;
-            font-size: 10px !important;
+            font-size: max(10px, var(--desktop-min-font)) !important;
             font-weight: 550 !important;
             letter-spacing: 0 !important;
             text-align: left;
@@ -271,7 +299,7 @@
             border-radius: 10px;
             color: #effbf3;
             background: linear-gradient(145deg, #388960, #236747);
-            font-size: 11px;
+            font-size: max(11px, var(--desktop-min-font));
             font-weight: 700;
             letter-spacing: 0.4px;
             text-transform: none;
@@ -305,7 +333,7 @@
             gap: 8px;
             min-width: 0;
             color: #d0dad5;
-            font-size: 11px;
+            font-size: max(11px, var(--desktop-min-font));
             line-height: 1.25;
             cursor: pointer;
         }
@@ -314,7 +342,7 @@
             padding: 10px 1px 0;
             border-top: 1px solid rgba(255, 255, 255, 0.08);
             color: #9aa9a2;
-            font-size: 10px;
+            font-size: max(10px, var(--desktop-min-font));
             line-height: 1.4;
             overflow-wrap: anywhere;
         }
@@ -322,7 +350,7 @@
         /* Status display */
         .status {
             margin-top: 10px;
-            font-size: 14px;
+            font-size: max(14px, var(--desktop-min-font));
             color: #ccc;
             text-align: center;
         }
@@ -343,7 +371,10 @@
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
             width: auto;
-            max-width: 400px;
+            box-sizing: border-box;
+            max-width: min(440px, calc(var(--desktop-ui-width) - 110px));
+            max-height: calc(var(--desktop-ui-height) - 20px);
+            overflow: auto;
         }
         .settings-panel div {
             display: flex;
@@ -364,7 +395,7 @@
             border-radius: 6px;
             background: rgba(255, 255, 255, 0.1);
             color: white;
-            font-size: 14px;
+            font-size: max(14px, var(--desktop-min-font));
         }
         .settings-panel input::placeholder {
             color: #aaa;
@@ -382,7 +413,7 @@
             border: none;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: max(16px, var(--desktop-min-font));
             transition: all 0.3s ease;
             flex: 0;
         }
@@ -403,7 +434,7 @@
         .facial-expressions label {
             display: block;
             margin-bottom: 8px;
-            font-size: 14px;
+            font-size: max(14px, var(--desktop-min-font));
         }
         .expression-buttons {
             display: flex;
@@ -417,7 +448,7 @@
             border: none;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 12px;
+            font-size: max(12px, var(--desktop-min-font));
             transition: all 0.3s ease;
         }
         .expr-btn:hover:not(:disabled) {
@@ -451,7 +482,7 @@
             border: none;
             border-radius: 8px;
             cursor: pointer;
-            font-size: 28px;
+            font-size: max(28px, var(--desktop-min-font));
             transition: all 0.3s ease;
             z-index: 200;
             opacity: 0 !important;
@@ -494,7 +525,7 @@
         }
 
         .loading-text {
-            font-size: 24px;
+            font-size: max(24px, var(--desktop-min-font));
             font-weight: bold;
             margin-bottom: 20px;
             color: #2e8b57;
@@ -502,7 +533,7 @@
         }
 
         .loading-percentage {
-            font-size: 48px;
+            font-size: max(48px, var(--desktop-min-font));
             font-weight: bold;
             color: #4CAF50;
             margin-bottom: 20px;
@@ -616,7 +647,7 @@
                     <span class="awareness-status" id="voiceListeningStatus">Off</span>
                 </div>
                 <div class="settings-switch-row">
-                    <label class="awareness-toggle" for="systemAudioAwarenessToggle" title="System-audio capture is unavailable in this build.">
+                    <label class="awareness-toggle" for="systemAudioAwarenessToggle" title="System-audio understanding is unavailable. Music beat sway is available under Motion.">
                         <input type="checkbox" id="systemAudioAwarenessToggle" disabled>
                         <span>System Audio Awareness</span>
                     </label>
@@ -636,27 +667,36 @@
 
             <section class="settings-pane" id="settingsPaneMotion" role="tabpanel"
                 data-settings-pane="motion" aria-labelledby="settingsTabMotion">
-                <h3 class="settings-section-title">Animation toggles</h3>
+                <h3 class="settings-section-title">Music</h3>
+                <div class="settings-switch-row">
+                    <label class="awareness-toggle" for="musicSwayToggle">
+                        <input type="checkbox" id="musicSwayToggle">
+                        <span>Music beat sway</span>
+                    </label>
+                </div>
+                <span class="status-line" id="musicSwayStatus" aria-live="polite">Off</span>
+                <button id="musicSwayPermission" class="awareness-permission-btn" type="button" hidden>Open System Audio Settings</button>
+                <h3 class="settings-section-title">Interaction reactions</h3>
                 <div class="anim-toggles">
                     <div class="anim-category">
                         <div class="anim-checkbox-grid">
-                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-walk" checked> Walk</label>
                             <label class="anim-checkbox-item"><input type="checkbox" id="anim-touch" checked> Touch</label>
-                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-sit" checked> Sit</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-drag" checked> Drag</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-history_panel" checked> History panel</label>
                         </div>
                     </div>
+                    <h3 class="settings-section-title">Idle animations</h3>
                     <div class="anim-category">
                         <div class="anim-checkbox-grid">
                             <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_airplane" checked> Airplane</label>
                             <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_look" checked> Look</label>
                             <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_loop" checked> Idle Loop</label>
                             <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_shoot" checked> Shoot</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_sit" checked> Sit</label>
                             <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_sport" checked> Sport</label>
                             <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_stretch" checked> Stretch</label>
                             <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_vSign" checked> V-Sign</label>
-                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_both" checked> Wave Both</label>
-                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-wave_fast" checked> Wave Fast</label>
-                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-start_2turnAround" checked> Turn Around</label>
+                            <label class="anim-checkbox-item"><input type="checkbox" id="anim-idle_walk" checked> Walk</label>
                         </div>
                     </div>
                 </div>
@@ -690,10 +730,10 @@
         #lipSyncPanel .screenshot-preview { position: relative; }
         #screenshotPreviewImage { width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; background: #111; }
         #lipSyncPanel #removeScreenshotBtn { position: absolute; top: 4px; right: 4px; min-width: 28px; padding: 4px; background: #222; }
-        #screenshotStatus { max-width: 300px; font-size: 12px; line-height: 1.4; }
+        #screenshotStatus { max-width: 300px; font-size: max(12px, var(--desktop-min-font)); line-height: 1.4; }
         #screenshotStatus:empty { display: none; }
-        #lipSyncPanel #screenshotPermissionBtn { font-size: 12px; }
-        .history-screenshot { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: #ccc; }
+        #lipSyncPanel #screenshotPermissionBtn { font-size: max(12px, var(--desktop-min-font)); }
+        .history-screenshot { display: flex; flex-direction: column; gap: 4px; font-size: max(11px, var(--desktop-min-font)); color: #ccc; }
         .history-screenshot img { max-width: 100%; max-height: 130px; object-fit: contain; border-radius: 4px; }
     </style>
     <!-- Lip Sync Panel (bottom-left, can be toggled with 💬 button) -->

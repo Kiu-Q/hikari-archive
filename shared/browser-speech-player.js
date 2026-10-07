@@ -60,7 +60,7 @@ export function createBrowserSpeechPlayer({
       if (ctx.state === 'running') return Promise.resolve(true);
       const resumed = ctx.resume();
       const silent = ctx.createBufferSource();
-      silent.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+      silent.buffer = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.05), ctx.sampleRate);
       silent.connect(ctx.destination);
       silent.onended = () => silent.disconnect();
       silent.start();
@@ -117,7 +117,7 @@ export function createBrowserSpeechPlayer({
         if (preparation.cancelled || active !== operation) return false;
         throw error;
       }
-      if (result === cancelled || active !== operation || preparation.cancelled) return false;
+      if (result === cancelled || active !== operation || preparation.cancelled || options.shouldPlay?.() === false) return false;
       if (!result?.audio || !Number.isFinite(result.durationSeconds) || result.durationSeconds <= 0) {
         throw new Error('The voice service returned invalid audio.');
       }
@@ -129,12 +129,14 @@ export function createBrowserSpeechPlayer({
 
       const ensureRunning = async () => {
         if (ctx.state === 'running') return true;
+
         const automatic = await wait(resume());
         if (automatic === cancelled || active !== operation) return false;
         if (ctx.state === 'running') return true;
+        options.onBlocked?.();
 
         // An interrupted page may need a fresh gesture. Any gesture can resume
-        // it; the visible retry control is only a fallback, not a per-reply step.
+        // it; normal page interactions retry without a dedicated audio button.
         const ready = new Promise(resolve => {
           const changed = () => { if (ctx.state === 'running') resolve(); };
           ctx.addEventListener('statechange', changed);
@@ -156,7 +158,7 @@ export function createBrowserSpeechPlayer({
         if (ctx.state !== 'running') throw new Error('Audio is still suspended.');
         return true;
       };
-      if (!await ensureRunning() || active !== operation) return false;
+      if (!await ensureRunning() || active !== operation || options.shouldPlay?.() === false) return false;
 
       source = ctx.createBufferSource();
       source.buffer = decoded;
@@ -179,7 +181,7 @@ export function createBrowserSpeechPlayer({
       const settings = await wait(Promise.resolve().then(() => options.beforePlay?.({ canBoost: Boolean(compressor) })));
       if (settings === cancelled || active !== operation) return false;
       // Animation preparation may span a background/foreground transition.
-      if (!await ensureRunning() || active !== operation) return false;
+      if (!await ensureRunning() || active !== operation || options.shouldPlay?.() === false) return false;
       const targetGain = Number.isFinite(settings?.voiceGain)
         ? Math.max(0, Math.min(compressor ? 0.9 / 0.7 : 1, settings.voiceGain)) : 0.9;
       gain.gain.setValueAtTime(options.fadeIn === false ? targetGain : 0, ctx.currentTime);

@@ -37,6 +37,11 @@ test('captions remove punctuation and CJK boundary spacing without changing VO t
   assert.deepEqual(splitSpeechSegments('早晨，老師！'), ['早晨，', '老師！']);
 });
 
+test('tone dashes stay visible while ordinary caption punctuation is removed', () => {
+  assert.equal(formatCaption('老師——早晨，呀！💚'), '老師——早晨呀💚');
+  assert.deepEqual(splitSpeechSegments('老師——早晨，呀！'), ['老師——早晨，', '呀！']);
+});
+
 test('paired protocol validates internal punctuation and merges accidental emoji-only pairs', () => {
   assert.deepEqual(normalizePairedSegments([
     { text: '早晨，老師！', text_ja: 'おはよう、せんせい！' },

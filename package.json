@@ -10,23 +10,17 @@
   },
   "scripts": {
     "dev": "vite --mode electron",
-    "dev:electron": "vite --mode electron",
     "dev:web": "vite --mode web --open",
-    "build": "node tools/build-media-state.mjs && node tools/build-voice-stt.mjs && vite build --mode electron && copyfiles -u 1 electron/assets/loading.gif dist",
-    "build:electron": "node tools/build-media-state.mjs && node tools/build-voice-stt.mjs && vite build --mode electron && copyfiles -u 1 electron/assets/loading.gif dist",
+    "build": "node tools/build-media-state.mjs && node tools/build-voice-stt.mjs && node tools/build-music-beat.mjs && vite build --mode electron && copyfiles -u 1 electron/assets/loading.gif dist",
     "build:web": "vite build --mode web-local",
     "build:web:github": "vite build --mode web",
     "start": "npm run build && npx electron .",
-    "start:electron": "npm run build && npx electron .",
-    "start:web": "npm run build:web && node server/index.js",
+    "start:web": "node tools/start-web.mjs",
     "serve:web": "node server/index.js",
-    "preview:web:static": "vite preview --mode web-local --host 0.0.0.0 --port 4173",
-    "preview": "vite preview --port 3000",
-    "package": "npm run build && npx electron-forge package",
-    "make": "npm run build && npx electron-forge make"
+    "package": "npm run build && node tools/build-mac-icon.mjs && npx electron-forge package",
+    "make:dmg": "node tools/build-dmg.mjs",
+    "make": "npm run build && node tools/build-mac-icon.mjs && npx electron-forge make"
   },
-  "keywords": [],
-  "author": "",
   "license": "MIT",
   "devDependencies": {
     "@electron-forge/cli": "^7.4.0",

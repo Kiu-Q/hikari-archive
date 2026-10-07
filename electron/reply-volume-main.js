@@ -15,10 +15,11 @@ export function parseOutputVolume(value) {
 }
 
 export class ReplyVolumeService {
-  constructor({ helperPath, execute = execFile, fadeMs = 350 } = {}) {
+  constructor({ helperPath, execute = execFile, fadeMs = 350, mediaPlaying } = {}) {
     this.helperPath = helperPath;
     this.execute = execute;
     this.fadeMs = fadeMs;
+    this.mediaPlaying = mediaPlaying || (async () => String(await this.call([])).trim() === '1');
     this.active = null;
     this.nextSessionId = 1;
     this.chain = Promise.resolve();
@@ -56,15 +57,19 @@ export class ReplyVolumeService {
       if (this.active) await this.restoreActive();
 
       const sessionId = String(this.nextSessionId++);
-      // Keep speech at 90% of its normal level when there is no media to duck,
-      // or when Web Audio cannot compensate for the system output reduction.
+      // Use the normal voice level unless media is already playing.
       const fallback = { sessionId, voiceGain: 0.9, mediaDucked: false };
       this.active = { sessionId, duck: null };
-      if (!this.helperPath || !canBoost) return fallback;
+      if (!this.helperPath) return fallback;
 
       try {
-        const mediaPlaying = String(await this.call([])).trim() === '1';
+        const mediaPlaying = await this.mediaPlaying();
         if (!mediaPlaying) return fallback;
+
+        // Media playback halves the voice's normal output level, including
+        // the native audio fallback and devices without writable volume.
+        fallback.voiceGain = 0.45;
+        if (!canBoost) return fallback;
 
         const volume = await this.readVolume();
         if (!volume || volume.scalar <= 0.01) return fallback;
@@ -72,8 +77,8 @@ export class ReplyVolumeService {
         const duck = { ...volume, targetScalar };
         this.active.duck = duck;
         await this.ramp(volume.deviceId, targetScalar);
-        // Keep media at 70% and speech at 90% of its normal output level.
-        return { sessionId, voiceGain: 0.9 / 0.7, mediaDucked: true };
+        // Compensate only for the system ramp so speech remains at 45%.
+        return { sessionId, voiceGain: 0.45 / 0.7, mediaDucked: true };
       } catch {
         await this.restoreActive({ allowPartialRamp: true });
         this.active = { sessionId, duck: null };

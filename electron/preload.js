@@ -14,6 +14,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     begin: (options) => ipcRenderer.invoke('audio:begin-reply', options),
     end: (sessionId) => ipcRenderer.invoke('audio:end-reply', sessionId),
   },
+  musicBeat: {
+    setEnabled: enabled => ipcRenderer.invoke('music-beat:set-enabled', enabled),
+    openPermissionSettings: () => ipcRenderer.invoke('music-beat:open-permission'),
+    onSignal: callback => {
+      if (typeof callback !== 'function') throw new TypeError('musicBeat.onSignal requires a callback');
+      const listener = (_event, value) => callback(value);
+      ipcRenderer.on('music-beat:signal', listener);
+      return () => ipcRenderer.removeListener('music-beat:signal', listener);
+    },
+    onStatus: callback => {
+      if (typeof callback !== 'function') throw new TypeError('musicBeat.onStatus requires a callback');
+      const listener = (_event, value) => callback(value);
+      ipcRenderer.on('music-beat:status', listener);
+      return () => ipcRenderer.removeListener('music-beat:status', listener);
+    },
+  },
   worldState: {
     get: () => ipcRenderer.invoke('world-state:get'),
     onPatch: (callback) => {
@@ -74,6 +90,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }
       return ipcRenderer.invoke('awareness:request-snapshot', candidateId);
     },
+
+    captureScreen: () => ipcRenderer.invoke('awareness:capture-screen'),
 
     noteDirectInteraction: () => {
       ipcRenderer.send('awareness:direct-interaction');

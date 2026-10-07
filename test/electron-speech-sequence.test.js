@@ -146,3 +146,31 @@ test('a later synthesis failure preserves the full reply without duplicating his
   assert.equal(historyCalls, 1);
   assert.deepEqual(h.ended, ['reply']);
 });
+
+test('the drag expression releases at audible speech, after preparation and before the reply expression', async () => {
+  let finishSynthesis;
+  const events = [];
+  const h = harness({ synthesize: () => new Promise(resolve => { finishSynthesis = resolve; }) });
+  h.context.window.releaseDragExpression = () => events.push('release-shy');
+  const speaking = h.system.startSpeaking('早晨！', 'おはよう！', { onStart: () => events.push('reply-expression') });
+  await tick();
+  assert.equal(h.system.isTalking(), true, 'the talking flag includes preparation');
+  assert.deepEqual(events, []);
+  finishSynthesis(voice);
+  await tick();
+  assert.equal(h.audios[0].paused, false, 'play() was called');
+  assert.deepEqual(events, [], 'play() alone must not release the held reaction');
+  h.audios[0].onplaying();
+  assert.deepEqual(events, ['release-shy', 'reply-expression']);
+  h.audios[0].onended();
+  await speaking;
+});
+
+test('failed voice synthesis does not release shy before the next actual spoken reply', async () => {
+  const h = harness({ synthesize: async () => { throw new Error('offline'); } });
+  let released = 0;
+  h.context.window.releaseDragExpression = () => released++;
+  await h.system.startSpeaking('早晨！', 'おはよう！');
+  assert.equal(released, 0);
+  assert.equal(h.audios.length, 0);
+});

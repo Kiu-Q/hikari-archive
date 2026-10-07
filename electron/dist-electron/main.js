@@ -74,6 +74,70 @@ const awarenessConfig = {
   },
   debug: true
 };
+const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+const MAX_DIMENSION = 1920;
+function captureError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+function createScreenCaptureService({ getSources, getDisplay, getPermissionStatus = () => "granted", platform = process.platform, now = () => Date.now(), captureTimeoutMs = 15e3 }) {
+  let capturing = false;
+  return {
+    async capture() {
+      if (capturing) throw captureError("CAPTURE_BUSY", "A screenshot is already being captured.");
+      capturing = true;
+      try {
+        if (platform === "darwin" && getPermissionStatus() !== "granted") {
+          throw captureError("SCREEN_PERMISSION_REQUIRED", "Allow Screen Recording for Hikari in macOS Settings, then capture again.");
+        }
+        const display = getDisplay();
+        if (!display?.size?.width || !display?.size?.height) throw captureError("CAPTURE_UNAVAILABLE", "The current display is unavailable.");
+        const scale = Math.min(1, MAX_DIMENSION / Math.max(display.size.width, display.size.height));
+        let captureTimer;
+        let sources;
+        try {
+          sources = await Promise.race([
+            getSources({
+              types: ["screen"],
+              fetchWindowIcons: false,
+              thumbnailSize: { width: Math.max(1, Math.round(display.size.width * scale)), height: Math.max(1, Math.round(display.size.height * scale)) }
+            }),
+            new Promise((_, reject) => {
+              captureTimer = setTimeout(() => reject(captureError("CAPTURE_TIMEOUT", "Screen capture timed out. Check Screen Recording permission and try again.")), captureTimeoutMs);
+            })
+          ]);
+        } finally {
+          clearTimeout(captureTimer);
+        }
+        const source = sources.find((item) => String(item.display_id) === String(display.id));
+        let image = source?.thumbnail;
+        if (!image || image.isEmpty()) throw captureError("CAPTURE_UNAVAILABLE", "No screenshot was returned for the current display.");
+        let size = image.getSize();
+        if (Math.max(size.width, size.height) > MAX_DIMENSION) {
+          const ratio = MAX_DIMENSION / Math.max(size.width, size.height);
+          image = image.resize({ width: Math.round(size.width * ratio), height: Math.round(size.height * ratio), quality: "good" });
+        }
+        let jpeg;
+        for (const quality of [80, 65, 50]) {
+          jpeg = image.toJPEG(quality);
+          if (jpeg.length <= MAX_SCREENSHOT_BYTES) break;
+        }
+        if (!jpeg?.length || jpeg.length > MAX_SCREENSHOT_BYTES) throw captureError("SCREENSHOT_TOO_LARGE", "The screenshot is too large. Try capturing a smaller display.");
+        size = image.getSize();
+        const thumbnail = image.resize({ width: Math.min(320, size.width), quality: "good" }).toJPEG(65);
+        return {
+          mimeType: "image/jpeg",
+          width: size.width,
+          height: size.height,
+          capturedAt: now(),
+          dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}`,
+          thumbnailDataUrl: `data:image/jpeg;base64,${thumbnail.toString("base64")}`
+        };
+      } finally {
+        capturing = false;
+      }
+    }
+  };
+}
 function parseMediaPlaybackOutput(value) {
   if (typeof value !== "string") return null;
   const normalized = value.trim();
@@ -1230,6 +1294,47 @@ class DesktopAwarenessService {
     this.debug("CANDIDATE", "accepted", candidate);
     this.emitCandidate(candidate);
   }
+  async captureScreen() {
+    if (!this.enabled || this.isDirectInteractionSuppressed()) return null;
+    let context = await this.getActiveContext();
+    if (!context || this.isHikariContext(context)) context = this.currentContext;
+    if (!this.enabled || this.isDirectInteractionSuppressed() || !context || this.isHikariContext(context)) return null;
+    let timeout;
+    let capture;
+    try {
+      capture = await Promise.race([
+        this.captureContext(context),
+        new Promise((resolve) => {
+          timeout = setTimeout(() => resolve(null), 15e3);
+        })
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!this.enabled || this.isDirectInteractionSuppressed() || !capture?.semantic) return null;
+    let image = capture.semantic;
+    let size = imageSize(image);
+    if (!size) return null;
+    if (Math.max(size.width, size.height) > 1920) {
+      const ratio = 1920 / Math.max(size.width, size.height);
+      image = image.resize({ width: Math.max(1, Math.round(size.width * ratio)), height: Math.max(1, Math.round(size.height * ratio)), quality: "good" });
+      size = imageSize(image);
+    }
+    let jpeg;
+    for (const quality of [this.config.screen.semanticSnapshotJpegQuality || 72, 50, 35]) {
+      jpeg = image.toJPEG(quality);
+      if (jpeg.length <= MAX_SCREENSHOT_BYTES) break;
+    }
+    if (!jpeg?.length || jpeg.length > MAX_SCREENSHOT_BYTES || !size) return null;
+    return {
+      mimeType: "image/jpeg",
+      width: size.width,
+      height: size.height,
+      capturedAt: Date.now(),
+      context: publicContext(capture.context || context),
+      dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}`
+    };
+  }
   requestSnapshot(candidateId) {
     this.pruneSnapshots();
     const snapshot = this.snapshots.get(candidateId);
@@ -1893,10 +1998,11 @@ function parseOutputVolume(value) {
   return Number.isSafeInteger(deviceId) && deviceId > 0 && Number.isFinite(scalar) && scalar >= 0 && scalar <= 1 ? { deviceId, scalar } : null;
 }
 class ReplyVolumeService {
-  constructor({ helperPath, execute = execFile, fadeMs = 350 } = {}) {
+  constructor({ helperPath, execute = execFile, fadeMs = 350, mediaPlaying } = {}) {
     this.helperPath = helperPath;
     this.execute = execute;
     this.fadeMs = fadeMs;
+    this.mediaPlaying = mediaPlaying || (async () => String(await this.call([])).trim() === "1");
     this.active = null;
     this.nextSessionId = 1;
     this.chain = Promise.resolve();
@@ -1932,17 +2038,19 @@ class ReplyVolumeService {
       const sessionId = String(this.nextSessionId++);
       const fallback = { sessionId, voiceGain: 0.9, mediaDucked: false };
       this.active = { sessionId, duck: null };
-      if (!this.helperPath || !canBoost) return fallback;
+      if (!this.helperPath) return fallback;
       try {
-        const mediaPlaying = String(await this.call([])).trim() === "1";
+        const mediaPlaying = await this.mediaPlaying();
         if (!mediaPlaying) return fallback;
+        fallback.voiceGain = 0.45;
+        if (!canBoost) return fallback;
         const volume = await this.readVolume();
         if (!volume || volume.scalar <= 0.01) return fallback;
         const targetScalar = volume.scalar * 0.7;
         const duck = { ...volume, targetScalar };
         this.active.duck = duck;
         await this.ramp(volume.deviceId, targetScalar);
-        return { sessionId, voiceGain: 0.9 / 0.7, mediaDucked: true };
+        return { sessionId, voiceGain: 0.45 / 0.7, mediaDucked: true };
       } catch {
         await this.restoreActive({ allowPartialRamp: true });
         this.active = { sessionId, duck: null };
@@ -2061,69 +2169,268 @@ function encodeFloat32Wav(samples, sampleRate = 16e3) {
   for (let i = 0; i < samples.length; i++) buffer.writeInt16LE(Math.round(Math.max(-1, Math.min(1, samples[i])) * 32767), 44 + i * 2);
   return buffer;
 }
-const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024;
-const MAX_DIMENSION = 1920;
-function captureError(code, message) {
-  return Object.assign(new Error(message), { code });
-}
-function createScreenCaptureService({ getSources, getDisplay, getPermissionStatus = () => "granted", platform = process.platform, now = () => Date.now(), captureTimeoutMs = 15e3 }) {
-  let capturing = false;
+function fitWindowToWorkArea(bounds, workArea) {
+  if (![
+    bounds.x,
+    bounds.y,
+    bounds.width,
+    bounds.height,
+    workArea.x,
+    workArea.y,
+    workArea.width,
+    workArea.height
+  ].every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0 || workArea.width <= 0 || workArea.height <= 0) {
+    throw new TypeError("Invalid window bounds");
+  }
+  const ratio = Math.min(1, workArea.width / bounds.width, workArea.height / bounds.height);
+  const width = Math.max(1, Math.floor(bounds.width * ratio));
+  const height = Math.max(1, Math.floor(bounds.height * ratio));
   return {
-    async capture() {
-      if (capturing) throw captureError("CAPTURE_BUSY", "A screenshot is already being captured.");
-      capturing = true;
-      try {
-        if (platform === "darwin" && getPermissionStatus() !== "granted") {
-          throw captureError("SCREEN_PERMISSION_REQUIRED", "Allow Screen Recording for Hikari in macOS Settings, then capture again.");
-        }
-        const display = getDisplay();
-        if (!display?.size?.width || !display?.size?.height) throw captureError("CAPTURE_UNAVAILABLE", "The current display is unavailable.");
-        const scale = Math.min(1, MAX_DIMENSION / Math.max(display.size.width, display.size.height));
-        let captureTimer;
-        let sources;
-        try {
-          sources = await Promise.race([
-            getSources({
-              types: ["screen"],
-              fetchWindowIcons: false,
-              thumbnailSize: { width: Math.max(1, Math.round(display.size.width * scale)), height: Math.max(1, Math.round(display.size.height * scale)) }
-            }),
-            new Promise((_, reject) => {
-              captureTimer = setTimeout(() => reject(captureError("CAPTURE_TIMEOUT", "Screen capture timed out. Check Screen Recording permission and try again.")), captureTimeoutMs);
-            })
-          ]);
-        } finally {
-          clearTimeout(captureTimer);
-        }
-        const source = sources.find((item) => String(item.display_id) === String(display.id));
-        let image = source?.thumbnail;
-        if (!image || image.isEmpty()) throw captureError("CAPTURE_UNAVAILABLE", "No screenshot was returned for the current display.");
-        let size = image.getSize();
-        if (Math.max(size.width, size.height) > MAX_DIMENSION) {
-          const ratio = MAX_DIMENSION / Math.max(size.width, size.height);
-          image = image.resize({ width: Math.round(size.width * ratio), height: Math.round(size.height * ratio), quality: "good" });
-        }
-        let jpeg;
-        for (const quality of [80, 65, 50]) {
-          jpeg = image.toJPEG(quality);
-          if (jpeg.length <= MAX_SCREENSHOT_BYTES) break;
-        }
-        if (!jpeg?.length || jpeg.length > MAX_SCREENSHOT_BYTES) throw captureError("SCREENSHOT_TOO_LARGE", "The screenshot is too large. Try capturing a smaller display.");
-        size = image.getSize();
-        const thumbnail = image.resize({ width: Math.min(320, size.width), quality: "good" }).toJPEG(65);
-        return {
-          mimeType: "image/jpeg",
-          width: size.width,
-          height: size.height,
-          capturedAt: now(),
-          dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}`,
-          thumbnailDataUrl: `data:image/jpeg;base64,${thumbnail.toString("base64")}`
-        };
-      } finally {
-        capturing = false;
-      }
+    x: Math.max(workArea.x, Math.min(Math.round(bounds.x), workArea.x + workArea.width - width)),
+    y: Math.max(workArea.y, Math.min(Math.round(bounds.y), workArea.y + workArea.height - height)),
+    width,
+    height
+  };
+}
+function constrainWindow(window, screen2, requested = window.getBounds()) {
+  const display = screen2.getDisplayMatching(requested);
+  const fitted = fitWindowToWorkArea(requested, display.workArea);
+  const current = window.getBounds();
+  if (Object.keys(fitted).some((key) => fitted[key] !== current[key])) window.setBounds(fitted);
+  return window.getBounds();
+}
+function keepWindowOnScreen(window, screen2) {
+  let adjusting = false;
+  const enforce = () => {
+    if (adjusting || window.isDestroyed()) return;
+    adjusting = true;
+    try {
+      constrainWindow(window, screen2);
+    } finally {
+      adjusting = false;
     }
   };
+  window.on("move", enforce);
+  window.on("resize", enforce);
+  screen2.on("display-metrics-changed", enforce);
+  screen2.on("display-removed", enforce);
+  window.once("closed", () => {
+    screen2.removeListener("display-metrics-changed", enforce);
+    screen2.removeListener("display-removed", enforce);
+  });
+  enforce();
+}
+class MusicBeatDetector {
+  constructor() {
+    this.reset();
+  }
+  reset() {
+    this.average = 0;
+    this.previousBass = 0;
+    this.lastFrameAt = null;
+    this.lastBeatAt = null;
+    this.beat = 0;
+    this.intervals = [];
+    this.rawIntervals = [];
+    this.intervalMs = null;
+    this.targetIntervalMs = null;
+    this.lastAudibleAt = null;
+  }
+  learnTempo(interval) {
+    if (interval < 300 || interval > 4500) return;
+    this.rawIntervals.push(interval);
+    this.rawIntervals = this.rawIntervals.slice(-3);
+    const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+    const rawMedian = median(this.rawIntervals);
+    const changedTempo = this.intervalMs !== null && this.rawIntervals.length === 3 && this.rawIntervals.every((value) => Math.abs(value / rawMedian - 1) < 0.08) && Math.abs(rawMedian / this.intervalMs - 1) > 0.12 && rawMedian <= 1500;
+    if (changedTempo) this.intervals = [rawMedian, rawMedian, rawMedian];
+    else if (this.intervalMs !== null) {
+      const beats = Math.round(interval / this.intervalMs);
+      if (beats >= 2 && beats <= 3 && Math.abs(interval / beats / this.intervalMs - 1) < 0.12) interval /= beats;
+    }
+    if (interval > 1500) return;
+    this.intervals.push(interval);
+    this.intervals = this.intervals.slice(-9);
+    if (this.intervals.length < 3) return;
+    const centre = median(this.intervals);
+    const inliers = this.intervals.filter((value) => Math.abs(value / centre - 1) < 0.12);
+    const target = inliers.reduce((sum, value) => sum + value, 0) / inliers.length;
+    if (this.intervalMs === null) this.intervalMs = this.targetIntervalMs = target;
+    else {
+      if (Math.abs(target / this.targetIntervalMs - 1) > 0.03) this.targetIntervalMs = target;
+      this.intervalMs += (this.targetIntervalMs - this.intervalMs) * 0.2;
+      if (Math.abs(this.intervalMs / this.targetIntervalMs - 1) < 5e-3) this.intervalMs = this.targetIntervalMs;
+    }
+  }
+  update(frame, now = Date.now()) {
+    const level = Math.max(0, Math.min(1, Number(frame.level) || 0));
+    const bass = Math.max(0, Math.min(1, Number(frame.bass) || 0));
+    const delta = this.lastFrameAt === null ? 40 : Math.max(1, Math.min(200, now - this.lastFrameAt));
+    if (this.lastFrameAt !== null && now - this.lastFrameAt > 1500) this.reset();
+    if (level >= 2e-3) {
+      if (this.lastAudibleAt !== null && now - this.lastAudibleAt > 8e3) this.reset();
+      this.lastAudibleAt = now;
+    }
+    const onset = bass > Math.max(4e-3, this.average * 1.5) && bass > this.previousBass * 1.12 && (this.lastBeatAt === null || now - this.lastBeatAt >= 240);
+    if (onset) {
+      if (this.lastBeatAt !== null) {
+        this.learnTempo(now - this.lastBeatAt);
+      }
+      this.lastBeatAt = now;
+      this.beat++;
+    }
+    this.average += (bass - this.average) * (1 - Math.exp(-delta / 1400));
+    this.previousBass = bass;
+    this.lastFrameAt = now;
+    return {
+      level,
+      beat: this.beat,
+      lastBeatAt: this.lastBeatAt,
+      intervalMs: this.intervalMs,
+      active: this.lastAudibleAt !== null && now - this.lastAudibleAt < 4e3,
+      updatedAt: now
+    };
+  }
+}
+class MusicBeatService {
+  constructor({
+    executable,
+    spawn: spawn$1 = spawn,
+    available = () => process.platform === "darwin" && existsSync(executable),
+    excludePids = () => [process.pid],
+    onSignal = () => {
+    },
+    onStatus = () => {
+    },
+    now = () => Date.now(),
+    mediaPlaying = async () => false,
+    startupTimeoutMs = 3e4,
+    silentTimeoutMs = 15e3
+  } = {}) {
+    Object.assign(this, { executable, spawn: spawn$1, available, excludePids, onSignal, onStatus, now, mediaPlaying, startupTimeoutMs, silentTimeoutMs });
+    this.detector = new MusicBeatDetector();
+    this.child = null;
+    this.status = { state: "off" };
+    this.starting = null;
+  }
+  setStatus(status) {
+    this.status = status;
+    this.onStatus(status);
+    return status;
+  }
+  start() {
+    if (this.starting) return this.starting;
+    if (this.child) return Promise.resolve(this.status);
+    if (!this.available()) return Promise.resolve(this.setStatus({ state: "error", reason: "Music sway requires macOS 14.2 or later and the native helper." }));
+    this.detector.reset();
+    this.setStatus({ state: "starting" });
+    let child;
+    try {
+      child = this.spawn(this.executable, this.excludePids().map(String), { stdio: ["pipe", "pipe", "pipe"] });
+    } catch {
+      return Promise.resolve(this.setStatus({ state: "error", reason: "Could not start music analysis." }));
+    }
+    this.child = child;
+    let buffer = "", ready = false, audible = false, quietSince = null, checking = false;
+    const pending = new Promise((resolve) => {
+      const settle = (status) => {
+        clearTimeout(this.startupTimer);
+        resolve(status);
+      };
+      this.settleStart = settle;
+      this.startupTimer = setTimeout(() => {
+        if (this.child !== child) return;
+        this.stop({ state: "error", reason: "System audio access is needed. Allow Hikari in macOS System Audio Recording settings, then try again." });
+      }, this.startupTimeoutMs);
+      const fail = (reason) => {
+        if (this.child !== child) return;
+        this.stop({ state: "error", reason });
+      };
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdin.on("error", () => {
+      });
+      child.stderr.on("data", () => {
+      });
+      child.stdout.on("data", (chunk) => {
+        if (this.child !== child) return;
+        buffer += chunk;
+        if (buffer.length > 65536) {
+          fail("Music analysis returned invalid data.");
+          return;
+        }
+        let end;
+        while ((end = buffer.indexOf("\n")) >= 0 && this.child === child) {
+          const line = buffer.slice(0, end);
+          buffer = buffer.slice(end + 1);
+          let frame;
+          try {
+            frame = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (frame.type === "error") {
+            fail(frame.stage === "unsupported" ? "Music sway requires macOS 14.2 or later." : "System audio capture could not start. Allow Hikari in System Audio Recording settings, then try again.");
+          } else if (frame.type === "ready") {
+            ready = true;
+            settle(this.setStatus({ state: "listening" }));
+          } else if (frame.type === "frame" && ready && Number.isFinite(frame.level) && Number.isFinite(frame.bass)) {
+            const signal = this.detector.update(frame, this.now());
+            if (signal.active && this.status.warning) this.setStatus({ state: "listening" });
+            this.onSignal(signal);
+            audible ||= signal.active;
+            if (signal.active) quietSince = null;
+            else quietSince ??= this.now();
+            if (!audible && quietSince !== null && this.now() - quietSince >= this.silentTimeoutMs && !checking) {
+              checking = true;
+              Promise.resolve().then(() => this.mediaPlaying()).then((playing) => {
+                if (this.child === child && !audible && playing) this.setStatus({
+                  state: "listening",
+                  warning: "No audio captured. If music is playing, check Hikari’s System Audio Recording permission."
+                });
+              }).catch(() => {
+              }).finally(() => {
+                checking = false;
+                quietSince = this.now();
+              });
+            }
+          }
+        }
+      });
+      child.once("error", () => fail("Could not start music analysis."));
+      child.once("close", () => fail("Music analysis stopped. Toggle Music beat sway to try again."));
+      this.exclusionTimer = setInterval(() => {
+        if (this.child === child && !child.stdin.destroyed) child.stdin.write(JSON.stringify(this.excludePids()) + "\n");
+      }, 1e3);
+    }).finally(() => {
+      if (this.starting === pending) {
+        this.starting = null;
+        this.settleStart = null;
+      }
+    });
+    this.starting = pending;
+    return pending;
+  }
+  stop(status = { state: "off" }) {
+    clearTimeout(this.startupTimer);
+    clearInterval(this.exclusionTimer);
+    const child = this.child;
+    this.child = null;
+    if (child) {
+      child.stdin.end();
+      child.kill("SIGTERM");
+      const timer = setTimeout(() => child.kill("SIGKILL"), 1500);
+      timer.unref?.();
+      child.once("close", () => clearTimeout(timer));
+    }
+    this.detector.reset();
+    this.onSignal({ active: false, level: 0, beat: 0, lastBeatAt: null, intervalMs: null, updatedAt: this.now() });
+    this.setStatus(status);
+    this.settleStart?.(status);
+    this.starting = null;
+    this.settleStart = null;
+    return status;
+  }
 }
 const __filename$1 = fileURLToPath$1(import.meta.url);
 const __dirname$1 = path$1.dirname(__filename$1);
@@ -2139,6 +2446,7 @@ let contextPoll = null;
 let audioPoll = null;
 let activityPoll = null;
 let sttService = null;
+let musicBeatService = null;
 let voiceListeningEnabled = false;
 let lastPointer = null;
 let lastDesktopContextKey = "";
@@ -2204,7 +2512,7 @@ async function pollSystemAudio(service) {
     publishWorldPatch({ audio: { system: {
       available: audioState?.available ?? false,
       stale: false,
-      captureAvailable: false,
+      captureAvailable: musicBeatService?.status.state === "listening",
       running: audioState?.running ?? false,
       volume: audioState?.volume ?? output?.scalar ?? null,
       muted: audioState?.muted ?? null,
@@ -2262,7 +2570,14 @@ function getReplyVolumeService() {
       path$1.resolve(__dirname$1, "../tools/media-state/media-state")
     ];
     replyVolumeService = new ReplyVolumeService({
-      helperPath: candidates.find((candidate) => existsSync$1(candidate))
+      helperPath: candidates.find((candidate) => existsSync$1(candidate)),
+      // The voice player's own AudioContext opens the output device before
+      // playback. Exclude Hikari's processes so it cannot count as media.
+      mediaPlaying: async () => String(await replyVolumeService.call([
+        "playing-except",
+        String(process.pid),
+        ...app.getAppMetrics().map((metric) => String(metric.pid))
+      ])).trim() === "1"
     });
   }
   return replyVolumeService;
@@ -2283,6 +2598,22 @@ function getLocalTtsService() {
     localTtsService = createLocalTtsService({ toolDir });
   }
   return localTtsService;
+}
+function getMusicBeatService() {
+  if (!musicBeatService) {
+    const candidates = app.isPackaged ? [path$1.join(process.resourcesPath, "music-beat", "music-beat")] : [path$1.join(app.getAppPath(), "tools/music-beat/music-beat"), path$1.resolve(__dirname$1, "../tools/music-beat/music-beat")];
+    const send = (channel, value) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send(channel, value);
+    };
+    musicBeatService = new MusicBeatService({
+      executable: candidates.find((candidate) => existsSync$1(candidate)) || candidates[0],
+      excludePids: () => [process.pid, ...app.getAppMetrics().map((metric) => metric.pid)],
+      mediaPlaying: () => getReplyVolumeService().mediaPlaying(),
+      onSignal: (value) => send("music-beat:signal", value),
+      onStatus: (value) => send("music-beat:status", value)
+    });
+  }
+  return musicBeatService;
 }
 function isMainRenderer(event) {
   return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
@@ -2357,6 +2688,7 @@ function createWindow() {
       autoplayPolicy: "no-user-gesture-required"
     }
   });
+  keepWindowOnScreen(mainWindow, screen);
   if (isDev) {
     mainWindow.loadURL("http://localhost:5174/electron/index.html");
     mainWindow.webContents.openDevTools({ mode: "detach" });
@@ -2364,6 +2696,7 @@ function createWindow() {
     mainWindow.loadFile(path$1.join(__dirname$1, "../dist/index.html"));
   }
   mainWindow.once("closed", () => {
+    musicBeatService?.stop();
     awarenessService?.stop();
     stopWorldStatePolling();
     voiceListeningEnabled = false;
@@ -2376,6 +2709,15 @@ function createWindow() {
 ipcMain.handle("tts:synthesize", async (event, input) => {
   if (!isMainRenderer(event)) throw new TypeError("Invalid voice request");
   return getLocalTtsService().synthesize(input);
+});
+ipcMain.handle("music-beat:set-enabled", (event, enabled) => {
+  if (!isMainRenderer(event) || typeof enabled !== "boolean") throw new TypeError("Invalid music analysis request");
+  const service = getMusicBeatService();
+  return enabled ? service.start() : service.stop();
+});
+ipcMain.handle("music-beat:open-permission", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid music permission request");
+  await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture");
 });
 ipcMain.handle("world-state:get", (event) => {
   if (!isMainRenderer(event)) throw new TypeError("Invalid world-state request");
@@ -2419,8 +2761,8 @@ ipcMain.handle("get-window-position", () => {
 });
 ipcMain.handle("set-window-position", (event, x, y) => {
   if (!mainWindow) return false;
-  mainWindow.setPosition(Math.round(x), Math.round(y));
-  return true;
+  if (!isMainRenderer(event) || ![x, y].every(Number.isFinite)) throw new TypeError("Invalid window position");
+  return constrainWindow(mainWindow, screen, { ...mainWindow.getBounds(), x: Math.round(x), y: Math.round(y) });
 });
 ipcMain.handle("get-window-bounds", () => {
   if (!mainWindow) return { width: 0, height: 0, x: 0, y: 0 };
@@ -2429,13 +2771,13 @@ ipcMain.handle("get-window-bounds", () => {
 });
 ipcMain.handle("set-window-bounds", (event, x, y, width, height) => {
   if (!mainWindow) return false;
-  mainWindow.setBounds({
+  if (!isMainRenderer(event) || ![x, y, width, height].every(Number.isFinite)) throw new TypeError("Invalid window bounds");
+  return constrainWindow(mainWindow, screen, {
     x: Math.round(x),
     y: Math.round(y),
     width: Math.max(200, Math.round(width)),
     height: Math.max(300, Math.round(height))
   });
-  return true;
 });
 ipcMain.handle("set-ignore-mouse-events", (event, ignore, forward) => {
   if (!mainWindow) return false;
@@ -2484,6 +2826,10 @@ ipcMain.handle("awareness:request-snapshot", (event, candidateId) => {
   }
   return createAwarenessService().requestSnapshot(candidateId);
 });
+ipcMain.handle("awareness:capture-screen", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness capture request");
+  return createAwarenessService().captureScreen();
+});
 ipcMain.on("awareness:direct-interaction", (event) => {
   if (isMainRenderer(event)) createAwarenessService().noteDirectInteraction();
 });
@@ -2512,6 +2858,7 @@ app.on("window-all-closed", () => {
   }
 });
 app.on("before-quit", (event) => {
+  musicBeatService?.stop();
   if (replyVolumeService?.active && !restoringVolumeForQuit) {
     event.preventDefault();
     restoringVolumeForQuit = true;

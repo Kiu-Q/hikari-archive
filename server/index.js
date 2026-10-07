@@ -6,13 +6,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { createGzip } from 'node:zlib';
 import { createLocalTtsService } from '../electron/local-tts-main.js';
 
 const OPENCLAW_URL = 'http://127.0.0.1:18789/v1/chat/completions';
 const TTS_HEALTH_URL = 'http://127.0.0.1:8010/health';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
-const MAX_CHAT_BODY_BYTES = 1024 * 1024;
+const MAX_CHAT_BODY_BYTES = 4 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const MAX_TTS_BODY_BYTES = 16 * 1024;
 const MAX_UPSTREAM_BODY_BYTES = 1024 * 1024;
 const MAX_MESSAGES = 80;
@@ -21,6 +23,15 @@ const MAX_TOTAL_MESSAGE_CHARS = 100_000;
 const DEFAULT_CHAT_TIMEOUT_MS = 180_000;
 const DEFAULT_HEALTH_TIMEOUT_MS = 1_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
+
+function acceptsGzip(value = '') {
+  const encodings = new Map(value.split(',').map(part => {
+    const [name, ...parameters] = part.trim().toLowerCase().split(';');
+    const quality = parameters.find(parameter => parameter.trim().startsWith('q='));
+    return [name, quality ? Number(quality.trim().slice(2)) : 1];
+  }));
+  return (encodings.get('gzip') ?? encodings.get('*') ?? 0) > 0;
+}
 
 const MIME_TYPES = new Map([
   ['.css', 'text/css; charset=utf-8'],
@@ -181,6 +192,7 @@ function validateChatRequest(value) {
   }
 
   let totalChars = 0;
+  let imageCount = 0;
   const normalizedMessages = messages.map((message) => {
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
       throw new TypeError('Each chat message must be an object');
@@ -188,12 +200,36 @@ function validateChatRequest(value) {
     if (!['system', 'user', 'assistant'].includes(message.role)) {
       throw new TypeError('Chat message role is invalid');
     }
-    if (typeof message.content !== 'string' || message.content.length < 1 || message.content.length > MAX_MESSAGE_CHARS) {
-      throw new RangeError('Chat message content is invalid');
-    }
-    totalChars += message.content.length;
+    const validateText = (text) => {
+      if (typeof text !== 'string' || text.length < 1 || text.length > MAX_MESSAGE_CHARS) {
+        throw new RangeError('Chat message content is invalid');
+      }
+      totalChars += text.length;
+      return text;
+    };
+    let content;
+    if (typeof message.content === 'string') content = validateText(message.content);
+    else if (message.role === 'user' && Array.isArray(message.content) && message.content.length === 2) {
+      const [text, image] = message.content;
+      if (text?.type !== 'text' || image?.type !== 'image_url' || ++imageCount > 1) {
+        throw new TypeError('Chat accepts one attached image with user text');
+      }
+      const dataUrl = image.image_url?.url;
+      if (typeof dataUrl !== 'string' || dataUrl.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 23
+          || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(dataUrl)) {
+        throw new TypeError('Chat image must be a JPEG data URL smaller than 2 MB');
+      }
+      const encoded = dataUrl.slice(23);
+      const bytes = Buffer.from(encoded, 'base64');
+      if (bytes.length > MAX_IMAGE_BYTES || bytes.length < 4 || bytes.toString('base64') !== encoded
+          || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff
+          || bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) {
+        throw new TypeError('Chat image must contain valid JPEG data');
+      }
+      content = [{ type: 'text', text: validateText(text.text) }, { type: 'image_url', image_url: { url: dataUrl } }];
+    } else throw new TypeError('Chat message content is invalid');
     if (totalChars > MAX_TOTAL_MESSAGE_CHARS) throw new RangeError('Chat request is too large');
-    return { role: message.role, content: message.content };
+    return { role: message.role, content };
   });
   return normalizedMessages;
 }
@@ -508,6 +544,17 @@ export function createHikariServer(options = {}) {
       'referrer-policy': 'no-referrer',
       'cache-control': 'no-cache'
     };
+    const compressible = file.details.size >= 1024 && /\.(?:vrm|vrma|js|css|html|json|svg)$/i.test(file.path);
+    const compressed = compressible && acceptsGzip(request.headers['accept-encoding']);
+    if (compressible) headers.vary = 'Accept-Encoding';
+    if (compressed) {
+      headers['content-encoding'] = 'gzip';
+      // Three.js uses this uncompressed length for download progress even when
+      // the browser transparently decodes the much smaller transfer.
+      headers['x-file-size'] = file.details.size;
+      headers.etag = headers.etag.replace(/"$/, '-gzip"');
+      delete headers['content-length'];
+    }
     const etag = headers.etag;
     const ifNoneMatch = request.headers['if-none-match'];
     const matchesEtag = typeof ifNoneMatch === 'string' && ifNoneMatch.split(',').map((value) => value.trim()).includes(etag);
@@ -524,7 +571,8 @@ export function createHikariServer(options = {}) {
     if (request.method === 'HEAD') response.end();
     else {
       try {
-        await pipeline(createReadStream(file.path), response);
+        if (compressed) await pipeline(createReadStream(file.path), createGzip(), response);
+        else await pipeline(createReadStream(file.path), response);
       } catch {
         if (!response.headersSent && !response.destroyed) sendJson(response, 404, errorBody('Not found'));
         else if (!response.destroyed) response.destroy();

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { MusicSway } from '../electron/music-sway.js';
+import { completeStandingIdleClip } from '../shared/standing-idle.js';
 
 const source = readFileSync(new URL('../electron/app.js', import.meta.url), 'utf8');
 const functions = source.slice(source.indexOf('    async function prepareSpeakingAnimation('), source.indexOf('    async function loadVRMA('));
@@ -14,7 +16,7 @@ function harness() {
       removeEventListener: (_name, handler) => listeners.delete(handler),
       update() {},
       clipAction(clip) {
-        const action = { clip, setLoop(mode) { this.loop = mode; }, setEffectiveWeight() {},
+        const action = { clip, getClip() { return this.clip; }, setLoop(mode) { this.loop = mode; }, setEffectiveWeight() {},
           setEffectiveTimeScale() {}, reset() {}, play() {}, stop() {}, crossFadeFrom() {} };
         actions.push(action); return action;
       },
@@ -22,12 +24,15 @@ function harness() {
     window: { electronAPI: {} }, THREE: { LoopOnce: 2200, LoopRepeat: 2201 },
     CONFIG: { T_OFFSET: 0.5, TRANSITION_TIME: 0.5 }, isWindowDragging: false,
     loader: { loadAsync: async url => ({ userData: { vrmAnimations: [url] } }) },
-    createVRMAnimationClip: data => ({ name: data }), getVRMAUrl: name => name,
-    idleClips: new WeakSet(), restoreReactiveHead() {}, performance: { now: () => 0 },
+    createVRMAnimationClip: data => ({ name: data }), completeStandingIdleClip, getVRMAUrl: name => name, getVRMAFileName: url => url.split('/').pop(),
+    idleClips: new WeakSet(), idleExpressionClips: new WeakSet(), updateIdleExpression() {}, idleActions: new Set(), musicSway: new MusicSway(),
+    getMusicMotionOptions: () => ({ enabled: false }), restoreReactiveHead() {}, performance: { now: () => 0 },
     statusDiv: {}, logger: { info() {}, warn() {}, error() {} },
     setTimeout: callback => { timers.push(callback); },
   });
   vm.runInContext(functions, context);
+  const helper = source.indexOf('    function updateMusicIdleLoop(');
+  vm.runInContext(source.slice(helper, source.indexOf('    function animate()', helper)), context);
   return { context, actions, listeners,
     finish(action) { for (const handler of [...listeners]) handler({ action }); },
     async start() { const start = await vm.runInContext("prepareSpeakingAnimation('wave.vrma')", context); start(); await Promise.resolve(); return actions.at(-1); },

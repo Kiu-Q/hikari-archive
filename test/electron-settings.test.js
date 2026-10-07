@@ -1,36 +1,45 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import vm from 'node:vm';
 import * as THREE from 'three';
 import { ATTENTION_CONFIG } from '../electron/local-attention.js';
 import { VoiceAddressingGate } from '../electron/voice-addressing.js';
+import { isWebAnimationAllowed } from '../shared/web-mode-policy.js';
+import { createBrowserImageComposer } from '../shared/browser-image-composer.js';
+import { MusicSway } from '../electron/music-sway.js';
+import { completeStandingIdleClip } from '../shared/standing-idle.js';
+import { VRMA_FILE_NAMES, IDLE_VRMA_FILE_NAMES } from '../electron/animation-catalog.js';
 
 const source = readFileSync(new URL('../electron/app.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../electron/index.html', import.meta.url), 'utf8');
+const webHtml = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
 const section = (from, to) => source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)));
 const angleSetter = section('    function setMouseLookMaxAngle(', '    function setEnvironmentLookTarget(');
 
-function harness(saved = {}) {
+function harness(saved = {}, { browser = false } = {}) {
   const storage = new Map(Object.entries(saved)), elements = new Map(), speeds = [], motionChanges = [];
-  for (const match of html.matchAll(/<(input|button|span)[^>]*\bid="([^"]+)"[^>]*>/g)) {
+  for (const match of (browser ? webHtml : html).matchAll(/<([a-z][a-z0-9-]*)[^>]*\bid="([^"]+)"[^>]*>/g)) {
     const markup = match[0];
     elements.set(match[2], {
       value: /\bvalue="([^"]*)"/.exec(markup)?.[1] || '',
       checked: /\bchecked\b/.test(markup), disabled: /\bdisabled\b/.test(markup),
       textContent: '', style: {}, listeners: {},
       addEventListener(name, callback) { this.listeners[name] = callback; },
+      removeAttribute(name) { delete this[name]; },
       click() { this.listeners.click?.(); },
     });
   }
   const context = vm.createContext({
-    THREE, ATTENTION_CONFIG, EYE_FOLLOW_STORAGE_KEY: 'electron_eye_follow_degrees',
+    THREE, ATTENTION_CONFIG, VRMA_FILE_NAMES, IDLE_VRMA_FILE_NAMES, EYE_FOLLOW_STORAGE_KEY: 'electron_eye_follow_degrees',
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     document: { getElementById: id => elements.get(id), addEventListener() {} },
-    window: { electronAPI: {}, _internalLipSync: { setSpeakingSpeed: speed => speeds.push(speed) } },
+    window: { electronAPI: browser ? undefined : {}, _internalLipSync: { setSpeakingSpeed: speed => speeds.push(speed) } },
     logger: { info() {}, warn() {}, error() {} }, noteDirectHikariInteraction() {},
     setupLightControls() {},
     screenshotComposer: null,
+    isWebAnimationAllowed,
+    createBrowserImageComposer,
     CoreModule: { refreshAnimationSettings: key => motionChanges.push(key) },
   });
   vm.runInContext(angleSetter + '\nCoreModule.setMouseLookMaxAngle = setMouseLookMaxAngle;', context);
@@ -57,6 +66,39 @@ test('Eye follow uses the complete advertised range and keeps thumb, label and s
   assert.equal(vm.runInContext('mouseLookMaxYaw', h.context), 0);
 });
 
+test('web settings restore gaze and speed, and expose only browser-safe animation toggles', () => {
+  const h = harness({ electron_eye_follow_degrees: '35', electron_speaking_speed: '1.5', desktop_cursor_gaze_enabled: 'false' }, { browser: true });
+  assert.equal(h.elements.get('eyeFollowSlider').value, '35');
+  assert.equal(h.elements.get('desktopCursorGazeToggle').checked, false);
+  h.input('eyeFollowSlider', '45');
+  assert.equal(h.storage.get('electron_eye_follow_degrees'), '45');
+  h.input('speakingSpeedSlider', '1.8');
+  assert.deepEqual(h.speeds, [1.8]);
+  h.toggle('anim-wave_fast', false);
+  assert.equal(vm.runInContext("isAnimationUrlEnabled('wave_fast.vrma')", h.context), false);
+  assert.equal(vm.runInContext("isAnimationUrlEnabled('walk.vrma')", h.context), false);
+  assert.equal(vm.runInContext("isAnimationUrlEnabled('sit_down.vrma')", h.context), false);
+  assert.equal(h.elements.has('anim-walk'), false);
+  assert.equal(h.elements.has('voiceListeningToggle'), false);
+});
+
+test('lighting controls update renderer lights and restore bounded saved intensities', () => {
+  const h = harness({ hikari_light_keyLight: '2.1', hikari_light_ambientLight: 'invalid' }, { browser: true });
+  const lights = Object.fromEntries(['keyLight', 'fillLight', 'rimLight', 'topLight', 'ambientLight'].map(id => [id, { intensity: 0 }]));
+  Object.assign(h.context, lights);
+  vm.runInContext('CoreModule.getLightIntensity = getLightIntensity; CoreModule.setLightIntensity = setLightIntensity;', h.context);
+  vm.runInContext(section('function setupLightControls()', '/**\n * Setup toggle buttons') + '\nsetupLightControls();', h.context);
+  assert.equal(h.elements.get('keyLightSlider').value, '2.1');
+  assert.equal(h.elements.get('ambientLightSlider').value, '0');
+  h.input('keyLightSlider', '1.7');
+  assert.equal(lights.keyLight.intensity, 1.7);
+  assert.equal(h.storage.get('hikari_light_keyLight'), '1.7');
+  h.input('fillLightSlider', '9');
+  assert.equal(lights.fillLight.intensity, 3);
+  h.input('ambientLightSlider', '-1');
+  assert.equal(lights.ambientLight.intensity, 0);
+});
+
 test('speaking speed saves and restores, including edits before the speech system is ready', () => {
   const h = harness({ electron_speaking_speed: '1.5' });
   assert.equal(h.elements.get('speakingSpeedSlider').value, '1.5');
@@ -69,7 +111,76 @@ test('speaking speed saves and restores, including edits before the speech syste
   assert.equal(h.elements.get('speakingSpeedValue').textContent, '0.7x');
 });
 
-test('all Motion checkboxes persist their value and control their animation filename/category', () => {
+test('Electron settings list exactly the real idle VRMA assets', () => {
+  const files = readdirSync(new URL('../electron/assets/VRMA/', import.meta.url)).filter(file => file.endsWith('.vrma')).sort();
+  assert.deepEqual([...VRMA_FILE_NAMES].sort(), files);
+  const h = harness();
+  const interactionKeys = ['touch', 'drag', 'history_panel'];
+  const toggleKeys = Array.from(vm.runInContext('animationToggleKeys', h.context));
+  const checkboxKeys = Array.from(html.matchAll(/id="anim-([^"]+)"/g), match => match[1]);
+  assert.equal(new Set(checkboxKeys).size, checkboxKeys.length, 'Every checkbox ID must be unique');
+  assert.deepEqual(checkboxKeys.sort(), toggleKeys.sort());
+  const idleFiles = files.filter(file => file.startsWith('idle'));
+  assert.deepEqual([...IDLE_VRMA_FILE_NAMES].sort(), idleFiles);
+  assert.deepEqual(toggleKeys.filter(key => !interactionKeys.includes(key)).map(key => `${key}.vrma`).sort(), idleFiles);
+});
+
+test('each idle VRMA toggle persists, restores, and controls its file independently', () => {
+  for (const file of IDLE_VRMA_FILE_NAMES) {
+    const key = file.replace(/\.vrma$/, '');
+    const h = harness();
+    h.toggle(`anim-${key}`, false);
+    for (const candidate of VRMA_FILE_NAMES) {
+      assert.equal(vm.runInContext(`isAnimationUrlEnabled('VRMA/${candidate}')`, h.context), candidate !== file);
+    }
+    const restored = harness({ animation_settings: h.storage.get('animation_settings') });
+    assert.equal(restored.elements.get(`anim-${key}`).checked, false);
+    assert.equal(vm.runInContext(`isAnimationUrlEnabled('VRMA/${file}')`, restored.context), false);
+    restored.toggle(`anim-${key}`, true);
+    assert.equal(vm.runInContext(`isAnimationUrlEnabled('VRMA/${file}')`, restored.context), true);
+  }
+});
+
+test('Electron animation picker lists only idle files while retaining the full runtime catalog', async () => {
+  const h = harness();
+  const options = [];
+  h.elements.set('animationSelect', { innerHTML: '', appendChild: option => options.push(option) });
+  h.context.document.createElement = () => ({});
+  h.context.window.VRMA_ANIMATION_URLS = VRMA_FILE_NAMES.map(file => `VRMA/${file}`);
+  h.context.getVRMAFileName = url => url.split('/').pop();
+  vm.runInContext(section('    async function populateAnimationDropdown()', '    function updateDropdownReferences()'), h.context);
+  await vm.runInContext('populateAnimationDropdown()', h.context);
+  assert.deepEqual(options.map(option => option.value).sort(), IDLE_VRMA_FILE_NAMES.map(file => `VRMA/${file}`).sort());
+  assert.equal(h.context.window.VRMA_ANIMATION_URLS.length, VRMA_FILE_NAMES.length);
+});
+
+test('Sit and Walk preserve legacy preferences and use the renamed toggle after saving', () => {
+  const h = harness({ animation_settings: JSON.stringify({ sit: false, walk: false }) });
+  for (const key of ['idle_sit', 'idle_walk']) {
+    assert.equal(h.elements.get(`anim-${key}`).checked, false);
+    assert.equal(vm.runInContext(`isAnimationUrlEnabled('VRMA/${key}.vrma')`, h.context), false);
+    h.toggle(`anim-${key}`, true);
+    assert.equal(vm.runInContext(`isAnimationUrlEnabled('VRMA/${key}.vrma')`, h.context), true);
+  }
+  const restored = harness({ animation_settings: h.storage.get('animation_settings') });
+  assert.equal(restored.elements.get('anim-idle_sit').checked, true);
+  assert.equal(restored.elements.get('anim-idle_walk').checked, true);
+  const explicit = harness({ animation_settings: JSON.stringify({ sit: false, walk: false, idle_sit: true, idle_walk: true }) });
+  assert.equal(explicit.elements.get('anim-idle_sit').checked, true);
+  assert.equal(explicit.elements.get('anim-idle_walk').checked, true);
+});
+
+test('removed non-idle file settings cannot disable startup or other automatic clips', () => {
+  const nonIdleFiles = VRMA_FILE_NAMES.filter(file => !file.startsWith('idle'));
+  const saved = Object.fromEntries(nonIdleFiles.map(file => [file.replace(/\.vrma$/, ''), false]));
+  const h = harness({ animation_settings: JSON.stringify(saved) });
+  for (const file of nonIdleFiles) {
+    assert.equal(h.elements.has(`anim-${file.replace(/\.vrma$/, '')}`), false);
+    assert.equal(vm.runInContext(`isAnimationUrlEnabled('${file}')`, h.context), true);
+  }
+});
+
+test('all Motion checkboxes persist their value and control their animation filename/reaction', () => {
   const h = harness();
   for (const key of vm.runInContext('animationToggleKeys', h.context)) {
     h.toggle(`anim-${key}`, false);
@@ -77,11 +188,57 @@ test('all Motion checkboxes persist their value and control their animation file
     assert.equal(JSON.parse(h.storage.get('animation_settings'))[key], false);
     assert.equal(h.motionChanges.at(-1), key);
   }
-  for (const filename of ['walk_left', 'walk_right', 'sit_down', 'sit_up', 'sitWave']) {
-    assert.equal(vm.runInContext(`isAnimationUrlEnabled('${filename}.vrma')`, h.context), false);
-  }
+  assert.equal(vm.runInContext("isAnimationUrlEnabled('hang.vrma')", h.context), false);
   h.toggle('anim-idle_loop', true);
   assert.equal(vm.runInContext("isAnimationEnabled('idle_loop')", h.context), true);
+});
+
+test('drag and history reaction toggles restore saved values and can be re-enabled', () => {
+  const h = harness({ animation_settings: JSON.stringify({ drag: false, history_panel: false }) });
+  assert.equal(h.elements.get('anim-drag').checked, false);
+  assert.equal(h.elements.get('anim-history_panel').checked, false);
+  assert.equal(vm.runInContext("isAnimationUrlEnabled('VRMA/hang.vrma')", h.context), false);
+  h.toggle('anim-drag', true);
+  h.toggle('anim-history_panel', true);
+  assert.equal(vm.runInContext("isAnimationUrlEnabled('VRMA/hang.vrma')", h.context), true);
+  assert.equal(JSON.parse(h.storage.get('animation_settings')).history_panel, true);
+});
+
+test('disabling Drag keeps window dragging functional while skipping hang animation and reaction', async () => {
+  const h = harness({ animation_settings: JSON.stringify({ drag: false }) });
+  const listeners = {}, poses = [], states = [], reactions = [];
+  let idleReturns = 0;
+  h.context.document.addEventListener = (name, handler) => { listeners[name] = handler; };
+  h.context.document.querySelector = () => ({ getBoundingClientRect: () => ({ left: 0, top: 0, right: 300, bottom: 450 }) });
+  Object.assign(h.context, {
+    requestAnimationFrame: () => 1, cancelAnimationFrame() {}, setTimeout() {},
+    sendEventToAgent: (...args) => reactions.push(args),
+  });
+  h.context.window.electronAPI.getWindowPosition = async () => ({ x: 100, y: 100 });
+  h.context.window.startSmoothTransition = async url => { poses.push(url); return null; };
+  h.context.window.loadIdleLoop = () => { idleReturns++; };
+  h.context.window.isAnimationEnabled = key => vm.runInContext(`isAnimationEnabled(${JSON.stringify(key)})`, h.context);
+  h.context.CoreModule.setWindowDragging = value => states.push(value);
+  vm.runInContext(section('function setupWindowDragging()', '/**\n * Setup UI event listeners') + '\nsetupWindowDragging();', h.context);
+  const begin = async () => {
+    listeners.mousedown({ button: 0, clientX: 100, clientY: 100, screenX: 200, screenY: 200, target: { closest: () => null } });
+    await Promise.resolve();
+    listeners.mousemove({ clientX: -50, clientY: 100, screenX: 50, screenY: 200, preventDefault() {} });
+    assert.equal(h.context.window.isWindowDragging, true);
+    listeners.mouseup();
+    await Promise.resolve();
+  };
+  await begin();
+  assert.deepEqual(poses, []); assert.deepEqual(reactions, []);
+  assert.deepEqual(states, [true, false]); assert.equal(idleReturns, 1);
+  h.toggle('anim-drag', true);
+  await begin();
+  assert.equal(poses.length, 1); assert.match(poses[0], /hang\.vrma$/);
+  assert.equal(reactions[0][0], 'window_drag');
+  h.context.window.isAgentInteractionPending = () => true;
+  await begin();
+  assert.equal(reactions.length, 1, 'Dragging while busy must not request another reaction');
+  assert.deepEqual(states.slice(-2), [true, false], 'Window dragging still starts and ends while busy');
 });
 
 test('connection Save and Enter update or clear the exact keys used by requests', () => {
@@ -143,20 +300,22 @@ test('disabled animations are blocked before loading, and idle-loop opt-out paus
   const h = harness();
   let loads = 0;
   const idleClip = {}, idleClips = new WeakSet([idleClip]);
-  const action = { paused: false, getClip: () => idleClip };
+  const action = { paused: false, getClip: () => idleClip, setEffectiveTimeScale() {} };
   Object.assign(h.context, {
-    currentVrm: {}, currentAction: action, idleClips, statusDiv: { textContent: '' },
+    currentVrm: {}, currentAction: action, idleClips, idleExpressionClips: new WeakSet(), updateIdleExpression() {}, statusDiv: { textContent: '' },
     CONFIG: { T_OFFSET: 0.5, TRANSITION_TIME: 0.5 }, isWindowDragging: false,
     loader: { loadAsync: async () => { loads++; return { userData: { vrmAnimations: [{}] } }; } },
-    getVRMAUrl: file => file, createVRMAnimationClip: () => idleClip,
+    getVRMAUrl: file => file, createVRMAnimationClip: () => idleClip, completeStandingIdleClip,
     blendToAnimation: async () => action,
+    idleActions: new Set(), musicSway: new MusicSway(), getMusicMotionOptions: () => ({ enabled: false }),
   });
+  vm.runInContext(section('    function updateMusicIdleLoop(', '    function animate()'), h.context);
   h.context.window.isAnimationUrlEnabled = url => vm.runInContext(`isAnimationUrlEnabled(${JSON.stringify(url)})`, h.context);
   h.context.window.isAnimationEnabled = key => vm.runInContext(`isAnimationEnabled(${JSON.stringify(key)})`, h.context);
   vm.runInContext(section('    async function startSmoothTransition(', '    function blendToAnimation('), h.context);
-  h.toggle('anim-start_2turnAround', false);
-  assert.equal(await vm.runInContext("startSmoothTransition('start_2turnAround.vrma')", h.context), null);
-  assert.equal(await vm.runInContext("prepareSpeakingAnimation('start_2turnAround.vrma')", h.context), null);
+  h.toggle('anim-idle_airplane', false);
+  assert.equal(await vm.runInContext("startSmoothTransition('idle_airplane.vrma')", h.context), null);
+  assert.equal(await vm.runInContext("prepareSpeakingAnimation('idle_airplane.vrma')", h.context), null);
   assert.equal(loads, 0);
   vm.runInContext(section('    async function loadIdleLoop(', '    async function loadVRMA('), h.context);
   h.toggle('anim-idle_loop', false);

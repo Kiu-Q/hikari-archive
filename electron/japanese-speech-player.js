@@ -61,7 +61,7 @@ export function createJapaneseSpeechPlayer({
         if (preparation.cancelled || active !== operation) return false;
         throw error;
       }
-      if (result === cancelled || active !== operation || preparation.cancelled) return false;
+      if (result === cancelled || active !== operation || preparation.cancelled || options.shouldPlay?.() === false) return false;
       if (!result?.audio || !Number.isFinite(result.durationSeconds) || result.durationSeconds <= 0) {
         throw new Error('The voice service returned invalid audio.');
       }
@@ -117,6 +117,7 @@ export function createJapaneseSpeechPlayer({
         voiceGain = beforePlayResult?.voiceGain;
         options.onTiming?.('before_play_finished');
       }
+      if (options.shouldPlay?.() === false) return false;
       const maxGain = limiterAvailable ? 0.9 / 0.7 : 1;
       const targetGain = Number.isFinite(voiceGain) ? Math.max(0, Math.min(maxGain, voiceGain)) : 0.9;
       const fadeIn = options.fadeIn !== false;
@@ -127,7 +128,7 @@ export function createJapaneseSpeechPlayer({
         parameter.setValueAtTime(fadeIn ? 0 : targetGain, now);
         if (fadeIn) parameter.linearRampToValueAtTime(targetGain, now + 0.25);
       } else {
-        // HTMLAudioElement volume tops out at 1, so play at the requested 90%
+        // HTMLAudioElement volume tops out at 1; retain the requested quieter
         // voice level when Web Audio is unavailable.
         const fallbackGain = Math.min(1, targetGain);
         audio.volume = fadeIn ? 0 : fallbackGain;
@@ -146,6 +147,9 @@ export function createJapaneseSpeechPlayer({
         audio.onended = () => resolve(true);
         audio.onerror = () => reject(new Error('Japanese audio playback failed.'));
         audio.onplaying = () => {
+          if (!presented && options.shouldPlay?.() === false) {
+            audio.pause(); resolve(false); return;
+          }
           if (!presented) {
             presented = true;
             try { options.onStart?.(); } catch (error) { reject(error); return; }
@@ -189,7 +193,7 @@ export function createJapaneseSpeechPlayer({
           }
         }
       });
-      return (await Promise.race([playback, cancellation])) !== cancelled;
+      return (await Promise.race([playback, cancellation])) === true;
     } finally {
       cleanup();
       if (active === operation) active = null;

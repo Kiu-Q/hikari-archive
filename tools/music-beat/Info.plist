@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>com.electron.hikari.music-beat</string>
+  <key>CFBundleName</key><string>Hikari Music Beats</string>
+  <key>NSAudioCaptureUsageDescription</key><string>Hikari analyses music beats locally to gently sway with your music. Audio is never saved or sent anywhere.</string>
+</dict></plist>

@@ -255,3 +255,23 @@ test('unlock rejects when a browser resumes without actually permitting audio', 
   await assert.rejects(h.player.unlock(), /still suspended/);
   h.player.dispose();
 });
+
+test('reply expiring while synthesis or animation setup waits never starts audio', async () => {
+  let finishSynthesis, open = true;
+  const h = harness(() => new Promise(resolve => { finishSynthesis = resolve; }));
+  const waiting = h.player.speak('ひらいた', 1, { shouldPlay: () => open });
+  open = false; finishSynthesis(result);
+  assert.equal(await waiting, false);
+  assert.equal(h.sources.length, 0);
+  h.player.dispose();
+
+  let finishSetup;
+  open = true;
+  const next = harness();
+  const preparing = next.player.speak('ひらいた', 1, { shouldPlay: () => open, beforePlay: () => new Promise(resolve => { finishSetup = resolve; }) });
+  await tick();
+  open = false; finishSetup();
+  assert.equal(await preparing, false);
+  assert.equal(next.sources.at(-1).started, undefined);
+  next.player.dispose();
+});

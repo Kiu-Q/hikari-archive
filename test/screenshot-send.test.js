@@ -34,6 +34,18 @@ test('normal Send submits the captured attachment and clears exactly that draft 
   assert.equal(h.cleared[0], h.sent[0].attachment);
 });
 
+test('an early Send keeps its draft and never disables controls before the chat API is ready', async () => {
+  const h = harness();
+  let disabled = false;
+  h.context.window.sendAgentMessage = undefined;
+  h.context.CoreModule.disableMessaging = () => { disabled = true; };
+  h.speakBtnPanel.click(); await tick();
+  assert.equal(disabled, false);
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.textInputPanel.value, '  睇吓畫面  ');
+  assert.match(h.status.textContent, /still starting.*draft is kept/);
+});
+
 test('Send accepts screenshot-only input, waits for capture, and preserves failed drafts', async () => {
   const imageOnly = harness(); imageOnly.textInputPanel.value = '';
   imageOnly.speakBtnPanel.click(); await tick();
@@ -51,4 +63,22 @@ test('a successful text-only send never clears an attachment captured later', as
   h.speakBtnPanel.click(); await tick();
   assert.equal(h.sent.length, 1);
   assert.equal(h.cleared.length, 0);
+});
+
+test('IME confirmation with Enter does not accidentally send a message', async () => {
+  const h = harness();
+  let prevented = false;
+  // Rerun with keyboard capture to exercise the real shared input handler.
+  h.textInputPanel.addEventListener = (name, callback) => { h.textInputPanel[name] = callback; };
+  let sends = 0;
+  h.speakBtnPanel.addEventListener = () => {};
+  h.speakBtnPanel.click = () => { sends++; };
+  vm.runInContext(handler, h.context);
+  h.textInputPanel.keypress({ key: 'Enter', isComposing: true, preventDefault() { prevented = true; } });
+  h.textInputPanel.keypress({ key: 'Enter', keyCode: 229, preventDefault() { prevented = true; } });
+  assert.equal(sends, 0);
+  assert.equal(prevented, false);
+  h.textInputPanel.keypress({ key: 'Enter', preventDefault() { prevented = true; } });
+  assert.equal(sends, 1);
+  assert.equal(prevented, true);
 });

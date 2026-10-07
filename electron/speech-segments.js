@@ -12,7 +12,7 @@ const isEmojiOnly = text => {
 /** Display punctuation is separate from the punctuation retained for TTS. */
 export function formatCaption(text) {
   return [...graphemes.segment(String(text ?? ''))]
-    .map(({ segment }) => isEmoji(segment) ? segment : segment.replace(/\p{P}/gu, ''))
+    .map(({ segment }) => isEmoji(segment) || segment === '—' ? segment : segment.replace(/\p{P}/gu, ''))
     .join('')
     .replace(/(?<=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}])\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}])/gu, '')
     .replace(/\s+(?=\p{Extended_Pictographic}|\p{Regional_Indicator}|[0-9#*]\ufe0f?\u20e3)/gu, '')
@@ -113,7 +113,7 @@ export function prepareReplySpeech(synthesize, text, japaneseText, segments, spe
 export function replyNeedsAlignmentRepair(reply) {
   let command;
   try { command = JSON.parse(reply); } catch { return false; }
-  if (command.react === false || command.speak === false) return false;
+  if (command.reply === false || command.react === false || command.speak === false) return false;
   if (command.segments !== undefined) return !normalizePairedSegments(command.segments, { requireAlignment: true });
   if (!command.text || !command.text_ja) return false;
   return splitSpeechSegments(command.text).length !== splitSpeechSegments(command.text_ja).length;

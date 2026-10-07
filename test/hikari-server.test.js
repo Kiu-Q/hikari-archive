@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { gunzipSync } from 'node:zlib';
 
 import { createHikariServer } from '../server/index.js';
 
@@ -176,6 +177,39 @@ test('chat allows only exact configured origins and tolerates proxy Host rewriti
   assert.equal(upstreamCalls, 2);
 });
 
+test('phone image messages forward a single bounded JPEG and discard extra client fields', async (t) => {
+  let forwarded;
+  const { baseUrl } = await startServer(t, { fetch: async (_url, init) => { forwarded = JSON.parse(init.body); return Response.json(CHAT_REPLY); } });
+  const content = [{ type: 'text', text: 'Describe this photo', extra: 'ignored' },
+    { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/2Q==', detail: 'ignored' } }];
+  const response = await postJson(baseUrl, '/api/chat', { messages: [{ role: 'user', content }] });
+  assert.equal(response.status, 200);
+  assert.deepEqual(forwarded.messages, [{ role: 'user', content: [
+    { type: 'text', text: 'Describe this photo' }, { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/2Q==' } }
+  ] }]);
+});
+
+test('image chat rejects external URLs, corrupt JPEGs, excessive images and role abuse before forwarding', async (t) => {
+  let calls = 0;
+  const { baseUrl } = await startServer(t, { fetch: async () => { calls++; return Response.json(CHAT_REPLY); } });
+  const content = url => [{ type: 'text', text: 'Photo' }, { type: 'image_url', image_url: { url } }];
+  const valid = content('data:image/jpeg;base64,/9j/2Q==');
+  for (const messages of [
+    [{ role: 'user', content: content('https://private.example/photo.jpg') }],
+    [{ role: 'user', content: content('data:image/jpeg;base64,YWJjZA==') }],
+    [{ role: 'user', content: content('data:image/png;base64,/9j/2Q==') }],
+    [{ role: 'assistant', content: valid }],
+    [{ role: 'system', content: valid }],
+    [{ role: 'user', content: valid }, { role: 'user', content: valid }],
+    [{ role: 'user', content: content('data:image/jpeg;base64,' + 'A'.repeat(2_800_000)) }],
+    [{ role: 'user', content: [{ type: 'text', text: '' }, valid[1]] }]
+  ]) {
+    const response = await postJson(baseUrl, '/api/chat', { messages });
+    assert.equal(response.status, 400);
+  }
+  assert.equal(calls, 0);
+});
+
 test('chat rejects malformed messages and returns a sanitized upstream failure', async (t) => {
   let calls = 0;
   const { baseUrl } = await startServer(t, {
@@ -248,6 +282,39 @@ test('TTS bounds queued synthesis requests and rejects excess work', async (t) =
   gates.splice(0).forEach((release) => release());
   assert.equal((await first).status, 200);
   assert.equal((await second).status, 200);
+});
+
+test('avatar delivery compresses losslessly with correct progress, encoding negotiation and cache variants', async t => {
+  const { baseUrl, webRoot } = await startServer(t);
+  const avatar = Buffer.alloc(64 * 1024, 42);
+  await writeFile(path.join(webRoot, 'phone.vrm'), avatar);
+  function get(headers = {}, method = 'GET') {
+    return new Promise((resolve, reject) => {
+      const request = httpRequest(`${baseUrl}/phone.vrm`, { headers, method }, response => {
+        const chunks = [];
+        response.on('data', chunk => chunks.push(chunk));
+        response.once('end', () => resolve({ status: response.statusCode, headers: response.headers, bytes: Buffer.concat(chunks) }));
+        response.once('error', reject);
+      });
+      request.once('error', reject); request.end();
+    });
+  }
+  const encoded = await get({ 'accept-encoding': 'gzip' });
+  assert.equal(encoded.headers['content-encoding'], 'gzip');
+  assert.equal(encoded.headers['x-file-size'], String(avatar.length));
+  assert.equal(encoded.headers.vary, 'Accept-Encoding');
+  assert.ok(encoded.bytes.length < avatar.length / 10);
+  assert.deepEqual(gunzipSync(encoded.bytes), avatar);
+  const plain = await get({ 'accept-encoding': 'gzip;q=0, *;q=1' });
+  assert.equal(plain.headers['content-encoding'], undefined);
+  assert.deepEqual(plain.bytes, avatar);
+  assert.notEqual(plain.headers.etag, encoded.headers.etag);
+  const cached = await get({ 'accept-encoding': 'gzip', 'if-none-match': encoded.headers.etag });
+  assert.equal(cached.status, 304);
+  assert.equal(cached.bytes.length, 0);
+  const head = await get({ 'accept-encoding': 'gzip' }, 'HEAD');
+  assert.equal(head.headers['content-encoding'], 'gzip');
+  assert.equal(head.bytes.length, 0);
 });
 
 test('static serving blocks traversal, hidden files, and symlinks outside dist-web', async (t) => {

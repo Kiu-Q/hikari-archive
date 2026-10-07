@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { replyNeedsAlignmentRepair, splitSpeechSegments } from '../electron/speech-segments.js';
 
 import {
   BILINGUAL_RESPONSE_INSTRUCTIONS,
@@ -50,4 +51,18 @@ test('response example uses valid JSON with escaped, aligned segment breaks', ()
   assert.equal(example.text_ja.split('\n').length, 2);
   assert.equal(example.text, example.segments.map(item => item.text).join('\n'));
   assert.equal(example.text_ja, example.segments.map(item => item.text_ja).join('\n'));
+  assert.equal(replyNeedsAlignmentRepair(JSON.stringify(example)), false);
+  assert.equal(Object.keys(example)[0], 'segments');
+  for (const pair of example.segments) {
+    assert.equal(splitSpeechSegments(pair.text).length, 1);
+    assert.equal(splitSpeechSegments(pair.text_ja).length, 1);
+  }
+});
+
+test('prompt counterexamples fail the actual splitter, while their corrected pairs pass', () => {
+  for (const match of BILINGUAL_RESPONSE_INSTRUCTIONS.matchAll(/^(INVALID pair|CORRECT pair|CORRECT pairs): (\{.*\}|\[.*\])\./gm)) {
+    const value = JSON.parse(match[2]);
+    const reply = JSON.stringify({ segments: Array.isArray(value) ? value : [value] });
+    assert.equal(replyNeedsAlignmentRepair(reply), match[1] === 'INVALID pair');
+  }
 });

@@ -62,6 +62,25 @@ function controlledAudioHarness(synthesize, onPlaying = () => {}) {
 const result = { audio: new Uint8Array([1, 2]), durationSeconds: 2 };
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('history reply expiring after synthesis or just before playing is skipped cleanly', async () => {
+  let finish, open = true, started = 0;
+  const h = controlledAudioHarness(() => new Promise(resolve => { finish = resolve; }));
+  const waiting = h.player.speak('ひらいた', 1, { shouldPlay: () => open, onStart: () => started++ });
+  open = false; finish(result);
+  assert.equal(await waiting, false);
+  assert.equal(h.playCount, 0);
+
+  open = true;
+  const next = controlledAudioHarness(async () => result);
+  const playing = next.player.speak('ひらいた', 1, { shouldPlay: () => open, onStart: () => started++ });
+  await tick();
+  open = false;
+  next.audios[0].onplaying();
+  assert.equal(await playing, false);
+  assert.equal(next.audios[0].paused, true);
+  assert.equal(started, 0);
+});
+
 test('beforePlay waits for synthesis and onStart waits for actual playback once', async () => {
   let finishSynthesis, finishBeforePlay;
   let captionCalls = 0, animationCalls = 0, beforePlayCalls = 0;
@@ -183,6 +202,18 @@ test('native audio fallback ramps from silence to 90% voice level', async () => 
   assert.ok(h.audios[0].volume > 0 && h.audios[0].volume < 1);
   await new Promise(resolve => setTimeout(resolve, 220));
   assert.equal(h.audios[0].volume, 0.9);
+  h.audios[0].onended();
+  assert.equal(await speaking, true);
+});
+
+test('native audio fallback applies the quieter media voice level before playback', async () => {
+  const h = controlledAudioHarness(async () => result);
+  const speaking = h.player.speak('こんにちは', 1, {
+    fadeIn: false, beforePlay: () => ({ voiceGain: 0.45 }),
+  });
+  await tick();
+  assert.equal(h.playCount, 1);
+  assert.equal(h.audios[0].volume, 0.45);
   h.audios[0].onended();
   assert.equal(await speaking, true);
 });

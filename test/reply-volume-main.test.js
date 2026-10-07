@@ -39,25 +39,25 @@ test('uses 90% voice level with no media and does not write system volume', asyn
   assert.deepEqual(helper.current, { deviceId: 88, scalar: 0.4 });
 });
 
-test('does not change system volume when voice gain cannot be boosted', async () => {
+test('lowers voice during media without changing system volume when gain cannot be boosted', async () => {
   const helper = fakeVolumeHelper();
   const service = new ReplyVolumeService({ helperPath: '/helper', execute: helper.execute });
 
   const session = await service.begin({ canBoost: false });
   await service.end(session.sessionId);
 
-  assert.equal(session.voiceGain, 0.9);
+  assert.equal(session.voiceGain, 0.45);
   assert.equal(session.mediaDucked, false);
   assert.equal(helper.calls.some(([command]) => command === 'volume-get' || command === 'volume-ramp'), false);
   assert.deepEqual(helper.current, { deviceId: 88, scalar: 0.4 });
 });
 
-test('ducks media to 70%, sets voice to 90%, and smoothly restores media', async () => {
+test('ducks media to 70%, lowers voice to 45%, and smoothly restores media', async () => {
   const helper = fakeVolumeHelper();
   const service = new ReplyVolumeService({ helperPath: '/helper', execute: helper.execute });
 
   const session = await service.begin();
-  assert.ok(Math.abs(session.voiceGain - (0.9 / 0.7)) < 1e-12);
+  assert.ok(Math.abs(session.voiceGain - (0.45 / 0.7)) < 1e-12);
   assert.equal(session.mediaDucked, true);
   assert.deepEqual(helper.current, { deviceId: 88, scalar: 0.27999999999999997 });
 
@@ -89,7 +89,7 @@ test('preserves a user volume change and a newly selected output device', async 
   }
 });
 
-test('uses 90% voice level and clears duck state when helper ramp fails', async () => {
+test('retains quieter voice and clears duck state when helper ramp fails', async () => {
   const helper = fakeVolumeHelper();
   const execute = async (...args) => {
     if (args[1][0] === 'volume-ramp') throw new Error('helper unavailable');
@@ -99,10 +99,39 @@ test('uses 90% voice level and clears duck state when helper ramp fails', async 
 
   const session = await service.begin();
 
-  assert.equal(session.voiceGain, 0.9);
+  assert.equal(session.voiceGain, 0.45);
   assert.equal(session.mediaDucked, false);
   assert.equal(service.active?.sessionId, session.sessionId);
   assert.equal(service.active?.duck, null);
   await service.end(session.sessionId);
   assert.equal(service.active, null);
+});
+
+test('media stopped before the next reply restores the normal voice level', async () => {
+  let playing = true;
+  const service = new ReplyVolumeService({ helperPath: '/helper', execute: async () => ({ stdout: playing ? '1' : '0' }) });
+  const first = await service.begin({ canBoost: false });
+  assert.equal(first.voiceGain, 0.45);
+  await service.end(first.sessionId);
+  playing = false;
+  const next = await service.begin({ canBoost: false });
+  assert.equal(next.voiceGain, 0.9);
+  await service.end(next.sessionId);
+});
+
+test('unavailable media detection preserves normal voice without a stuck session', async () => {
+  const service = new ReplyVolumeService({ helperPath: '/helper', execute: async () => { throw new Error('Unavailable'); } });
+  const session = await service.begin();
+  assert.equal(session.voiceGain, 0.9);
+  await service.end(session.sessionId);
+  assert.equal(service.active, null);
+});
+
+test('voice output excluded by the media detector does not lower its own volume', async () => {
+  const helper = fakeVolumeHelper({ mediaPlaying: true });
+  const service = new ReplyVolumeService({ helperPath: '/helper', execute: helper.execute, mediaPlaying: async () => false });
+  const session = await service.begin();
+  assert.equal(session.voiceGain, 0.9);
+  assert.deepEqual(helper.calls, []);
+  await service.end(session.sessionId);
 });

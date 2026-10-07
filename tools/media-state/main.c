@@ -172,6 +172,50 @@ static int print_volume(void) {
   return 0;
 }
 
+/* macOS 14.2+ exposes audio processes without capturing their audio. */
+static int print_playback_except(int excluded_count, char **excluded_pids) {
+  const AudioObjectPropertyAddress address = {
+    kAudioHardwarePropertyProcessObjectList,
+    kAudioObjectPropertyScopeGlobal,
+    kAudioObjectPropertyElementMain
+  };
+  if (!AudioObjectHasProperty(kAudioObjectSystemObject, &address)) {
+    return print_playback_status();
+  }
+  UInt32 size = 0;
+  if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, NULL, &size) != noErr) return 3;
+  if (size == 0) { puts("0"); return 0; }
+  AudioObjectID *processes = malloc(size);
+  if (!processes) return 3;
+  if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, processes) != noErr) {
+    free(processes);
+    return 3;
+  }
+  int playing = 0;
+  for (size_t i = 0; i < size / sizeof(AudioObjectID); i++) {
+    uint32_t pid = 0, running = 0;
+    if (!read_uint32_property(processes[i], kAudioProcessPropertyPID, kAudioObjectPropertyScopeGlobal, &pid)) continue;
+    int excluded = 0;
+    for (int j = 0; j < excluded_count; j++) {
+      char *end = NULL;
+      errno = 0;
+      const unsigned long value = strtoul(excluded_pids[j], &end, 10);
+      if (errno == 0 && end != excluded_pids[j] && *end == '\0' && value == pid) {
+        excluded = 1;
+        break;
+      }
+    }
+    if (!excluded && read_uint32_property(processes[i], kAudioProcessPropertyIsRunningOutput,
+        kAudioObjectPropertyScopeGlobal, &running) && running) {
+      playing = 1;
+      break;
+    }
+  }
+  free(processes);
+  puts(playing ? "1" : "0");
+  return 0;
+}
+
 static int print_audio_state(void) {
   AudioObjectID device_id = kAudioObjectUnknown;
   if (!get_default_output_device(&device_id)) {
@@ -316,12 +360,15 @@ static int ramp_volume(AudioObjectID device_id,
 
 static void print_usage(const char *program) {
   fprintf(stderr,
-          "Usage: %s [audio-state | volume-get | volume-ramp <deviceId> <target-scalar> <duration-ms>]\n",
+          "Usage: %s [audio-state | playing-except <pid>... | volume-get | volume-ramp <deviceId> <target-scalar> <duration-ms>]\n",
           program);
 }
 
 int main(int argc, char **argv) {
   if (argc == 1) return print_playback_status();
+  if (argc >= 3 && strcmp(argv[1], "playing-except") == 0) {
+    return print_playback_except(argc - 2, argv + 2);
+  }
 
   if (argc == 2 && strcmp(argv[1], "volume-get") == 0) {
     return print_volume();

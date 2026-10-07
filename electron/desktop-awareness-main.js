@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { app, desktopCapturer, nativeImage, screen, shell, systemPreferences } from 'electron';
 import { activeWindowOptions } from './active-window-options.js';
 import { awarenessConfig } from './awareness-config.js';
+import { MAX_SCREENSHOT_BYTES } from './screen-capture-main.js';
 import { MediaPlaybackStateTracker, parseMediaPlaybackOutput } from './media-playback-state.js';
 import { deriveDesktopActivityState } from './world-state.js';
 import { IdleReturnTracker } from './idle-return.js';
@@ -1087,6 +1088,42 @@ export class DesktopAwarenessService {
     this.lastCandidateAt = Date.now();
     this.debug('CANDIDATE', 'accepted', candidate);
     this.emitCandidate(candidate);
+  }
+
+  async captureScreen() {
+    if (!this.enabled || this.isDirectInteractionSuppressed()) return null;
+    let context = await this.getActiveContext();
+    if (!context || this.isHikariContext(context)) context = this.currentContext;
+    if (!this.enabled || this.isDirectInteractionSuppressed() || !context || this.isHikariContext(context)) return null;
+
+    let timeout;
+    let capture;
+    try {
+      capture = await Promise.race([
+        this.captureContext(context),
+        new Promise(resolve => { timeout = setTimeout(() => resolve(null), 15000); })
+      ]);
+    } finally { clearTimeout(timeout); }
+    if (!this.enabled || this.isDirectInteractionSuppressed() || !capture?.semantic) return null;
+    let image = capture.semantic;
+    let size = imageSize(image);
+    if (!size) return null;
+    if (Math.max(size.width, size.height) > 1920) {
+      const ratio = 1920 / Math.max(size.width, size.height);
+      image = image.resize({ width: Math.max(1, Math.round(size.width * ratio)), height: Math.max(1, Math.round(size.height * ratio)), quality: 'good' });
+      size = imageSize(image);
+    }
+    let jpeg;
+    for (const quality of [this.config.screen.semanticSnapshotJpegQuality || 72, 50, 35]) {
+      jpeg = image.toJPEG(quality);
+      if (jpeg.length <= MAX_SCREENSHOT_BYTES) break;
+    }
+    if (!jpeg?.length || jpeg.length > MAX_SCREENSHOT_BYTES || !size) return null;
+    return {
+      mimeType: 'image/jpeg', width: size.width, height: size.height, capturedAt: Date.now(),
+      context: publicContext(capture.context || context),
+      dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}`
+    };
   }
 
   requestSnapshot(candidateId) {

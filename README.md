@@ -170,13 +170,13 @@ npm run dev:web
 
 ```shell
 # Build Electron app
-npm run build:electron
+npm run build
 
 # Build Web app
 npm run build:web
 
 # Run built Electron app
-npm run start:electron
+npm start
 
 # Serve built Web app and local API
 npm run serve:web
@@ -239,7 +239,7 @@ openclaw gateway start
 **1. Start Electron Version** (This automatically starts both asset server and Electron app)
 
 ```bash
-npm run dev:electron
+npm run dev
 ```
 
 **2. Configure OpenClaw Token**
@@ -253,10 +253,10 @@ npm run dev:electron
 Follow the [phone setup guide](docs/phone-web.md) to enable Tailscale Serve, then run:
 
 ```bash
-HIKARI_PUBLIC_ORIGIN=https://your-computer.your-tailnet.ts.net npm run start:web
+npm run start:web
 ```
 
-Open that HTTPS address on your phone with Tailscale connected. OpenClaw and Japanese TTS run on this computer; the phone renders the character and plays its voice. Keep the computer awake and the server running. Phone microphone input is not included yet.
+Open https://node.tailb3abce.ts.net on your phone with Tailscale connected. `start:web` builds the app, sets this allowed origin, and prevents idle sleep on macOS. Set `HIKARI_PUBLIC_ORIGIN` to override the address on another host. OpenClaw and Japanese TTS run on this computer; the phone renders the character and plays its voice. Keep the computer awake and the server running. Phone microphone input is not included yet.
 
 For local development, run `npm run serve:web` and `npm run dev:web` in separate terminals. Web output uses `dist-web`, independently of Electron's `dist` output.
 
@@ -266,10 +266,13 @@ For local development, run `npm run serve:web` and `npm run dev:web` in separate
 
 #### Desktop (Electron)
 - **Rotate Camera**: Right-click and drag
-- **Zoom Camera**: Scroll wheel
+- **Resize Avatar**: Scroll wheel scales the avatar and controls, keeping the full model above the message box. The window can shrink to 200×300; controls keep their minimum size once the window reaches 300×450, and displayed text stays at least 12 px.
+- **Animation Reactions**: Settings → Motion includes Drag and History panel toggles. Turning them off keeps window dragging and history viewing available while disabling Hikari's corresponding reactions.
+- **Voice During Media**: On macOS, Hikari's voice plays at 45% while other media is active and 90% otherwise. Hikari's own audio output is excluded from this check on macOS 14.2 and later.
+- **Music Beat Sway**: Enable Settings → Motion → Music beat sway on macOS 14.2 or later. Allow system-audio access if macOS asks. Hikari's spine and chest sway up to 6° to either side with detected bass beats, while the feet stay planted. Tempo is smoothed to avoid jumps from uneven or missed beats. Above 120 BPM, sway runs at quarter speed (four beats between sides); above 60 through 120 BPM, it runs at half speed (two beats); at 60 BPM or below, it takes one beat. Brief audio gaps up to four seconds keep the swing going; longer silence fades it out. The standing idle loop stays frozen during sway and eases back in during replies, touching, dragging, listening, and other animations. Random idle animations still play, with twice the usual spacing while Music beat sway is enabled, then return smoothly to sway. The setting is remembered. Audio is analysed locally in memory; only beat and level measurements reach the renderer, and no audio is saved or uploaded. If access is denied, the Motion panel provides a button to open System Audio Recording settings.
 - **Pan Camera**: Middle-click and drag (or Ctrl + right-click)
 - **Reset Camera**: Click "Reset Camera" button
-- **Drag Window**: Drag from any visible area
+- **Drag Window**: Drag from any visible area. The entire window stays within the display's usable area, including hidden controls and panels.
 - **Toggle Settings**: Hover over ⚙️ (top-left)
 - **Toggle Messages**: Hover over 💬 (bottom-left)
 - **Toggle History**: Hover over 📜 (bottom-right)
@@ -331,11 +334,13 @@ The VRM character responds to clicks/touches on different body parts:
 - **Click or touch** on the model to trigger interaction
 - The system identifies which body part was touched (head, chest, hip, leg)
 - Sends touch message to OpenClaw agent
+- With Drag reactions enabled in Electron, window dragging shows the touch-style shy expression. It stays after release and through reply preparation until voice playback begins, when the reply's expression takes over.
 - Agent responds with animation, expression, and speech
 - Character plays sit animation during agent processing
 
 #### Touch Debouncing
-- 1-second cooldown between touches to prevent spam
+- 200ms cooldown between touches to prevent duplicate clicks
+- Additional touch and drag reactions are ignored while an agent reply is queued, being fetched, or playing. They are never replayed later; window dragging remains available.
 - Touch messages include body part context for agent response
 
 #### Supported Body Parts
@@ -364,9 +369,11 @@ The VRM character responds to clicks/touches on different body parts:
 | `idle_loop.vrma` | Continuous idle animation | Yes |
 | `idle_airplane.vrma` | Make airplane gesture with arm | No |
 | `idle_shoot.vrma` | Make shooting gesture with hand | No |
+| `idle_sit.vrma` | Sit down → sitting loop → stand up (Electron) | Sitting phase |
 | `idle_sport.vrma` | Do sports movements/stretching | No |
 | `idle_stretch.vrma` | Stretch body and limbs | No |
 | `idle_vSign.vrma` | Make V-sign with hand | No |
+| `idle_walk.vrma` | Turn → walk horizontally → face forward (Electron) | Walking phase |
 
 ### Startup Animations
 | File | Description | Loop |
@@ -380,13 +387,7 @@ The VRM character responds to clicks/touches on different body parts:
 | `wave_both.vrma` | Wave with both hands | No |
 | `wave_left.vrma` | Wave with left hand | No |
 | `wave_right.vrma` | Wave with right hand | No |
-| `sit.vrma` | Sit down on ground | No |
 | `sitWave.vrma` | Sit and wave to greet | No |
-
-### Movement Animations
-| File | Description | Loop |
-|------|-------------|------|
-| `walk.vrma` | Walk sequence (Electron: horizontal, Web: forward/back) | No |
 
 ## Available Expressions
 

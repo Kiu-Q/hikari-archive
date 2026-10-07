@@ -28,9 +28,18 @@ module.exports = {
     executableName: 'hikari',
     appBundleId: 'com.electron.hikari',
     osxSign: macSignConfig,
-    icon: './favicon.ico',
-    extraResource: ['./tools/companion-tts', './tools/media-state', './tools/voice-stt'],
+    icon: process.platform === 'darwin' ? './out/build-resources/Hikari.icns' : './favicon.ico',
+    // Only runtime files belong in the app; local environments and development
+    // artifacts are excluded. Native helpers are copied through extraResource.
+    ignore: [
+      /^\/(?:out|venv|test|docs|web|server|fbx|vrma|tools|dist-web|dist-electron)(?:\/|$)/,
+      /^\/electron\/(?:assets|dist-electron)(?:\/|$)/,
+      /^\/\.(?:env(?:\..*)?|aws|agents|codex|github|vscode|gitignore|gitattributes)(?:\/|$)/,
+      /^\/(?:banner\.png|benchmark_results\.csv|package-lock\.json|vite\.config\.js|forge\.config\.cjs|index\.html|JAPANESE-VOICE\.md|README\.md)$/,
+    ],
+    extraResource: ['./tools/companion-tts', './tools/media-state', './tools/voice-stt', './tools/music-beat'],
     extendInfo: {
+      NSAudioCaptureUsageDescription: 'Hikari analyses music beats locally to gently sway with your music. Audio is never saved or sent anywhere.',
       NSMicrophoneUsageDescription: 'Hikari uses the microphone only while Voice Listening is enabled.',
       NSSpeechRecognitionUsageDescription: 'Hikari uses on-device speech recognition to transcribe addressed voice commands.'
     },
