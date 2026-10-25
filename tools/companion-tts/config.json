@@ -1,0 +1,9 @@
+{
+  "engine_dir": "/Users/kiuq/Library/Application Support/Style-Bert-VITS2/engine",
+  "python": "/Users/kiuq/Library/Application Support/Style-Bert-VITS2/runtime/bin/python",
+  "engine_port": 8000,
+  "port": 8010,
+  "voice": "custom_voice",
+  "checkpoint": "custom_voice_e100_s900.safetensors",
+  "output_dir": "/Users/kiuq/Library/Application Support/Style-Bert-VITS2/companion-audio"
+}
