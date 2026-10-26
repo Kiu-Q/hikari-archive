@@ -2250,7 +2250,13 @@ const CoreModule = (() => {
                             const status = document.getElementById('webLoadingStatus');
                             if (status && /^(Starting Hikari|Loading Hikari)/.test(status.textContent)) status.textContent = 'Finishing startup…';
                         }
-                        logger.info('vrm', 'VRM loaded:', vrm);
+                        logger.info('vrm', 'VRM loaded:', {
+                            name: vrm.meta?.name ?? vrm.meta?.title,
+                            version: vrm.meta?.version,
+                            metaVersion: vrm.meta?.metaVersion,
+                            humanoidBoneCount: Object.keys(vrm.humanoid?.humanBones ?? {}).length,
+                            expressionCount: vrm.expressionManager?.expressions.length ?? 0
+                        });
 
                         resolve(vrm);
                     },
@@ -2489,7 +2495,11 @@ const CoreModule = (() => {
 
             if (vrmAnimationData) {
                 const baseClip = completeStandingIdleClip(createVRMAnimationClip(vrmAnimationData, currentVrm), currentVrm);
-                logger.info('idle', 'baseClip created', baseClip);
+                logger.info('idle', 'baseClip created', {
+                    name: baseClip?.name,
+                    duration: baseClip?.duration,
+                    trackCount: baseClip?.tracks.length ?? 0
+                });
 
                 if (baseClip) {
                     isIdleMode = true;

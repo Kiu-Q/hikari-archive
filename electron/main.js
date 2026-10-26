@@ -1,7 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, powerMonitor, screen, session, shell, systemPreferences } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { DesktopAwarenessService } from './desktop-awareness-main.js';
 import { awarenessConfig } from './awareness-config.js';
 import { createLocalTtsService } from './local-tts-main.js';
@@ -13,6 +13,27 @@ import { parseSystemAudioOutput } from './media-playback-state.js';
 import { createScreenCaptureService } from './screen-capture-main.js';
 import { constrainWindow, keepWindowOnScreen } from './window-geometry.js';
 import { MusicBeatService } from './music-beat-main.js';
+
+// Select software GL before app readiness, when Chromium's switches take effect.
+const softwareGl = process.env.HIKARI_SOFTWARE_GL;
+let useSoftwareGl = softwareGl === '1';
+let renderingReason = useSoftwareGl ? 'HIKARI_SOFTWARE_GL=1'
+  : softwareGl === '0' ? 'auto fallback disabled by HIKARI_SOFTWARE_GL=0' : 'platform default';
+if (softwareGl !== '0' && softwareGl !== '1' && process.platform === 'linux') {
+  try {
+    useSoftwareGl = !readdirSync('/dev/dri').some(name => /^renderD\d+$/.test(name));
+    renderingReason = useSoftwareGl ? 'no /dev/dri render node' : '/dev/dri render node present';
+  } catch (error) {
+    useSoftwareGl = error.code === 'ENOENT';
+    renderingReason = useSoftwareGl ? 'no /dev/dri directory' : `GPU probe failed (${error.code})`;
+  }
+}
+if (useSoftwareGl) {
+  app.commandLine.appendSwitch('ignore-gpu-blocklist');
+  app.commandLine.appendSwitch('use-angle', 'swiftshader');
+  app.commandLine.appendSwitch('enable-unsafe-swiftshader');
+}
+console.info(`[gpu] ${useSoftwareGl ? 'Software rendering (SwiftShader)' : 'Default GPU rendering'}: ${renderingReason}`);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
