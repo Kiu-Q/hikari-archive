@@ -58,7 +58,7 @@ test('browser chat posts only the app payload to the same-origin API and returns
     nativeSpeechRecognition: false,
     microphoneCapture: typeof globalThis.navigator?.mediaDevices?.getUserMedia === 'function'
   });
-  const result = await services.chat({ messages: [{ role: 'user', content: 'hello' }], model: 'openclaw/default' }, {
+  const result = await services.chat({ messages: [{ role: 'user', content: 'hello' }], model: 'hikari' }, {
     gatewayUrl: 'https://must-not-leak.example', token: 'browser-secret', signal
   });
   assert.equal(result, response);
@@ -66,7 +66,7 @@ test('browser chat posts only the app payload to the same-origin API and returns
   assert.deepEqual({ ...calls[0][1], signal: undefined }, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ messages: [{ role: 'user', content: 'hello' }], model: 'openclaw/default' }),
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'hello' }], model: 'hikari' }),
     signal: undefined
   });
   assert.equal(calls[0][1].signal.aborted, false);
@@ -81,12 +81,12 @@ test('Electron chat keeps caller gateway, token, and abort signal configurable',
     fetchImpl: async (...args) => { calls.push(args); return response; }
   });
   const signal = new AbortController().signal;
-  const actual = await services.chat({ messages: [], model: 'openclaw/default' }, {
-    gatewayUrl: 'ws://127.0.0.1:18789', token: 'desktop-token', signal
+  const actual = await services.chat({ messages: [], model: 'hikari' }, {
+    gatewayUrl: 'ws://127.0.0.1:8643', token: 'desktop-token', signal
   });
 
   assert.equal(actual, response);
-  assert.equal(calls[0][0], 'http://127.0.0.1:18789/v1/chat/completions');
+  assert.equal(calls[0][0], 'http://127.0.0.1:8643/v1/chat/completions');
   assert.equal(calls[0][1].headers.Authorization, 'Bearer desktop-token');
   assert.equal(calls[0][1].signal.aborted, false);
   assert.equal(services.capabilities.electron, true);
@@ -160,7 +160,7 @@ test('browser service validates synthesis inputs before making a request', async
 
 test('health check reads same-origin JSON and returns parsed service state', async () => {
   const calls = [];
-  const health = { ok: true, openclaw: { configured: true, reachable: true }, tts: { configured: true, reachable: true } };
+  const health = { ok: true, hermes: { configured: true, reachable: true }, tts: { configured: true, reachable: true } };
   const services = createServices({
     electronAPI: null,
     fetchImpl: async (...args) => { calls.push(args); return Response.json(health); }

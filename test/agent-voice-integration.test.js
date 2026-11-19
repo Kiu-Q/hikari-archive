@@ -324,7 +324,7 @@ test('initial greeting uses desktop context and the shared response protocol', a
 
   assert.equal(contextCalls, 1);
   assert.equal(h.requests.length, 1);
-  assert.equal(h.requests[0].model, 'openclaw/default');
+  assert.equal(h.requests[0].model, 'hikari');
   assert.equal(h.requests[0].messages.length, 2, 'greeting shares the system contract without chat history');
   assert.equal(h.requests[0].messages.at(-1).role, 'user');
   const prompt = h.requests[0].messages.map(item => item.content).join("\n");

@@ -256,10 +256,10 @@ function normalizeGatewayUrl(gatewayUrl) {
   try {
     url = new URL(rawUrl);
   } catch (cause) {
-    throw serviceError('Invalid OpenClaw gateway URL', { code: 'INVALID_GATEWAY_URL', cause });
+    throw serviceError('Invalid Hermes gateway URL', { code: 'INVALID_GATEWAY_URL', cause });
   }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
-    throw serviceError('Invalid OpenClaw gateway URL', { code: 'INVALID_GATEWAY_URL' });
+    throw serviceError('Invalid Hermes gateway URL', { code: 'INVALID_GATEWAY_URL' });
   }
   let base = url.toString().replace(/\/+$/, '');
   if (base.endsWith('/v1/chat/completions')) return base;

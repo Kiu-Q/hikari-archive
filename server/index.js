@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createGzip } from 'node:zlib';
 import { createLocalTtsService } from '../electron/local-tts-main.js';
 
-const OPENCLAW_URL = 'http://127.0.0.1:18789/v1/chat/completions';
+const HERMES_URL = process.env.HIKARI_HERMES_URL || 'http://127.0.0.1:8643/v1/chat/completions';
 const TTS_HEALTH_URL = 'http://127.0.0.1:8010/health';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
@@ -159,7 +159,39 @@ async function readBoundedResponse(response, limit) {
   return Buffer.concat(chunks, total);
 }
 
-async function readOpenClawToken(homeDir) {
+function hermesHomeDir(options) {
+  const override = process.env.HIKARI_HERMES_HOME;
+  if (typeof override === 'string' && override.trim()) return override.trim();
+  const homeDir = options?.homeDir ?? os.homedir();
+  return process.platform === 'win32'
+    ? path.join(process.env.LOCALAPPDATA || path.join(homeDir, 'AppData', 'Local'), 'hermes')
+    : path.join(homeDir, '.hermes');
+}
+
+async function readHermesToken(homeDir) {
+  try {
+    const envPath = path.join(homeDir, 'profiles', 'hikari', '.env');
+    const details = await stat(envPath);
+    if (!details.isFile() || details.size > 1024 * 1024) return null;
+    const lines = (await readFile(envPath, 'utf8')).split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const match = trimmed.match(/^API_SERVER_KEY=(.*)$/);
+      if (!match) continue;
+      let value = match[1].trim();
+      if ((value.startsWith('"') || value.startsWith("'")) && value.length >= 2) {
+        value = value.slice(1, -1).trim();
+      }
+      return value || null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function readLegacyOpenClawToken(homeDir) {
   try {
     const configPath = path.join(homeDir, '.openclaw', 'openclaw.json');
     const details = await stat(configPath);
@@ -177,9 +209,14 @@ function getToken(options) {
   if (Object.hasOwn(options, 'token')) {
     return Promise.resolve(typeof options.token === 'string' && options.token.trim() ? options.token.trim() : null);
   }
-  const envToken = process.env.HIKARI_OPENCLAW_TOKEN;
-  if (typeof envToken === 'string' && envToken.trim()) return Promise.resolve(envToken.trim());
-  return readOpenClawToken(options.homeDir ?? os.homedir());
+  const hermesEnvToken = process.env.HIKARI_HERMES_TOKEN;
+  if (typeof hermesEnvToken === 'string' && hermesEnvToken.trim()) return Promise.resolve(hermesEnvToken.trim());
+  const legacyEnvToken = process.env.HIKARI_OPENCLAW_TOKEN;
+  if (typeof legacyEnvToken === 'string' && legacyEnvToken.trim()) return Promise.resolve(legacyEnvToken.trim());
+  const homeDir = options?.homeDir ?? os.homedir();
+  return readHermesToken(hermesHomeDir(options)).then(
+    (token) => token ?? readLegacyOpenClawToken(homeDir)
+  );
 }
 
 function validateChatRequest(value) {
@@ -400,13 +437,13 @@ export function createHikariServer(options = {}) {
 
   async function handleHealth(response) {
     const token = await tokenPromise;
-    const [openclawReachable, ttsReachable] = await Promise.all([
-      (options.probeOpenClaw ?? (() => probeTcp(18789, healthTimeoutMs)))(),
+    const [hermesReachable, ttsReachable] = await Promise.all([
+      (options.probeHermes ?? (() => probeTcp(8643, healthTimeoutMs)))(),
       (options.probeTts ?? (() => probeTts(fetchImpl, healthTimeoutMs)))()
     ]);
     sendJson(response, 200, {
       ok: !isClosing,
-      openclaw: { configured: Boolean(token), reachable: Boolean(openclawReachable) },
+      hermes: { configured: Boolean(token), reachable: Boolean(hermesReachable) },
       tts: { configured: true, reachable: Boolean(ttsReachable) }
     });
   }
@@ -426,7 +463,7 @@ export function createHikariServer(options = {}) {
       const messages = validateChatRequest(parsed);
       const token = await tokenPromise;
       if (!token) {
-        sendJson(response, 503, errorBody('OpenClaw is not configured'));
+        sendJson(response, 503, errorBody('Hermes is not configured'));
         return;
       }
 
@@ -441,13 +478,13 @@ export function createHikariServer(options = {}) {
       response.once('close', abortUpstream);
 
       try {
-        const upstream = await fetchImpl(OPENCLAW_URL, {
+        const upstream = await fetchImpl(HERMES_URL, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             authorization: `Bearer ${token}`
           },
-          body: JSON.stringify({ model: 'openclaw/default', messages }),
+          body: JSON.stringify({ model: 'hikari', messages }),
           signal: upstreamController.signal
         });
 
@@ -455,25 +492,25 @@ export function createHikariServer(options = {}) {
         try {
           upstreamBody = await readBoundedResponse(upstream, MAX_UPSTREAM_BODY_BYTES);
         } catch {
-          if (!response.destroyed) sendJson(response, timedOut ? 504 : 502, errorBody(timedOut ? 'OpenClaw request timed out' : 'OpenClaw returned an invalid response'));
+          if (!response.destroyed) sendJson(response, timedOut ? 504 : 502, errorBody(timedOut ? 'Hermes request timed out' : 'Hermes returned an invalid response'));
           return;
         }
         if (response.destroyed || response.writableEnded) return;
         if (!upstream.ok) {
           const safeStatus = upstream.status >= 400 && upstream.status <= 599 ? upstream.status : 502;
-          sendJson(response, safeStatus, errorBody('OpenClaw request failed'));
+          sendJson(response, safeStatus, errorBody('Hermes request failed'));
           return;
         }
 
         let value;
         try { value = JSON.parse(upstreamBody.toString('utf8')); } catch {
-          sendJson(response, 502, errorBody('OpenClaw returned invalid JSON'));
+          sendJson(response, 502, errorBody('Hermes returned invalid JSON'));
           return;
         }
         sendJson(response, 200, value);
       } catch {
-        if (timedOut) sendJson(response, 504, errorBody('OpenClaw request timed out'));
-        else if (!response.destroyed) sendJson(response, 502, errorBody('OpenClaw is unavailable'));
+        if (timedOut) sendJson(response, 504, errorBody('Hermes request timed out'));
+        else if (!response.destroyed) sendJson(response, 502, errorBody('Hermes is unavailable'));
       } finally {
         request.removeListener('aborted', abortUpstream);
         response.removeListener('close', abortUpstream);
@@ -700,3 +737,6 @@ if (isDirectExecution) {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
 }
+
+
+

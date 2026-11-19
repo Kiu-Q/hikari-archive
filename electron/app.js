@@ -931,7 +931,7 @@ const CoreModule = (() => {
         
         // Immediately change facial expression to 'shy' or 'shocked' randomly
         // 'shy' maps to 'angry' in VRM, 'shocked' maps to 'relaxed' in VRM
-        // This expression persists until the OpenClaw agent replies
+        // This expression persists until the Hermes agent replies
         const touchExpressions = ['shy', 'shocked'];
         const chosenExpression = touchExpressions[Math.floor(Math.random() * touchExpressions.length)];
         applyFacialExpression(chosenExpression);
@@ -3711,7 +3711,7 @@ const AgentApiModule = (() => {
         return envUrl;
       }
       
-      const defaultUrl = 'ws://localhost:18789';
+      const defaultUrl = 'ws://localhost:8643';
       logger.info('http', 'Using default gateway URL:', defaultUrl);
       return defaultUrl;
     }
@@ -3812,7 +3812,7 @@ Just provide the raw JSON object directly. Generate segments first. Each segment
 
     async function requestAgentReply(messages, options = {}) {
       const baseUrl = getHttpBaseUrl();
-      const token = localStorage.getItem('openclaw_token') || CONFIG.token;
+      const token = localStorage.getItem('Hermes_token') || CONFIG.token;
       const environmentContext = worldStateStore.serializeForAgent();
       const messagesToSend = [
         { role: 'system', content: SYSTEM_INSTRUCTIONS },
@@ -3827,7 +3827,7 @@ Just provide the raw JSON object directly. Generate segments first. Each segment
           let data;
           try {
             response = await services.chat({
-              model: 'openclaw/default', messages: messagesToSend
+              model: 'hikari', messages: messagesToSend
             }, { gatewayUrl: baseUrl, token, signal: options.signal });
             if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
             timing.mark(`http_${attempt + 1}_headers_received`);
@@ -3937,7 +3937,7 @@ Use the shared response protocol for this greeting.`;
       if (initialGreetingStarted) return initialGreetingPresentation;
       initialGreetingStarted = true;
       window._directAgentRequestPending = true;
-      logger.info('http', 'Preparing initial greeting response (no OpenClaw session startup)');
+      logger.info('http', 'Preparing initial greeting response (no Hermes session startup)');
 
       initialGreetingPresentation = (async () => {
         try {
@@ -4012,8 +4012,8 @@ Use the shared response protocol for this greeting.`;
           }
         }
 
-        // Ignore non-JSON replies (e.g., "No response from OpenClaw")
-        if (replyText.includes('No response from OpenClaw') || replyText.trim().length < 2) {
+        // Ignore non-JSON replies (e.g., "No response from Hermes")
+        if (replyText.includes('No response from Hermes') || replyText.trim().length < 2) {
           logger.info('http', 'Ignoring non-JSON reply:', replyText.substring(0, 50));
           if (window.enableMessaging) window.enableMessaging();
           if (window.resetMessagingPanel) window.resetMessagingPanel();
@@ -5212,7 +5212,7 @@ logger.info('electron', 'Setting up UI event listeners');
                     if (composerStatus) composerStatus.textContent = 'Sending…';
                     const statusDiv = document.getElementById('status');
                     if (statusDiv) {
-                        statusDiv.textContent = 'Waiting for OpenClaw reply...';
+                        statusDiv.textContent = 'Waiting for Hermes reply...';
                     }
                     
                     // Disable messaging controls and set to thinking state
@@ -5237,7 +5237,7 @@ logger.info('electron', 'Setting up UI event listeners');
                                 const status = document.getElementById('screenshotStatus');
                                 if (status) status.textContent = error.message;
                             });
-                        logger.info('electron', 'Sent user message to OpenClaw via HTTP API');
+                        logger.info('electron', 'Sent user message to Hermes via HTTP API');
                     }
                 }
             }
@@ -5514,7 +5514,7 @@ function setupWebSocketUrlInput() {
         wsUrlInput.value = savedWsUrl || '';
     }
     if (tokenInput) {
-        tokenInput.value = localStorage.getItem('openclaw_token') || '';
+        tokenInput.value = localStorage.getItem('Hermes_token') || '';
     }
     
     if (saveConnectBtn) {
@@ -5529,13 +5529,13 @@ function setupWebSocketUrlInput() {
                 logger.info('electron', 'Gateway URL cleared');
             }
             
-            // 2. Save OpenClaw token
+            // 2. Save Hermes token
             const token = tokenInput ? tokenInput.value.trim() : '';
             if (token) {
-                localStorage.setItem('openclaw_token', token);
+                localStorage.setItem('Hermes_token', token);
                 logger.info('electron', 'Token saved (length:', token.length + ')');
             } else {
-                localStorage.removeItem('openclaw_token');
+                localStorage.removeItem('Hermes_token');
                 logger.info('electron', 'Token cleared');
             }
             
@@ -5571,7 +5571,7 @@ function setupWebSocketUrlInput() {
 function setupTokenDialog() {
     if (!window.electronAPI) return;
     // Check if token is configured
-    const savedToken = localStorage.getItem('openclaw_token');
+    const savedToken = localStorage.getItem('Hermes_token');
     
     // Load saved token value into input
     const tokenInput = document.getElementById('tokenInput');
@@ -5648,7 +5648,7 @@ async function initElectronApp() {
         // Expose local history function
         window.addLocalHistoryMessage = HistoryModule.addLocalHistoryMessage;
         // Compatibility name; this processes the already-started greeting and
-        // does not create or reset an OpenClaw session.
+        // does not create or reset an Hermes session.
         window.startSession = AgentApiModule.startSession;
         logger.info('electron', 'HTTP agent messaging exposed');
         

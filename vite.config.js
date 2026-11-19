@@ -99,10 +99,10 @@ export default defineConfig(({ mode, command }) => {
           changeOrigin: true
         },
         ...(!isWeb ? {
-          '/__openclaw__': {
-            target: env.VITE_GATEWAY_URL || 'http://localhost:18789',
+          '/__hermes__': {
+            target: env.VITE_GATEWAY_URL || 'http://localhost:8643',
             changeOrigin: true,
-            rewrite: (path) => path.replace(/^\/__openclaw__/, '')
+            rewrite: (path) => path.replace(/^\/__hermes__/, '')
           }
         } : {})
       }
@@ -113,7 +113,7 @@ export default defineConfig(({ mode, command }) => {
     },
     define: {
       'import.meta.env.VITE_MODE': JSON.stringify(mode),
-      'import.meta.env.VITE_GATEWAY_URL': JSON.stringify(env.VITE_GATEWAY_URL || 'http://localhost:18789'),
+      'import.meta.env.VITE_GATEWAY_URL': JSON.stringify(env.VITE_GATEWAY_URL || 'http://localhost:8643'),
       'import.meta.env.VITE_ASSET_BASE_URL': JSON.stringify(assetBaseUrl),
       'import.meta.env.VITE_WINDOW_WIDTH': JSON.stringify(env.VITE_WINDOW_WIDTH || '600px'),
       'import.meta.env.VITE_WINDOW_HEIGHT': JSON.stringify(env.VITE_WINDOW_HEIGHT || '900px'),

@@ -1,10 +1,10 @@
 # Use Hikari from your phone
 
-The phone browser connects to a small Hikari server on this computer. The server serves the web app and keeps the OpenClaw credential on the computer; it forwards chat requests to local OpenClaw and starts local TTS on demand. Keep this computer awake and online while using Hikari from the phone.
+The phone browser connects to a small Hikari server on this computer. The server serves the web app and keeps the Hermes credential on the computer; it forwards chat requests to local Hermes and starts local TTS on demand. Keep this computer awake and online while using Hikari from the phone.
 
 ## First setup
 
-Install and sign in to Tailscale on both this computer and your phone, using the same tailnet. Tailscale Serve gives the local Hikari server a private HTTPS address for devices on that tailnet. Do not expose the OpenClaw or TTS ports directly.
+Install and sign in to Tailscale on both this computer and your phone, using the same tailnet. Tailscale Serve gives the local Hikari server a private HTTPS address for devices on that tailnet. Do not expose the Hermes or TTS ports directly.
 
 On the computer, start Tailscale Serve for Hikari's local port:
 
@@ -13,15 +13,15 @@ tailscale serve --bg 3000
 tailscale serve status
 ```
 
-This computer's configured HTTPS address is `https://node.tailb3abce.ts.net`. The start command sets it as the allowed browser origin automatically; set `HIKARI_PUBLIC_ORIGIN` to override it on another host. The server reads `HIKARI_OPENCLAW_TOKEN` when set, or the gateway token from `~/.openclaw/openclaw.json` otherwise:
+This computer's configured HTTPS address is `https://node.tailb3abce.ts.net`. The start command sets it as the allowed browser origin automatically; set `HIKARI_PUBLIC_ORIGIN` to override it on another host. The server reads `HIKARI_Hermes_TOKEN` when set, or the gateway token from `~/.Hermes/Hermes.json` otherwise:
 
 ```sh
-# Only needed if the token is not already in ~/.openclaw/openclaw.json:
-# export HIKARI_OPENCLAW_TOKEN='your-local-openclaw-token'
+# Only needed if the token is not already in ~/.Hermes/Hermes.json:
+# export HIKARI_Hermes_TOKEN='your-local-Hermes-token'
 npm run start:web
 ```
 
-`npm run start:web` builds the web app into `dist-web` and starts the Hikari server on `127.0.0.1:3000`. Keep this terminal running. OpenClaw must be running on this computer at `127.0.0.1:18789`. The Hikari server starts its TTS service lazily when the first speech request arrives. The OpenClaw token belongs in the server process environment or its local OpenClaw config only; do not put it in a `VITE_` variable or `.env.web`, because Vite variables can be included in browser code. `HIKARI_PUBLIC_ORIGIN` accepts comma-separated exact origins if you need to allow more than one.
+`npm run start:web` builds the web app into `dist-web` and starts the Hikari server on `127.0.0.1:3000`. Keep this terminal running. Hermes must be running on this computer at `127.0.0.1:8643`. The Hikari server starts its TTS service lazily when the first speech request arrives. The Hermes token belongs in the server process environment or its local Hermes config only; do not put it in a `VITE_` variable or `.env.web`, because Vite variables can be included in browser code. `HIKARI_PUBLIC_ORIGIN` accepts comma-separated exact origins if you need to allow more than one.
 
 If the `tailscale` command in Terminal is connected to a different or unavailable daemon on macOS, use the CLI bundled with the Tailscale app after opening and signing in to that app:
 
@@ -38,7 +38,7 @@ The loading GIF covers the app throughout avatar loading and startup, with only 
 
 The web entry point imports the Electron renderer directly, so phone and desktop share the response protocol, bilingual captions, Japanese voice sequencing, facial expressions, local attention, and enabled animation settings. The browser settings use the same tab navigation and close/Escape behavior: General includes speaking speed, eye-follow angle, a touch/pointer gaze switch, and Reset view; Motion includes the browser-safe animation and expression controls; Lighting adjusts all five lights. Speed, gaze, motion, and lighting preferences persist in this browser. Reset view restores the phone camera after zooming or panning.
 
-Use the ðŸ“· button beside Send to choose a photo or screenshot from the phone's image picker. The selection is resized and converted to JPEG locally, shown as a removable draft, and sent only when you press Send. An image can be sent without typed text. Failed sends retain the draft for retry; successful sends clear it. Each request accepts one JPEG up to 2 MB; source files must be under 20 MB. Image understanding requires a vision-capable model configured in OpenClaw. Later conversation turns retain a text note and history thumbnail rather than retransmitting the image. Settings and history sit above the enlarged composer when the keyboard is closed. Opening the software keyboard lifts only the composer; the avatar, backdrop, and other controls stay in place.
+Use the ?“· button beside Send to choose a photo or screenshot from the phone's image picker. The selection is resized and converted to JPEG locally, shown as a removable draft, and sent only when you press Send. An image can be sent without typed text. Failed sends retain the draft for retry; successful sends clear it. Each request accepts one JPEG up to 2 MB; source files must be under 20 MB. Image understanding requires a vision-capable model configured in Hermes. Later conversation turns retain a text note and history thumbnail rather than retransmitting the image. Settings and history sit above the enlarged composer when the keyboard is closed. Opening the software keyboard lifts only the composer; the avatar, backdrop, and other controls stay in place.
 
 Desktop window controls, desktop awareness, native screen capture, and Apple on-device voice listening remain Electron features. The browser uses user-selected images and typed chat, without requesting desktop or microphone permissions. Sitting and walking remain disabled on the phone.
 
@@ -50,7 +50,7 @@ The computer must stay awake, connected to the internet and connected to Tailsca
 npm run start:web
 ```
 
-The phone cannot reach OpenClaw or local TTS while this server or OpenClaw is stopped.
+The phone cannot reach Hermes or local TTS while this server or Hermes is stopped.
 
 ## Development and build commands
 
@@ -62,7 +62,7 @@ The phone cannot reach OpenClaw or local TTS while this server or OpenClaw is st
 
 For development, start the backend first in one terminal, then start Vite in a second terminal. The web build reads its VRM, animation, and loading assets directly from `electron/assets`, so desktop and phone use the same source files. Vite sets `--hikari-background-image` from the web asset base; the phone keeps a stable scene height and compensates for visual viewport panning while `--keyboard-inset` lifts only the composer above the software keyboard.
 
-Run the regression suite with `node --test test/*.test.js`. After a web build, run `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron test/web-browser.smoke.mjs` for an isolated Chromium browser-mode check on test port `3099`. It uses test-only chat and audio to exercise the real avatar renderer, startup drafts, settings, image preparation/send/history, and portrait/landscape layout without using your browser profile or OpenClaw account. `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron test/web-startup.smoke.mjs` checks first Send with a stalled greeting and no preliminary tap, on test port `3098`.
+Run the regression suite with `node --test test/*.test.js`. After a web build, run `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron test/web-browser.smoke.mjs` for an isolated Chromium browser-mode check on test port `3099`. It uses test-only chat and audio to exercise the real avatar renderer, startup drafts, settings, image preparation/send/history, and portrait/landscape layout without using your browser profile or Hermes account. `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron test/web-startup.smoke.mjs` checks first Send with a stalled greeting and no preliminary tap, on test port `3098`.
 
 ## Use the local service with Electron
 

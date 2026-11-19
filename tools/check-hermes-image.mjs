@@ -28,13 +28,34 @@ for (let y = 0; y < 64; y++) {
   }
 }
 const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', dimensions), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))]);
-const config = JSON.parse(readFileSync(join(homedir(), '.openclaw/openclaw.json'), 'utf8'));
-const token = process.env.OPENCLAW_GATEWAY_TOKEN || config.gateway?.auth?.token;
-if (typeof token !== 'string') throw new Error('A gateway token is required for the image smoke check.');
-const response = await fetch(`http://127.0.0.1:${config.gateway?.port || 18789}/v1/chat/completions`, {
+
+function hermesHome() {
+  if (process.platform === 'win32') {
+    return join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'hermes');
+  }
+  return join(homedir(), '.hermes');
+}
+
+// Same token source as server/index.js: the optional HIKARI_HERMES_TOKEN override,
+// otherwise API_SERVER_KEY from the hikari profile .env.
+function profileToken() {
+  try {
+    const env = readFileSync(join(hermesHome(), 'profiles', 'hikari', '.env'), 'utf8');
+    const line = env.split(/\r?\n/).map(l => l.trim()).find(l => l.startsWith('API_SERVER_KEY='));
+    let value = line ? line.slice('API_SERVER_KEY='.length).trim() : null;
+    if (value && (value.startsWith('"') || value.startsWith("'")) && value.length >= 2) value = value.slice(1, -1).trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+const token = process.env.HIKARI_HERMES_TOKEN || profileToken();
+if (typeof token !== 'string' || !token) throw new Error('A gateway token is required for the image smoke check (HIKARI_HERMES_TOKEN or the hikari profile API_SERVER_KEY).');
+const port = Number(process.env.HIKARI_HERMES_PORT) || 8643;
+const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
   method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
   signal: AbortSignal.timeout(90000),
-  body: JSON.stringify({ model: 'openclaw/default', messages: [{ role: 'user', content: [
+  body: JSON.stringify({ model: 'hikari', messages: [{ role: 'user', content: [
     { type: 'text', text: 'This is a synthetic image capability test, not a real desktop screenshot. What solid color fills the attached image? Answer with just the color name in English.' },
     { type: 'image_url', image_url: { url: `data:image/png;base64,${png.toString('base64')}` } }
   ] }] })
@@ -43,4 +64,4 @@ if (!response.ok) throw new Error(`Image smoke check returned HTTP ${response.st
 const result = await response.json();
 const answer = result.choices?.[0]?.message?.content || '';
 if (!/\bblue\b|藍|蓝/i.test(answer)) throw new Error('The gateway accepted the image, but visual understanding could not be verified.');
-console.log('OPENCLAW_IMAGE_SMOKE_OK: existing chat endpoint and default agent identified the generated blue square.');
+console.log('hermes_IMAGE_SMOKE_OK: existing chat endpoint and default agent identified the generated blue square.');

@@ -148,3 +148,4 @@ out
 dist-electron/
 electron/dist-electron/
 dist-web/
+graphify-out/

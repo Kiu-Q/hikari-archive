@@ -15,7 +15,7 @@ audio.writeUInt32LE(16, 16); audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 
 audio.writeUInt32LE(24000, 24); audio.writeUInt32LE(48000, 28);
 audio.writeUInt16LE(2, 32); audio.writeUInt16LE(16, 34); audio.write('data', 36); audio.writeUInt32LE(4800, 40);
 const server = createHikariServer({ port: 3098, allowedOrigins: ['http://127.0.0.1:3098'], token: 'test-only',
-  probeOpenClaw: async () => true, probeTts: async () => true,
+  probeHermes: async () => true, probeTts: async () => true,
   ttsService: { synthesize: async () => ({ audio, durationSeconds: 0.1, sampleRate: 24000, channels: 1 }) },
   fetch: async (_url, init) => {
     const request = JSON.parse(init.body); requests.push(request);

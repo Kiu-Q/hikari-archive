@@ -53,7 +53,7 @@ async function startServer(t, options = {}) {
     webRoot,
     token: 'server-test-token',
     ttsService: makeTtsService(),
-    probeOpenClaw: async () => true,
+    probeHermes: async () => true,
     probeTts: async () => false,
     ...options
   };
@@ -85,7 +85,7 @@ test('health reports reachability without running synthesis and static root serv
       synthesisCalls += 1;
       return { audio: makeWav(), durationSeconds: 1, sampleRate: 24_000, channels: 1 };
     }),
-    probeOpenClaw: async () => { tcpProbeCalls += 1; return true; },
+    probeHermes: async () => { tcpProbeCalls += 1; return true; },
     probeTts: async () => { ttsProbeCalls += 1; return false; }
   });
 
@@ -93,7 +93,7 @@ test('health reports reachability without running synthesis and static root serv
   assert.equal(healthResponse.status, 200);
   assert.deepEqual(await healthResponse.json(), {
     ok: true,
-    openclaw: { configured: true, reachable: true },
+    hermes: { configured: true, reachable: true },
     tts: { configured: true, reachable: false }
   });
   assert.equal(synthesisCalls, 0);
@@ -136,11 +136,11 @@ test('chat strips browser credentials and overrides, then injects the local gate
   });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), CHAT_REPLY);
-  assert.equal(forwardedUrl, 'http://127.0.0.1:18789/v1/chat/completions');
+  assert.equal(forwardedUrl, 'http://127.0.0.1:8643/v1/chat/completions');
   assert.equal(forwarded.headers.authorization, 'Bearer server-test-token');
   assert.equal(forwarded.headers.authorization.includes('browser-must-not-be-used'), false);
   assert.deepEqual(JSON.parse(forwarded.body), {
-    model: 'openclaw/default',
+    model: 'hikari',
     messages: [
       { role: 'system', content: 'Use Cantonese.' },
       { role: 'user', content: 'Hello' }
@@ -228,14 +228,14 @@ test('chat rejects malformed messages and returns a sanitized upstream failure',
 
   const failure = await postJson(baseUrl, '/api/chat', { messages: [{ role: 'user', content: 'Hi' }] });
   assert.equal(failure.status, 401);
-  assert.deepEqual(await failure.json(), { error: { message: 'OpenClaw request failed' } });
+  assert.deepEqual(await failure.json(), { error: { message: 'Hermes request failed' } });
 });
 
 test('chat returns a gateway error when its fixed loopback upstream fails', async (t) => {
   const { baseUrl } = await startServer(t, { fetch: async () => { throw new Error('private provider detail'); } });
   const response = await postJson(baseUrl, '/api/chat', { messages: [{ role: 'user', content: 'Hi' }] });
   assert.equal(response.status, 502);
-  assert.deepEqual(await response.json(), { error: { message: 'OpenClaw is unavailable' } });
+  assert.deepEqual(await response.json(), { error: { message: 'Hermes is unavailable' } });
 });
 
 test('TTS returns WAV bytes and timing metadata headers', async (t) => {
@@ -346,10 +346,15 @@ test('static serving blocks traversal, hidden files, and symlinks outside dist-w
   assert.equal(badHostStatus, 403);
 });
 
-test('loads the gateway token from the local OpenClaw config without echoing it', async (t) => {
+test('loads the gateway token from the legacy OpenClaw config without echoing it', async (t) => {
   const previousToken = process.env.HIKARI_OPENCLAW_TOKEN;
+  const previousHermesToken = process.env.HIKARI_HERMES_TOKEN;
+  const previousHermesHome = process.env.HIKARI_HERMES_HOME;
   delete process.env.HIKARI_OPENCLAW_TOKEN;
+  delete process.env.HIKARI_HERMES_TOKEN;
   const homeDir = await mkdtemp(path.join(os.tmpdir(), 'hikari-openclaw-config-'));
+  process.env.HIKARI_HERMES_HOME = path.join(homeDir, 'hermes-home');
+  await mkdir(path.join(homeDir, 'hermes-home'), { recursive: true });
   await mkdir(path.join(homeDir, '.openclaw'), { recursive: true });
   await writeFile(path.join(homeDir, '.openclaw', 'openclaw.json'), JSON.stringify({ gateway: { auth: { token: 'private-config-token' } } }));
   try {
@@ -368,6 +373,44 @@ test('loads the gateway token from the local OpenClaw config without echoing it'
   } finally {
     if (previousToken === undefined) delete process.env.HIKARI_OPENCLAW_TOKEN;
     else process.env.HIKARI_OPENCLAW_TOKEN = previousToken;
+    if (previousHermesToken === undefined) delete process.env.HIKARI_HERMES_TOKEN;
+    else process.env.HIKARI_HERMES_TOKEN = previousHermesToken;
+    if (previousHermesHome === undefined) delete process.env.HIKARI_HERMES_HOME;
+    else process.env.HIKARI_HERMES_HOME = previousHermesHome;
+    await rm(homeDir, { recursive: true, force: true });
+  }
+});
+
+test('loads the gateway token from the hikari profile .env without echoing it', async (t) => {
+  const previousToken = process.env.HIKARI_OPENCLAW_TOKEN;
+  const previousHermesToken = process.env.HIKARI_HERMES_TOKEN;
+  const previousHermesHome = process.env.HIKARI_HERMES_HOME;
+  delete process.env.HIKARI_OPENCLAW_TOKEN;
+  delete process.env.HIKARI_HERMES_TOKEN;
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'hikari-hermes-env-'));
+  const profileDir = path.join(homeDir, 'profiles', 'hikari');
+  await mkdir(profileDir, { recursive: true });
+  await writeFile(path.join(profileDir, '.env'), 'API_SERVER_KEY=private-hermes-token\n');
+  process.env.HIKARI_HERMES_HOME = homeDir;
+  try {
+    let authorization;
+    const { baseUrl } = await startServer(t, {
+      omitToken: true,
+      fetch: async (_url, init) => {
+        authorization = init.headers.authorization;
+        return Response.json(CHAT_REPLY);
+      }
+    });
+    const response = await postJson(baseUrl, '/api/chat', { messages: [{ role: 'user', content: 'Hi' }] });
+    assert.equal(response.status, 200);
+    assert.equal(authorization, 'Bearer private-hermes-token');
+  } finally {
+    if (previousToken === undefined) delete process.env.HIKARI_OPENCLAW_TOKEN;
+    else process.env.HIKARI_OPENCLAW_TOKEN = previousToken;
+    if (previousHermesToken === undefined) delete process.env.HIKARI_HERMES_TOKEN;
+    else process.env.HIKARI_HERMES_TOKEN = previousHermesToken;
+    if (previousHermesHome === undefined) delete process.env.HIKARI_HERMES_HOME;
+    else process.env.HIKARI_HERMES_HOME = previousHermesHome;
     await rm(homeDir, { recursive: true, force: true });
   }
 });

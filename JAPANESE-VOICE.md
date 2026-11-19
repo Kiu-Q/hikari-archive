@@ -1,11 +1,11 @@
 # Chinese captions, Japanese custom voice
 
-Hikari's OpenClaw HTTP system prompt now requests both fields:
+Hikari's Hermes HTTP system prompt now requests both fields:
 
 ```json
 {
-  "text": "è€å¸«ï¼Œæ—©æ™¨ï¼",
-  "text_ja": "å…ˆç”Ÿã€ãŠã¯ã‚ˆã†ï¼",
+  "text": "?å¸«ï¼Œæ—©?¨ï?",
+  "text_ja": "?ˆç??ã??¯ã??†ï?",
   "animation": { "file": "wave_fast.vrma", "timing": "during" },
   "expression": { "name": "neutral" }
 }
@@ -63,10 +63,10 @@ node_modules/.bin/electron test/japanese-voice.smoke.mjs
 The Electron smoke check uses the installed custom model, real preload IPC, and
 Chromium audio playback in a muted hidden window. It verifies Chinese captions,
 Japanese-only synthesis input, audio-driven mouth movement, and neutral mouth at
-the end. It does not send a new conversation to OpenClaw.
+the end. It does not send a new conversation to Hermes.
 
 Verified both with an already-running adapter and with automatic adapter startup.
-The real Electron check displayed `è€å¸«ï¼Œæ—©æ™¨ï¼`, synthesized `å…ˆç”Ÿã€ãŠã¯ã‚ˆã†ã€‚`,
+The real Electron check displayed `?å¸«ï¼Œæ—©?¨ï?`, synthesized `?ˆç??ã??¯ã??†ã€‚`,
 detected mouth opening and closing from the audio, and finished with a neutral mouth.
 Requests and replies are kept in their existing queues; a new message waits for
 the current response. Closing/reloading the renderer cancels its current audio.

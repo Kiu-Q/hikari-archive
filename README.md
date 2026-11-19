@@ -14,7 +14,7 @@
 
 <h1 align="center">Hikari Archive</h1>
 
-<p align="center">Inspired by <a href="https://github.com/moeru-ai/airi">Project AIRI</a>, bringing VRM characters to life with interactive AI companions powered by <a href="https://github.com/openclaw/openclaw">OpenClaw</a> agent integration.</p>
+<p align="center">Inspired by <a href="https://github.com/moeru-ai/airi">Project AIRI</a>, bringing VRM characters to life with interactive AI companions powered by <a href="https://github.com/NousResearch/hermes-agent">Hermes</a> agent integration.</p>
 
 <p align="center">
   [<a href="https://github.com/Kiu-Q/hikari-archive">View on GitHub</a>] [<a href="https://github.com/Kiu-Q/hikari-archive/issues">Report Issues</a>]
@@ -36,9 +36,9 @@
 
 > [!NOTE]
 >
-> Hikari Archive is designed to work with the OpenClaw Agent Gateway for AI agent communication.
+> Hikari Archive is designed to work with the Hermes Agent Gateway for AI agent communication.
 >
-> Make sure you have OpenClaw installed and running before using Hikari Archive.
+> Make sure you have Hermes installed and running before using Hikari Archive.
 
 > [!TIP]
 > Hikari Archive supports both Electron desktop and Web/Mobile versions with a shared codebase.
@@ -75,12 +75,12 @@ Hikari Archive brings virtual characters to life with:
 - **Facial Expressions**: Apply expressions like happy, sad, angry, surprised, and more
 - **Automatic Systems**: Natural blinking, eye saccade, and random idle animations
 - **Touch Interaction**: Click/touch on model to trigger agent responses
-- **AI Integration**: WebSocket communication with OpenClaw agent gateway for AI interactions
+- **AI Integration**: WebSocket communication with Hermes agent gateway for AI interactions
 - **Cross-Platform**: Runs on Electron desktop and Web browsers with mobile support
 
 > **Developer's Words:**
 >
-> I discovered Project-AIRI on Threads in February, and as an ACG fan, I really liked it. However, I wanted to make it work with the OpenClaw agent with more "waifu-like" interaction, so I built this app using AI.
+> I discovered Project-AIRI on Threads in February, and as an ACG fan, I really liked it. However, I wanted to make it work with the Hermes agent with more "waifu-like" interaction, so I built this app using AI.
 >
 > By the way, Hikari, as shown in the banner, is my favorite Blue Archive character (however, due to VRM model license issues, I cannot include its VRM model here).
 >
@@ -130,9 +130,9 @@ Capable of
 - [x] Communication
   - [x] Lip sync system (English + Chinese)
   - [x] Speaking bubble UI
-  - [x] WebSocket integration with OpenClaw
+  - [x] WebSocket integration with Hermes
   - [x] Conversation history panel
-  - [ ] Stream messages to OpenClaw channels (Telegram, WhatsApp, etc.)
+  - [ ] Stream messages to Hermes channels (Telegram, WhatsApp, etc.)
   - [ ] Enhanced lip sync
   - [ ] Video call mode
 - [x] Controls & Interface
@@ -188,7 +188,7 @@ npm run serve:web
 - **Node.js** (v16 or higher) - https://nodejs.org/
 - **npm** or **pnpm** - Package manager
 - **Git** - For cloning (optional)
-- **OpenClaw Agent Gateway** - https://github.com/openclaw/openclaw
+- **Hermes Agent Gateway** - https://github.com/NousResearch/hermes-agent
 - **Tailscale** (for remote mobile access) - https://tailscale.com/
 
 ### System Requirements
@@ -220,16 +220,16 @@ This will install:
 - @pixiv/three-vrm-animation (VRMA animation support)
 - ws (WebSocket client)
 
-### Step 3: Configure OpenClaw
+### Step 3: Configure Hermes
 
-Keep OpenClaw local to this computer at `127.0.0.1:18789`. The phone connects to the Hikari server, which forwards chat requests and keeps the gateway token off the browser. The server reads `HIKARI_OPENCLAW_TOKEN` or `gateway.auth.token` from `~/.openclaw/openclaw.json`. Keep the gateway's chat-completions endpoint enabled for Hikari's existing HTTP integration.
+Keep Hermes local to this computer at `127.0.0.1:8643`. The phone connects to the Hikari server, which forwards chat requests and keeps the gateway token off the browser. The server reads `HIKARI_HERMES_TOKEN` when set, or `API_SERVER_KEY` from the hikari profile .env file (`~/.hermes/profiles/hikari/.env`) otherwise. Keep the gateway's chat-completions endpoint enabled for Hikari's existing HTTP integration.
 
-See [phone setup](docs/phone-web.md) for private HTTPS access. Do not expose the raw OpenClaw or TTS ports for the phone.
+See [phone setup](docs/phone-web.md) for private HTTPS access. Do not expose the raw Hermes or TTS ports for the phone.
 
-### Step 4: Start OpenClaw Gateway
+### Step 4: Start Hermes Gateway
 
 ```bash
-openclaw gateway start
+hermes --profile hikari gateway run
 ```
 
 ## Quick Start
@@ -242,10 +242,10 @@ openclaw gateway start
 npm run dev
 ```
 
-**2. Configure OpenClaw Token**
+**2. Configure Hermes Token**
 
 - Click ⚙️ (top-left) to open settings panel
-- Enter your OpenClaw gateway token
+- Enter your Hermes gateway token
 - Click "Save Token"
 
 ### Option B: Web/Mobile Version
@@ -256,7 +256,7 @@ Follow the [phone setup guide](docs/phone-web.md) to enable Tailscale Serve, the
 npm run start:web
 ```
 
-Open https://node.tailb3abce.ts.net on your phone with Tailscale connected. `start:web` builds the app, sets this allowed origin, and prevents idle sleep on macOS. Set `HIKARI_PUBLIC_ORIGIN` to override the address on another host. OpenClaw and Japanese TTS run on this computer; the phone renders the character and plays its voice. Keep the computer awake and the server running. Phone microphone input is not included yet.
+Open https://node.tailb3abce.ts.net on your phone with Tailscale connected. `start:web` builds the app, sets this allowed origin, and prevents idle sleep on macOS. Set `HIKARI_PUBLIC_ORIGIN` to override the address on another host. Hermes and Japanese TTS run on this computer; the phone renders the character and plays its voice. Keep the computer awake and the server running. Phone microphone input is not included yet.
 
 For local development, run `npm run serve:web` and `npm run dev:web` in separate terminals. Web output uses `dist-web`, independently of Electron's `dist` output.
 
@@ -305,7 +305,7 @@ For local development, run `npm run serve:web` and `npm run dev:web` in separate
 1. Click 💬 to open messaging panel
 2. Type text in input field
 3. Click "Speak" or press Enter
-4. Text sent to OpenClaw agent
+4. Text sent to Hermes agent
 5. Agent processes and responds
 6. Hikari Archive lip syncs response
 
@@ -333,7 +333,7 @@ The VRM character responds to clicks/touches on different body parts:
 #### How It Works
 - **Click or touch** on the model to trigger interaction
 - The system identifies which body part was touched (head, chest, hip, leg)
-- Sends touch message to OpenClaw agent
+- Sends touch message to Hermes agent
 - With Drag reactions enabled in Electron, window dragging shows the touch-style shy expression. It stays after release and through reply preparation until voice playback begins, when the reply's expression takes over.
 - Agent responds with animation, expression, and speech
 - Character plays sit animation during agent processing
@@ -358,7 +358,7 @@ The VRM character responds to clicks/touches on different body parts:
 
 #### Loading More Messages
 1. Click "Load More Messages" button at bottom
-2. Fetches additional 50 messages from OpenClaw
+2. Fetches additional 50 messages from Hermes
 3. Messages appended to existing list
 
 ## Available Animations
@@ -402,7 +402,7 @@ The VRM character responds to clicks/touches on different body parts:
 
 ## WebSocket Protocol
 
-### Client → OpenClaw Requests
+### Client → Hermes Requests
 
 #### Send Message to Agent
 ```json
@@ -434,7 +434,7 @@ The VRM character responds to clicks/touches on different body parts:
 }
 ```
 
-### OpenClaw → Client Responses
+### Hermes → Client Responses
 
 #### Chat Message (Final - Complete)
 ```json
@@ -516,15 +516,15 @@ hikari-archive/
 
 **Solutions:**
 
-1. **Check OpenClaw is running:**
+1. **Check Hermes is running:**
    ```bash
-   openclaw status
-   openclaw gateway status
+   hermes --profile hikari status
+   hermes --profile hikari gateway status
    ```
 
-2. **Verify gateway port:** Should be 18789
+2. **Verify gateway port:** Should be 8643
 
-3. **Check firewall:** Allow port 18789 through firewall
+3. **Check firewall:** Allow port 8643 through firewall
 
 4. **Verify token:** Check token in settings panel
 
@@ -560,7 +560,7 @@ hikari-archive/
 
 2. **Test with simple text:** Try "Hello world" or "你好"
 
-3. **Verify agent response:** Check OpenClaw agent is responding
+3. **Verify agent response:** Check Hermes agent is responding
 
 ### Issue: Remote Access Not Working
 
@@ -579,7 +579,7 @@ hikari-archive/
 
 3. **Enable Funnel (if not enabled):**
    ```bash
-   tailscale funnel 18789
+   tailscale funnel 8643
    ```
 
 ## Advanced Configuration
@@ -687,7 +687,7 @@ Note: You'll also need to configure the WebGL renderer to support transparency i
 ## Support and Resources
 
 ### Documentation
-- **OpenClaw**: https://github.com/openclaw/openclaw
+- **Hermes**: https://github.com/NousResearch/hermes-agent
 - **Three.js**: https://threejs.org/docs/
 - **@pixiv/three-vrm**: https://github.com/pixiv/three-vrm
 - **Electron**: https://www.electronjs.org/docs/
@@ -700,7 +700,7 @@ Note: You'll also need to configure the WebGL renderer to support transparency i
 - **@pixiv/three-vrm-animation** - VRMA animation support
 - **Electron** - Cross-platform desktop framework
 - **Vite** - Fast build tool with HMR
-- **OpenClaw** - AI agent gateway
+- **Hermes** - AI agent gateway
 - **pixiv/ChatVRM** - Inspiration for VRM integration
 - **josephrocca/ChatVRM-js** - JS conversion/adaptation of ChatVRM
 

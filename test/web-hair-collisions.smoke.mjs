@@ -21,7 +21,7 @@ assert.notEqual(instrumented, original, 'The temporary test bundle must expose t
 writeFileSync(bundle, instrumented);
 const errors = [];
 const server = createHikariServer({ port: 0, webRoot, token: 'test-only',
-    probeOpenClaw: async () => true, probeTts: async () => false,
+    probeHermes: async () => true, probeTts: async () => false,
     fetch: async () => Response.json({ choices: [{ message: { content: '{"reply":false}' } }] }),
 });
 let window;

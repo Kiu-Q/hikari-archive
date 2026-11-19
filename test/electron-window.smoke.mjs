@@ -79,7 +79,7 @@ async function checkAvatarFraming() {
 async function run() {
   try {
     await app.whenReady();
-    // Keep the test disconnected from the user's OpenClaw/TTS services.
+    // Keep the test disconnected from the user's Hermes/TTS services.
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
       callback({ cancel: !details.url.startsWith('file:') && !details.url.startsWith('data:') });
     });

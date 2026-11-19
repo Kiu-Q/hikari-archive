@@ -242,18 +242,18 @@ test('disabling Drag keeps window dragging functional while skipping hang animat
 });
 
 test('connection Save and Enter update or clear the exact keys used by requests', () => {
-  const h = harness({ websocket_url: 'http://localhost:18789', openclaw_token: 'test-token' });
+  const h = harness({ websocket_url: 'http://localhost:8643', Hermes_token: 'test-token' });
   const url = h.elements.get('websocketUrlInput'), token = h.elements.get('tokenInput');
-  assert.equal(url.value, 'http://localhost:18789');
+  assert.equal(url.value, 'http://localhost:8643');
   url.value = ' http://localhost:12345 ';
   token.value = ' changed-test-token ';
   url.listeners.keypress({ key: 'Enter' });
   assert.equal(h.storage.get('websocket_url'), 'http://localhost:12345');
-  assert.equal(h.storage.get('openclaw_token'), 'changed-test-token');
+  assert.equal(h.storage.get('Hermes_token'), 'changed-test-token');
   url.value = ''; token.value = '';
   h.elements.get('saveConnectBtn').click();
   assert.equal(h.storage.has('websocket_url'), false);
-  assert.equal(h.storage.has('openclaw_token'), false);
+  assert.equal(h.storage.has('Hermes_token'), false);
 });
 
 test('cursor/environment opt-outs are restored before renderer initialization', () => {
@@ -340,9 +340,9 @@ test('voice settings save wake words/follow-up and serialize microphone start/st
   h.context.window.electronAPI.voice = { setEnabled: async () => ({ stt: { available: true } }) };
   vm.runInContext(section("        const voiceToggle = document.getElementById('voiceListeningToggle');", "        window.addEventListener('beforeunload'"), h.context);
   const wake = h.elements.get('wakeWordInput'), followUp = h.elements.get('voiceFollowUpToggle');
-  wake.value = '  小光  '; wake.listeners.change();
-  assert.equal(h.storage.get('voice_wake_word'), '小光');
-  assert.deepEqual(Array.from(h.context.voiceAddressingGate.wakeWords), ['小光']);
+  wake.value = '  小�?  '; wake.listeners.change();
+  assert.equal(h.storage.get('voice_wake_word'), '小�?');
+  assert.deepEqual(Array.from(h.context.voiceAddressingGate.wakeWords), ['小�?']);
   followUp.checked = true; followUp.listeners.change();
   assert.equal(h.context.voiceAddressingGate.followUpDurationMs, 5000);
   followUp.checked = false; followUp.listeners.change();

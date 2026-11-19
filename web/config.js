@@ -73,7 +73,7 @@ export const CONFIG = {
     HIP_THRESHOLD: 0.7,
     
     // WebSocket / HTTP
-    DEFAULT_WS_PORT: 18789,
+    DEFAULT_WS_PORT: 8643,
     HISTORY_BATCH_SIZE: 100,
     MAX_MESSAGE_QUEUE: 50,
     WS_RECONNECT_INTERVAL: 3000,
@@ -103,7 +103,7 @@ if (typeof process !== 'undefined' && process.versions && process.versions.elect
 // Export getHttpBaseUrl helper
 export function getHttpBaseUrl() {
     // In production, use the WebSocket URL's HTTP equivalent
-    // For OpenClaw, the HTTP API is typically on the same host:port
+    // For Hermes, the HTTP API is served by the local gateway on port 8643
     const wsUrl = localStorage.getItem('websocket_url') || `ws://localhost:${CONFIG.DEFAULT_WS_PORT}`;
     try {
         const url = new URL(wsUrl);

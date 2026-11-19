@@ -57,10 +57,10 @@ async function refreshConnection() {
     checkingConnection = true;
     try {
         const health = await webServices.getHealth();
-        const available = health.openclaw?.configured && health.openclaw?.reachable;
+        const available = health.hermes?.configured && health.hermes?.reachable;
         connectionStatus.textContent = available
             ? 'Connected to your computer'
-            : health.openclaw?.configured ? 'OpenClaw is offline on your computer' : 'Set up OpenClaw on your computer';
+            : health.hermes?.configured ? 'Hermes is offline on your computer' : 'Set up Hermes on your computer';
         retryConnection.hidden = available;
         updateConnectionNotice(Boolean(available));
     } catch {
