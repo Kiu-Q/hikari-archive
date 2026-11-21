@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { splitSpeechSegments, prepareSpeechSegments, formatCaption, normalizePairedSegments, replyNeedsAlignmentRepair } from '../electron/speech-segments.js';
+import { splitSpeechSegments, prepareSpeechSegments, formatCaption } from '../electron/speech-segments.js';
 
 test('Electron splits Chinese, Japanese, and Latin punctuation and keeps closing quotes', () => {
   assert.deepEqual(splitSpeechSegments('「早晨，老師！」好嗎？\n再見。'), ['「早晨，', '老師！」', '好嗎？', '再見。']);
@@ -40,16 +40,4 @@ test('captions remove punctuation and CJK boundary spacing without changing VO t
 test('tone dashes stay visible while ordinary caption punctuation is removed', () => {
   assert.equal(formatCaption('老師——早晨，呀！💚'), '老師——早晨呀💚');
   assert.deepEqual(splitSpeechSegments('老師——早晨，呀！'), ['老師——早晨，', '呀！']);
-});
-
-test('paired protocol validates internal punctuation and merges accidental emoji-only pairs', () => {
-  assert.deepEqual(normalizePairedSegments([
-    { text: '早晨，老師！', text_ja: 'おはよう、せんせい！' },
-    { text: '😊', text_ja: '' },
-  ]), [{ text: '早晨，', text_ja: 'おはよう、' }, { text: '老師！😊', text_ja: 'せんせい！' }]);
-  const unaligned = [{ text: '早晨，老師！', text_ja: 'おはよう！' }];
-  assert.equal(normalizePairedSegments(unaligned, { requireAlignment: true }), null);
-  assert.deepEqual(normalizePairedSegments(unaligned), unaligned);
-  assert.equal(replyNeedsAlignmentRepair(JSON.stringify({ text: '早晨，老師！', text_ja: 'おはよう！' })), true);
-  assert.equal(replyNeedsAlignmentRepair('{"react":false}'), false);
 });

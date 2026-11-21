@@ -1,22 +1,20 @@
-# Chinese captions, Japanese custom voice
+# Japanese dialogue and custom voice
 
-Hikari's Hermes HTTP system prompt now requests both fields:
+Hikari's Hermes HTTP prompt requests one JSON object.
 
 ```json
 {
-  "text": "?ÅÂ∏´ÔºåÊó©?®Ô?",
-  "text_ja": "?àÁ??Å„??Ø„??ÜÔ?",
+  "text": "„Åõ„Çì„Åõ„ÅÑ„ÄÅ„Åä„ÅØ„Çà„ÅÜÔºÅ",
   "animation": { "file": "wave_fast.vrma", "timing": "during" },
   "expression": { "name": "neutral" }
 }
 ```
 
-`text` retains the original Traditional Chinese/Cantonese response for the
-bubble and chat history. Only `text_ja` is sent to the Japanese custom voice.
-The two fields must express the same meaning and tone. The Japanese translation
-is limited to 500 characters. Desktop-awareness reactions use the same fields;
-`{"react":false}` remains silent. Existing replies without a valid `text_ja`
-remain visible but are not spoken by the Japanese model.
+The speech bubble, chat history, and local Japanese voice use the same
+Japanese dialogue from the `text` field. Dialogue can contain several sentences
+and is limited to 500 characters. Animation and expression can be null.
+Desktop awareness uses the same spoken response format with `"reply":true`.
+`{"reply":false}` remains silent.
 
 ## Run on this Mac
 
@@ -34,8 +32,8 @@ overrides the Python executable used to start the adapter.
 The app sends a narrow request through preload IPC to its main process. The main
 process fetches WAV bytes and passes them back to the renderer. Generation is
 serialized and repeated sentences use the adapter's cache. If the voice service
-fails, the Chinese reply remains in history and a voice-unavailable status is
-shown. No Chinese audio is substituted.
+fails, the Japanese reply remains in history and a voice-unavailable status is
+shown.
 
 ## Mouth and animation timing
 
@@ -48,9 +46,9 @@ URLs and audio contexts are released after completion, errors, or cancellation.
 
 The reply is staged before presentation: generate the WAV, prepare the animation
 clip without playing it, then start playback. The audio's actual `playing` event
-reveals the Chinese bubble/history, starts the prepared animation, and applies
+reveals the Japanese bubble/history, starts the prepared animation, and applies
 the expression together. No new reply text or response animation is shown while
-TTS is still generating. If speech cannot be generated, the Chinese reply is
+TTS is still generating. If speech cannot be generated, the Japanese reply is
 shown as a text-only fallback.
 
 ## Checks
@@ -61,12 +59,9 @@ node_modules/.bin/electron test/japanese-voice.smoke.mjs
 ```
 
 The Electron smoke check uses the installed custom model, real preload IPC, and
-Chromium audio playback in a muted hidden window. It verifies Chinese captions,
-Japanese-only synthesis input, audio-driven mouth movement, and neutral mouth at
+Chromium audio playback in a muted hidden window. It verifies identical Japanese
+captions and synthesis input, audio-driven mouth movement, and neutral mouth at
 the end. It does not send a new conversation to Hermes.
 
-Verified both with an already-running adapter and with automatic adapter startup.
-The real Electron check displayed `?ÅÂ∏´ÔºåÊó©?®Ô?`, synthesized `?àÁ??Å„??Ø„??Ü„ÄÇ`,
-detected mouth opening and closing from the audio, and finished with a neutral mouth.
 Requests and replies are kept in their existing queues; a new message waits for
 the current response. Closing/reloading the renderer cancels its current audio.

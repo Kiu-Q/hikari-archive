@@ -56,11 +56,10 @@ test('parseAwarenessResponse accepts an explicit silent decision', () => {
 
 test('parseAwarenessResponse accepts a reaction and trims its text', () => {
   assert.deepEqual(
-    parseAwarenessResponse('{"react":true,"text":"  Looks familiar.  ","animation":{"file":"wave.vrma"}}'),
+    parseAwarenessResponse('{"react":true,"text":"  みおぼえがあるね。  ","animation":{"file":"wave.vrma"}}'),
     {
       react: true,
-      text: 'Looks familiar.',
-      text_ja: '',
+      text: 'みおぼえがあるね。',
       animation: { file: 'wave.vrma' },
       expression: null
     }
@@ -141,7 +140,7 @@ test('buildAwarenessPrompt carries functional context without imposing an agent 
   assert.match(prompt, /Use silence for brief\/trivial activity/);
   assert.match(prompt, /do not infer private content/i);
   assert.match(prompt, /\{"reply":false\}/);
-  assert.match(prompt, /shared spoken-response protocol, including paired "segments"/);
+  assert.match(prompt, /shared spoken-response protocol/);
   assert.match(prompt, /add "reply":true/);
   assert.match(prompt, /Return only one JSON object/);
 });

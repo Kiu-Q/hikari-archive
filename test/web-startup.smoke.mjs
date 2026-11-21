@@ -25,7 +25,7 @@ const server = createHikariServer({ port: 3098, allowedOrigins: ['http://127.0.0
         if (init.signal.aborted) abort(); else init.signal.addEventListener('abort', abort, { once: true });
       });
     }
-    return Response.json({ choices: [{ message: { content: '{"text":"收到","text_ja":"わかりました"}' } }] });
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ text: 'わかりました', animation: null, expression: null }) } }] });
   }
 });
 let window;
@@ -68,7 +68,7 @@ async function run() {
     })`);
     assert.equal(requests.length, 2);
     assert.equal(requests[1].messages.at(-1).content, 'My first phone message');
-    assert.match(result.history, /My first phone message/); assert.match(result.history, /收到/);
+    assert.match(result.history, /My first phone message/); assert.match(result.history, /わかりました/);
     assert.equal(result.input, ''); assert.equal(result.status, '');
     assert.deepEqual(errors, []);
     console.log('WEB_STARTUP_SMOKE_OK: first Send completes while greeting is stalled, with no preliminary tap');

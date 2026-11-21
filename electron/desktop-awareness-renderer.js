@@ -1,6 +1,5 @@
 import { awarenessConfig } from './awareness-config.js';
 import { normalizeJapaneseText } from './agent-response-contract.js';
-import { normalizePairedSegments } from './speech-segments.js';
 import { normalizeScreenshotAttachment } from './screenshot-attachment.js';
 
 const STORAGE_KEY = 'desktop_awareness_enabled';
@@ -64,17 +63,11 @@ export function parseAwarenessResponse(value) {
       ? { react: true, speak: false, visualReaction, expression: parsed.expression || { name: visualReaction, timing: 'during' } }
       : null;
   }
-  const segments = normalizePairedSegments(parsed.segments);
-  if (segments) {
-    parsed.text = segments.map(item => item.text).join('\n');
-    parsed.text_ja = segments.map(item => item.text_ja).join('\n');
-  }
-  if (typeof parsed.text !== 'string' || !parsed.text.trim()) return null;
+  const text = normalizeJapaneseText(parsed.text);
+  if (!text) return null;
   const response = {
     react: true,
-    text: parsed.text.trim(),
-    text_ja: normalizeJapaneseText(parsed.text_ja),
-    ...(segments ? { segments } : {}),
+    text,
     animation: parsed.animation || null,
     expression: parsed.expression || null
   };
@@ -90,7 +83,7 @@ export function buildAwarenessPrompt(candidate, recentReactions = [], { captureS
     : '- None';
   const triggerGuidance = candidate.trigger === 'idle_return'
     ? `Deliberate input resumed after at least a minute without observed typing, clicking, or scrolling.
-When Hikari is free, give one short, warm welcome-back greeting in the shared bilingual response
+When Hikari is free, give one short, warm welcome-back greeting in the shared spoken response
 protocol. Make it casual and vary the wording; do not make a report about input events or the timer.
 Do not claim the user physically left, returned from somewhere, or that you know what they were doing.
 Do not add a second reaction about the resumed typing or clicking; this greeting covers that moment.`
@@ -158,7 +151,7 @@ Return only one JSON object. Silence:
 {"reply":false}
 
 Spoken reaction:
-Use the shared spoken-response protocol, including paired "segments", and add "reply":true.
+Use the shared spoken-response protocol and add "reply":true.
 
 The expression and animation fields are optional. Use the shared response protocol for speech. Do not add markdown.`;
 }
@@ -599,8 +592,6 @@ export class AwarenessController {
 
       const command = this.parseAgentResponse(JSON.stringify({
         text: decision.text,
-        text_ja: decision.text_ja || '',
-        segments: decision.segments,
         expression: decision.expression,
         animation: decision.animation
       }));

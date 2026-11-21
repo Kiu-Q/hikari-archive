@@ -37,7 +37,6 @@ try {
   const evidence = await window.webContents.executeJavaScript(`(async () => {
     ${preparationSource}
     ${playerSource}
-    const subtitles = ['老師，早晨！', '今日點呀？'];
     const japanese = ['せんせい、おはよう。', 'きょうはどう？'];
     const displayed = [], ready = new Set();
     const mouth = [];
@@ -62,8 +61,8 @@ try {
         beforePlay: () => { prepared = true; },
         onStart: () => {
           if (!ready.has(japanese[index])) throw new Error('Caption appeared before voice was ready');
-          document.getElementById('subtitle').textContent = subtitles[index];
-          displayed.push(subtitles[index]);
+          document.getElementById('subtitle').textContent = japanese[index];
+          displayed.push(japanese[index]);
         },
       });
       if (!completed) break;
@@ -74,8 +73,8 @@ try {
       finalMouth: mouth.at(-1) };
   })()`);
   assert.deepEqual(spokenTexts, ['せんせい、おはよう。', 'きょうはどう？']);
-  assert.deepEqual(evidence.displayed, ['老師，早晨！', '今日點呀？']);
-  assert.equal(evidence.display, '今日點呀？');
+  assert.deepEqual(evidence.displayed, ['せんせい、おはよう。', 'きょうはどう？']);
+  assert.equal(evidence.display, 'きょうはどう？');
   assert.equal(evidence.completed, true);
   assert.equal(evidence.synchronized, true);
   assert.ok(evidence.openFrames > 0, 'Mouth must open on real audio');

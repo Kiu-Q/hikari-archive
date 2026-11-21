@@ -8,10 +8,10 @@ import { createReplyTimingRecorder } from './reply-timing.js';
 import { createServices } from '../shared/services.js';
 const services = createServices({ electronAPI: window.electronAPI });
 import { AwarenessController, isExpectedAwarenessAbort } from './desktop-awareness-renderer.js';
-import { BILINGUAL_RESPONSE_INSTRUCTIONS, normalizeJapaneseText } from './agent-response-contract.js';
+import { RESPONSE_INSTRUCTIONS, normalizeJapaneseText } from './agent-response-contract.js';
 import { createJapaneseSpeechPlayer } from './japanese-speech-player.js';
 import { createBrowserSpeechPlayer } from '../shared/browser-speech-player.js';
-import { cancelSpeechPreparations, splitSpeechSegments, formatCaption, formatHistoryChunk, normalizePairedSegments, getReplySegments, prepareReplySpeech, replyNeedsAlignmentRepair, buildAlignmentRepairPrompt } from './speech-segments.js';
+import { cancelSpeechPreparations, splitSpeechSegments, formatCaption, formatHistoryChunk, prepareSpeechSegments } from './speech-segments.js';
 import { attachWebTouchInteraction } from '../shared/web-interaction.js';
 import { isWebAnimationAllowed } from '../shared/web-mode-policy.js';
 import { WorldStateStore } from './world-state-store.js';
@@ -130,24 +130,8 @@ async function processAgentRequestQueue() {
         window._agentRequestPending = false;
 
         if (replyText && window.lipSyncSystem && options.shouldPresent?.() !== false) {
-            // Parse the reply for any JSON commands
-            const parsedResponse = AgentApiModule.parseAgentResponse(replyText);
-            
-            if (parsedResponse && parsedResponse.text) {
-                // Execute the agent command (speak + animate)
-                await AgentApiModule.executeAgentCommand(parsedResponse, options);
-            } else if (replyText.trim().length > 0) {
-                // Plain text reply - just speak it
-                await window.lipSyncSystem.startSpeaking(replyText, '', {
-                    shouldPresent: options.shouldPresent,
-                    onTextOnly: () => window.addLocalHistoryMessage?.('agent', replyText)
-                });
-                const statusDiv = document.getElementById('status');
-                if (statusDiv) {
-                    const displayText = replyText.length > 50 ? replyText.substring(0, 50) + '...' : replyText;
-                    statusDiv.textContent = 'Speaking: ' + displayText;
-                }
-            }
+            const command = AgentApiModule.parseAgentResponse(replyText);
+            if (command) await AgentApiModule.executeAgentCommand(command, options);
         }
     } catch (error) {
         logger.error('event', `Error sending ${eventType} event:`, error);
@@ -1280,7 +1264,6 @@ const CoreModule = (() => {
         let isCurrentlyTalking = false;
         let mouthTarget = 'a';
         let speakingSpeedMultiplier = 1.0;
-        let isAgentCommandActive = false;
         let speechGeneration = 0;
         const createSpeechPlayer = window.electronAPI ? createJapaneseSpeechPlayer : createBrowserSpeechPlayer;
         const japanesePlayer = createSpeechPlayer({
@@ -1292,94 +1275,6 @@ const CoreModule = (() => {
         if (!window.electronAPI) {
             window.hikariUnlockAudio = () => japanesePlayer.unlock();
             window.hikariResumeAudio = () => japanesePlayer.resume();
-        }
-
-        const vowelShapes = {
-            'a': 'aa', 'e': 'ee', 'i': 'ih', 'o': 'oh', 'u': 'oo'
-        };
-
-        const consonantShapes = {
-            'b': 'b', 'p': 'p', 'm': 'm',
-            'f': 'f', 'v': 'v',
-            't': 't', 'd': 'd', 'n': 'n',
-            's': 's', 'z': 'z', 'sh': 'sh', 'th': 'th',
-            'l': 'l', 'r': 'r'
-        };
-
-        function textToMouthShapes(text) {
-            const shapes = [];
-            const vowels = 'aeiou';
-            const currentText = text.toLowerCase();
-            const hasChinese = /[\u4e00-\u9fff]/.test(currentText);
-
-            if (hasChinese) {
-                const chineseMouthMap = {
-                    '啊': 'aa', '阿': 'aa', '喔': 'oh', '哦': 'oh', '鹅': 'ee', '饿': 'ee',
-                    '我': 'oo', '沃': 'oo', '安': 'aa', '恩': 'ih', '嗯': 'ih',
-                    '一': 'ee', '衣': 'ee', '医': 'ee', '以': 'ih', '意': 'ih',
-                    '你': 'ih', '呢': 'ih', '了': 'l', '的': 'd', '地': 'd', '得': 'd',
-                    '是': 'sh', '不': 'b', '在': 'z', '有': 'ih', '就': 'ih',
-                    '他': 't', '她': 't', '它': 't', '谁': 'sh', '说': 'sh', '话': 'h',
-                    '来': 'l', '去': 'ch', '个': 'g', '和': 'h', '与': 'y',
-                    '你': 'ih', '我': 'oo', '他': 't', '她': 't', '它': 't',
-                    '中': 'jh', '国': 'g', '人': 'r', '大': 'd', '小': 'x'
-                };
-
-                for (let i = 0; i < currentText.length; i++) {
-                    const char = currentText[i];
-                    if (chineseMouthMap[char]) {
-                        shapes.push(chineseMouthMap[char]);
-                    } else {
-                        const randomShape = ['aa', 'ih', 'oh', 'oo'][Math.floor(Math.random() * 4)];
-                        shapes.push(randomShape);
-                    }
-                }
-            } else {
-                for (let i = 0; i < currentText.length; i++) {
-                    const char = currentText[i];
-                    const nextChar = currentText[i + 1] || '';
-                    const combined = char + nextChar;
-
-                    if (consonantShapes[combined]) {
-                        shapes.push(consonantShapes[combined]);
-                        i++;
-                    } else if (vowels.includes(char)) {
-                        shapes.push(vowelShapes[char] || 'aa');
-                    } else if (consonantShapes[char]) {
-                        shapes.push(consonantShapes[char]);
-                    } else if (char === ' ' || char === ',') {
-                        shapes.push('neutral');
-                    } else {
-                        shapes.push('neutral');
-                    }
-                }
-
-                for (let i = shapes.length - 1; i > 0; i--) {
-                    if (shapes[i] === 'neutral' && shapes[i - 1] === 'neutral') {
-                        shapes.splice(i, 1);
-                    } else {
-                        break;
-                    }
-                }
-                
-                const simplifiedShapes = [];
-                for (let i = 0; i < shapes.length; i++) {
-                    if (shapes[i] !== 'neutral' && (i === 0 || shapes[i-1] === 'neutral')) {
-                        simplifiedShapes.push(shapes[i]);
-                    }
-                }
-                return simplifiedShapes;
-            }
-
-            if (shapes.length > 2) {
-                const simplifiedChinese = [];
-                for (let i = 0; i < shapes.length; i += 2) {
-                    simplifiedChinese.push(shapes[i]);
-                }
-                return simplifiedChinese;
-            }
-
-            return shapes;
         }
 
         function applyMouthShape(vrm, shape) {
@@ -1405,14 +1300,14 @@ const CoreModule = (() => {
             vrm.expressionManager.setValue(expressionName, intensity);
         }
 
-        function startSpeaking(text, japaneseText, presentation = {}) {
+        function startSpeaking(text, presentation = {}) {
             logger.info('lip', 'Queued speech', text);
             presentation.onTiming?.('speech_queued');
             const generation = speechGeneration;
-            const prepared = presentation.prepared || (japaneseText
-                ? prepareReplySpeech((input, options) => services.synthesize(input, options), text, japaneseText, presentation.segments,
-                    Math.max(0.5, Math.min(2, speakingSpeedMultiplier)))
-                : null);
+            const prepared = presentation.prepared || prepareSpeechSegments(
+                (input, options) => services.synthesize(input, options), text,
+                Math.max(0.5, Math.min(2, speakingSpeedMultiplier))
+            );
             const preparations = Array.isArray(prepared) ? prepared : prepared ? [prepared] : [];
             preparations.forEach(item => pendingSpeechPreparations.add(item));
             presentation = { ...presentation, prepared };
@@ -1420,9 +1315,7 @@ const CoreModule = (() => {
                 .catch(() => {})
                 .then(() => {
                     if (generation !== speechGeneration || presentation.shouldPresent?.() === false) { cancelSpeechPreparations(prepared); return; }
-                    return japaneseText === undefined
-                        ? speakNow(text)
-                        : speakBilingualNow(text, japaneseText, presentation);
+                    return speakJapaneseNow(text, presentation);
                 }).finally(() => preparations.forEach(item => pendingSpeechPreparations.delete(item)));
             return speechQueue;
         }
@@ -1430,7 +1323,7 @@ const CoreModule = (() => {
         let speechQueue = Promise.resolve();
         const pendingSpeechPreparations = new Set();
 
-        async function speakBilingualNow(chineseText, japaneseText, presentation) {
+        async function speakJapaneseNow(text, presentation) {
             if (presentation.shouldPresent?.() === false) { cancelSpeechPreparations(presentation.prepared); return; }
             presentation.onTiming?.('speech_queue_released');
             const generation = speechGeneration;
@@ -1445,9 +1338,9 @@ const CoreModule = (() => {
             }
             let displayed = false;
             let pendingCaptionShown = false;
-            const displayReply = (withVoice, subtitle = chineseText) => {
+            const displayReply = (withVoice, subtitle = text) => {
                 if (generation !== speechGeneration) return;
-                showSpeakingBubble(formatCaption(subtitle));
+                showSpeakingBubble(subtitle, { preservePunctuation: true });
                 displayCharacterAtIndex(getWordCount() - 1);
                 if (statusDiv) statusDiv.textContent = 'Speaking: ' + subtitle;
                 if (displayed) return;
@@ -1456,24 +1349,18 @@ const CoreModule = (() => {
                 else presentation.onTextOnly?.();
             };
             try {
-                if (!japaneseText) {
-                    displayReply(false);
-                    if (statusDiv) statusDiv.textContent = '未收到日文翻譯，已顯示中文回覆。';
-                    await new Promise(resolve => setTimeout(resolve, 3500));
-                    return;
-                }
                 if (statusDiv) statusDiv.textContent = '準備日文語音…';
-                const pairs = getReplySegments(chineseText, japaneseText, presentation.segments);
+                const chunks = splitSpeechSegments(text);
                 const preparedSegments = Array.isArray(presentation.prepared)
                     ? presentation.prepared
                     : presentation.prepared ? [presentation.prepared] : [];
                 let playbackSettings = null;
                 let playbackSetupComplete = false;
                 let completed = true;
-                for (let index = 0; index < pairs.length; index += 1) {
+                for (let index = 0; index < chunks.length; index += 1) {
                     if (generation !== speechGeneration) { completed = false; break; }
                     completed = await japanesePlayer.speak(
-                        pairs[index].text_ja,
+                        chunks[index],
                         Math.max(0.5, Math.min(2, speakingSpeedMultiplier)),
                         {
                             prepared: preparedSegments[index],
@@ -1481,7 +1368,7 @@ const CoreModule = (() => {
                             onBlocked: () => {
                                 if (generation !== speechGeneration || presentation.shouldPresent?.() === false) return;
                                 pendingCaptionShown = true;
-                                showSpeakingBubble(formatCaption(pairs[index].text));
+                                showSpeakingBubble(chunks[index], { preservePunctuation: true });
                                 displayCharacterAtIndex(getWordCount() - 1);
                             },
                             onTiming: index === 0 ? presentation.onTiming : undefined,
@@ -1511,7 +1398,7 @@ const CoreModule = (() => {
                             },
                             onStart: () => {
                                 window.releaseDragExpression?.();
-                                displayReply(true, pairs[index].text);
+                                displayReply(true, chunks[index]);
                             },
                         }
                     );
@@ -1524,7 +1411,7 @@ const CoreModule = (() => {
                 logger.warn('tts', 'Japanese voice unavailable:', error);
                 if (generation !== speechGeneration || presentation.shouldPresent?.() === false) return;
                 displayReply(false);
-                if (statusDiv) statusDiv.textContent = '日文語音暫時無法播放，中文回覆已保留。';
+                if (statusDiv) statusDiv.textContent = '日文語音暫時無法播放，日文回覆已保留。';
                 await new Promise(resolve => setTimeout(resolve, 3500));
             } finally {
                 if (volumeSessionId) {
@@ -1546,281 +1433,6 @@ const CoreModule = (() => {
             }
         }
 
-        async function speakNow(text) {
-            logger.info('lip', 'startSpeaking', text);
-            isCurrentlyTalking = false;
-            mouthTarget = 'neutral';
-            updateDebugDisplay(text, 0);
-
-            if (currentIdleTimeout) {
-                clearTimeout(currentIdleTimeout);
-                currentIdleTimeout = null;
-                idleSuspended = true;
-            }
-
-            if (!isAgentCommandActive) {
-                loadIdleLoop().then(() => {
-                    logger.info('lip', 'idle loop loaded in background');
-                }).catch(err => {
-                    logger.warn('lip', 'background idle load failed', err);
-                });
-            }
-
-            isCurrentlyTalking = true;
-            updateHikariState({ speaking: true });
-
-            // Use the same newline and punctuation boundaries as bilingual playback.
-            const lines = splitSpeechSegments(text);
-            logger.info('lip', 'Text split into', lines.length, 'lines');
-            
-            // Process lines sequentially with a small pause between them
-            await processLinesSequentially(lines);
-        }
-
-        async function processLinesSequentially(lines) {
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (!line) continue;
-                
-                logger.info('lip', 'Speaking line', i + 1, 'of', lines.length, ':', line);
-                
-                // Show this line in the bubble
-                showSpeakingBubble(formatCaption(line));
-                
-                // Speak this line
-                await speakLine(line);
-                
-                // Small pause between lines (except after the last line)
-                if (i < lines.length - 1) {
-                    logger.info('lip', 'Pausing between lines...');
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                }
-            }
-            
-            // All lines finished
-            isCurrentlyTalking = false;
-            updateHikariState({ speaking: false });
-            mouthTarget = 'neutral';
-            hideSpeakingBubble();
-            
-            // Immediately reset facial expression to neutral after speech completes
-            if (window.resetExpressionToNeutral) {
-                window.resetExpressionToNeutral();
-            }
-            
-            if (idleSuspended) {
-                scheduleRandomIdle();
-                idleSuspended = false;
-            }
-        }
-
-        function speakLine(text) {
-            const hasChinese = /[\u4e00-\u9fff]/.test(text);
-            
-            // For Chinese text, use timer-based approach since onboundary fires at word boundaries
-            // (Chinese has no spaces, so it only fires once at the end)
-            if (hasChinese) {
-                return speakLineWithTimer(text);
-            }
-            
-            // For non-Chinese, use speech synthesis with onboundary events
-            if ('speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined') {
-                return speakLineWithSpeechSynthesis(text);
-            }
-
-            return speakLineWithTimer(text);
-        }
-
-        function speakLineWithSpeechSynthesis(text) {
-            return new Promise((resolve) => {
-                const utterance = new SpeechSynthesisUtterance(text);
-                const hasChinese = /[\u4e00-\u9fff]/.test(text);
-                let currentUnitIndex = -1;
-                let mouthCycleTimer = null;
-                let settled = false;
-
-                const clearMouthCycle = () => {
-                    if (mouthCycleTimer) {
-                        clearInterval(mouthCycleTimer);
-                        mouthCycleTimer = null;
-                    }
-                };
-
-                const finish = () => {
-                    if (settled) return;
-                    settled = true;
-                    clearMouthCycle();
-                    mouthTarget = 'neutral';
-                    resolve();
-                };
-
-                utterance.rate = speakingSpeedMultiplier;
-                utterance.pitch = 1;
-                utterance.volume = 0.9;
-
-                const voices = window.speechSynthesis.getVoices();
-                const preferredVoice = voices.find(voice => {
-                    const language = voice.lang.toLowerCase();
-                    return hasChinese ? language.startsWith('zh') : language.startsWith('en');
-                });
-                if (preferredVoice) {
-                    utterance.voice = preferredVoice;
-                }
-
-                // Pre-compute grapheme clusters for accurate index mapping
-                const graphemes = splitIntoGraphemes(text);
-                
-                utterance.onboundary = (event) => {
-                    const charIndex = event.charIndex || 0;
-                    const remainingText = text.slice(charIndex);
-                    const wordMatch = remainingText.match(/[^\s]+/);
-                    const spokenUnit = wordMatch ? wordMatch[0] : text[charIndex] || '';
-                    
-                    // Map UTF-16 charIndex to grapheme index for accurate display
-                    let unitIndex;
-                    if (hasChinese) {
-                        // Count graphemes up to charIndex
-                        const segmenter = new Intl.Segmenter('zh', { granularity: 'grapheme' });
-                        const segments = Array.from(segmenter.segment(text.slice(0, charIndex)));
-                        unitIndex = segments.length;
-                    } else {
-                        unitIndex = text.slice(0, charIndex).trim().split(/\s+/).filter(Boolean).length;
-                    }
-
-                    if (unitIndex !== currentUnitIndex) {
-                        currentUnitIndex = unitIndex;
-                        updateDebugDisplay(text, unitIndex, hasChinese ? spokenUnit[0] : null);
-                    }
-
-                    const mouthShapes = textToMouthShapes(spokenUnit);
-                    clearMouthCycle();
-                    let shapeIndex = 0;
-
-                    const applyNextShape = () => {
-                        mouthTarget = mouthShapes[shapeIndex % Math.max(mouthShapes.length, 1)] || 'neutral';
-                        shapeIndex++;
-                    };
-
-                    applyNextShape();
-                    if (mouthShapes.length > 1) {
-                        mouthCycleTimer = setInterval(applyNextShape, 80 / speakingSpeedMultiplier);
-                    }
-
-                    // Display up to the current grapheme index
-                    displayCharacterAtIndex(Math.min(unitIndex, graphemes.length - 1));
-                };
-
-                utterance.onstart = () => window.releaseDragExpression?.();
-                utterance.onend = finish;
-                utterance.onerror = (event) => {
-                    logger.warn('lip', 'Speech synthesis error:', event.error);
-                    finish();
-                };
-
-                window.speechSynthesis.cancel();
-                window.speechSynthesis.speak(utterance);
-            });
-        }
-
-        function speakLineWithTimer(text) {
-            return new Promise((resolve) => {
-                logger.info('lip', 'Speaking line:', text);
-                updateDebugDisplay(text, 0);
-
-                const hasChinese = /[\u4e00-\u9fff]/.test(text);
-                let units;
-                let currentUnitIndex = 0;
-                let speakingStartTime = performance.now();
-                
-                let unitShapes = [];
-                let totalShapes = 0;
-                
-                // Use grapheme clusters for Chinese to properly handle emojis and combined characters
-                // Match the same splitting logic as showSpeakingBubble (no filtering to keep indices aligned)
-                if (hasChinese) {
-                    units = splitIntoGraphemes(text);
-                } else {
-                    units = text.split(' ').filter(word => word.length > 0);
-                }
-            
-                units.forEach(unit => {
-                    const shapes = textToMouthShapes(unit);
-                    unitShapes.push(shapes);
-                    totalShapes += shapes.length;
-                });
-                
-                const speakingDuration = (totalShapes * 80) + (units.length * 50);
-                logger.info('lip', 'units for speech', units, 'total shapes:', totalShapes, 'duration:', speakingDuration);
-
-                function processNextUnit() {
-                    if (currentUnitIndex >= units.length) {
-                        mouthTarget = 'neutral';
-                        updateDebugDisplay(text, -1);
-                        
-                        const lastCharIndex = units.length - 1;
-                        displayCharacterAtIndex(lastCharIndex);
-                        
-                        if (idleSuspended) {
-                            scheduleRandomIdle();
-                            idleSuspended = false;
-                        }
-                        resolve();
-                        return;
-                    }
-
-                    const unit = units[currentUnitIndex];
-                    logger.info('lip', 'processing unit', currentUnitIndex, unit);
-
-                    if (hasChinese) {
-                        updateDebugDisplay(text, currentUnitIndex, unit);
-                    } else {
-                        updateDebugDisplay(text, currentUnitIndex);
-                    }
-
-                    const mouthShapes = unitShapes[currentUnitIndex] || textToMouthShapes(unit);
-                    logger.info('lip', 'mouthShapes', mouthShapes);
-
-                    if (mouthShapes.length === 0) {
-                        currentUnitIndex++;
-                        setTimeout(processNextUnit, 400 / speakingSpeedMultiplier);
-                        return;
-                    }
-
-                    let shapeIndex = 0;
-
-                    function processNextShape() {
-                        if (shapeIndex >= mouthShapes.length) {
-                            currentUnitIndex++;
-                            updateDebugDisplay(text, -1);
-                            setTimeout(processNextUnit, 50 / speakingSpeedMultiplier);
-                            return;
-                        }
-
-                        const shape = mouthShapes[shapeIndex];
-                        mouthTarget = shape;
-                        shapeIndex++;
-
-                        const elapsed = performance.now() - speakingStartTime;
-                        const progressRatio = elapsed / speakingDuration;
-                        // Use grapheme index for Chinese, character index for others
-                        const charIndex = hasChinese 
-                            ? Math.floor(progressRatio * units.length)
-                            : Math.floor(progressRatio * text.length);
-                        
-                        displayCharacterAtIndex(Math.min(charIndex, units.length - 1));
-
-                        const baseDuration = 80;
-                        const shapeDuration = baseDuration / speakingSpeedMultiplier;
-                        setTimeout(processNextShape, shapeDuration);
-                    }
-
-                    processNextShape();
-                }
-
-                processNextUnit();
-            });
-        }
-
         function setSpeakingSpeed(multiplier) {
             logger.info('lip', 'setSpeakingSpeed', multiplier);
             const value = Number(multiplier);
@@ -1832,29 +1444,6 @@ const CoreModule = (() => {
             return speakingSpeedMultiplier;
         }
 
-        function updateDebugDisplay(text, unitIndex, currentUnit = null) {
-            const hasChinese = /[\u4e00-\u9fff]/.test(text);
-
-            if (unitIndex === -1) {
-                statusDiv.textContent = 'Speaking complete';
-                return;
-            }
-
-            if (hasChinese) {
-                const characters = splitIntoGraphemes(text);
-                const spokenText = characters.slice(0, unitIndex + 1).join('');
-                const currentChar = currentUnit || characters[unitIndex];
-                const remainingText = characters.slice(unitIndex + 1).join('');
-
-                const debugText = `Speaking: ${spokenText}<span class="current-word">${currentChar}</span>${remainingText}`;
-                statusDiv.innerHTML = debugText;
-            } else {
-                const words = text.split(' ').filter(word => word.length > 0);
-                const debugText = `Speaking: ${words.slice(0, unitIndex + 1).join(' ')}<span class="current-word">${words[unitIndex]}</span>${words.slice(unitIndex + 1).join(' ')}`;
-                statusDiv.innerHTML = debugText;
-            }
-        }
-
         function stopSpeaking() {
             speechGeneration++;
             japanesePlayer.stop();
@@ -1862,9 +1451,6 @@ const CoreModule = (() => {
             pendingSpeechPreparations.clear();
             isCurrentlyTalking = false;
             mouthTarget = 'neutral';
-            if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel();
-            }
         }
 
         function update(vrm, delta) {
@@ -1893,8 +1479,7 @@ const CoreModule = (() => {
             stopSpeaking,
             setSpeakingSpeed,
             getSpeakingSpeed,
-            isTalking: () => isCurrentlyTalking,
-            setAgentCommandActive: (active) => { isAgentCommandActive = active; }
+            isTalking: () => isCurrentlyTalking
         };
     }
 
@@ -2110,8 +1695,8 @@ const CoreModule = (() => {
         headBoneWarningLogged = false;
     }
 
-    function showSpeakingBubble(text) {
-        text = formatCaption(text);
+    function showSpeakingBubble(text, { preservePunctuation = false } = {}) {
+        if (!preservePunctuation) text = formatCaption(text);
         clearTimeout(bubbleHideTimer);
         clearTimeout(bubbleFadeTimer);
         clearTimeout(wordDisplayTimer);
@@ -3748,17 +3333,10 @@ AVAILABLE EXPRESSIONS (always applied during speaking):
 - shocked
 
 RESPONSE FORMAT (JSON):
-For spoken replies in this session, respond with a JSON object containing:
-{ "segments": [{"text":"老師早晨！","text_ja":"せんせいおはよう！"},{"text":"今日點呀？","text_ja":"きょうはどう？"}],
-  "text": "老師早晨！\\n今日點呀？",
-  "text_ja": "せんせいおはよう！\\nきょうはどう？",
-  "animation": {
-    "file": "idle_airplane.vrma",
-    "timing": "during"
-  },
-  "expression": { "name": "neutral" }}
+Example:
+{"text": "せんせい、おかえり～", "animation": null, "expression": {"name": "neutral"}}
 
-${BILINGUAL_RESPONSE_INSTRUCTIONS}
+${RESPONSE_INSTRUCTIONS}
 Animation and expression may be null when unnecessary. Use valid JSON with double quotes.
 
 ANIMATION TIMING OPTIONS:
@@ -3768,7 +3346,7 @@ ANIMATION TIMING OPTIONS:
 
 IMPORTANT: Do NOT use markdown code blocks (\`\`\`json or \`\`\`) around your JSON response. 
 Do NOT include any extra text or explanations.
-Just provide the raw JSON object directly. Generate segments first. Each segment field must have uninterrupted words and ONE final 。 or ？ or ！, with NO commas or other internal phrase boundaries. Before sending, check that each pair contains exactly one punctuation-delimited phrase in each language, then copy and join those pairs into text and text_ja using JSON-escaped line breaks. Do not write or translate the full text fields independently.`;
+Just provide the raw JSON object directly.`;
 
     let conversationHistory = [];
     let initialGreetingRequest = null;
@@ -3784,14 +3362,14 @@ Just provide the raw JSON object directly. Generate segments first. Each segment
     window.hikariReplyTimings = { getRecords: replyTimings.getRecords, exportJSON: replyTimings.exportJSON, clear: replyTimings.clear };
 
     function prepareCommandSpeech(command) {
-      const japaneseText = normalizeJapaneseText(command.text_ja);
+      const japaneseText = normalizeJapaneseText(command.text);
       if (!japaneseText) return null;
       if (!preparedCommands.has(command)) {
         const savedSpeed = Number.parseFloat(localStorage.getItem('electron_speaking_speed'));
         const speed = window.lipSyncSystem?.getSpeakingSpeed?.() ?? (Number.isFinite(savedSpeed) ? savedSpeed : 1);
         const timing = commandTimings.get(command);
         let chunk = 0;
-        preparedCommands.set(command, prepareReplySpeech(
+        preparedCommands.set(command, prepareSpeechSegments(
           async (input, options) => {
             const index = chunk++;
             const end = timing?.span('audio_render', index);
@@ -3803,50 +3381,65 @@ Just provide the raw JSON object directly. Generate segments first. Each segment
               return audio;
             } catch (error) { end?.(error?.name === 'AbortError' ? 'cancelled' : 'failed'); throw error; }
           },
-          command.text, japaneseText, command.segments, Math.max(0.5, Math.min(2, speed))
+          japaneseText, Math.max(0.5, Math.min(2, speed))
         ));
       }
       return preparedCommands.get(command);
     }
     let agentResponseQueue = Promise.resolve();
 
+    const HIKARI_SESSION_KEY = 'hikari_session_id';
+    const HIKARI_SESSION_PROMPTED_KEY = 'hikari_session_prompted';
+
+    function getHikariSessionId() {
+      let sessionId = localStorage.getItem(HIKARI_SESSION_KEY);
+      if (!sessionId) {
+        sessionId = 'hikari-main';
+        localStorage.setItem(HIKARI_SESSION_KEY, sessionId);
+      }
+      return sessionId;
+    }
+
+    function isHikariSessionPrompted(sessionId) {
+      return localStorage.getItem(HIKARI_SESSION_PROMPTED_KEY) === sessionId;
+    }
+
+    function markHikariSessionPrompted(sessionId) {
+      localStorage.setItem(HIKARI_SESSION_PROMPTED_KEY, sessionId);
+    }
+
     async function requestAgentReply(messages, options = {}) {
       const baseUrl = getHttpBaseUrl();
       const token = localStorage.getItem('Hermes_token') || CONFIG.token;
+      const sessionId = options.sessionId || getHikariSessionId();
+      const includeSystemPrompt = !isHikariSessionPrompted(sessionId);
       const environmentContext = worldStateStore.serializeForAgent();
       const messagesToSend = [
-        { role: 'system', content: SYSTEM_INSTRUCTIONS },
+        ...(includeSystemPrompt ? [{ role: 'system', content: SYSTEM_INSTRUCTIONS }] : []),
         ...(environmentContext ? [{ role: 'system', content: environmentContext }] : []),
         ...messages
       ];
+      const url = window.electronAPI ? `${baseUrl}/v1/chat/completions` : '/api/chat';
+      logger.info('http', 'Sending agent request to:', url, `sessionId=${sessionId}`);
       const timing = replyTimings.begin(options.requestType || 'conversation');
       try {
-        for (let attempt = 0; attempt < 2; attempt++) {
-          const endHttp = timing.span('agent_http', attempt);
-          let response;
-          let data;
-          try {
-            response = await services.chat({
-              model: 'hikari', messages: messagesToSend
-            }, { gatewayUrl: baseUrl, token, signal: options.signal });
-            if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-            timing.mark(`http_${attempt + 1}_headers_received`);
-            data = await response.json();
-            endHttp('received');
-          } catch (error) { endHttp(error?.name === 'AbortError' ? 'cancelled' : 'failed'); throw error; }
-          const reply = data.choices?.[0]?.message?.content;
-          if (!reply) throw new Error('No content in HTTP response');
-          if (!replyNeedsAlignmentRepair(reply)) { timing.responseReady(reply); return reply; }
-          if (attempt === 1) {
-            logger.warn('http', 'Agent punctuation remains unaligned; retaining complete bilingual pairs for playback.');
-            timing.responseReady(reply);
-            return reply;
-          }
-          messagesToSend.push(
-            { role: 'assistant', content: reply },
-            { role: 'user', content: buildAlignmentRepairPrompt(reply) }
-          );
-        }
+        const endHttp = timing.span('agent_http', 0);
+        let response;
+        let data;
+        try {
+          response = await services.chat({
+            model: 'hikari', messages: messagesToSend
+          }, { gatewayUrl: baseUrl, token, signal: options.signal, sessionId });
+          if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+          timing.mark('http_1_headers_received');
+          if (includeSystemPrompt) markHikariSessionPrompted(sessionId);
+          data = await response.json();
+          endHttp('received');
+        } catch (error) { endHttp(error?.name === 'AbortError' ? 'cancelled' : 'failed'); throw error; }
+        const reply = data.choices?.[0]?.message?.content;
+        if (!reply) throw new Error('No content in HTTP response');
+        timing.responseReady(reply);
+        return reply;
       } catch (error) {
         timing.finish(error?.name === 'AbortError' ? 'cancelled' : 'http_failed');
         throw error;
@@ -3854,13 +3447,9 @@ Just provide the raw JSON object directly. Generate segments first. Each segment
     }
 
     async function sendAgentViaHttp(message, addToHistory = true, options = {}) {
-      const baseUrl = getHttpBaseUrl();
-      const url = `${baseUrl}/v1/chat/completions`;
-      logger.info('http', 'Sending agent request to:', url);
-      
       if (addToHistory) {
         conversationHistory.push({ role: 'user', content: options.attachment ? `${message}\n[${window.electronAPI ? 'Screenshot' : 'Image'} attached to this turn.]` : message });
-        // Keep browser sessions within the local server's bounded request size.
+        // Keep browser-side conversation history bounded.
         if (!window.electronAPI) {
           let characters = conversationHistory.reduce((sum, item) => sum + item.content.length, 0);
           while (conversationHistory.length > 1 && (conversationHistory.length > 60 || characters > 60000)) {
@@ -3868,15 +3457,15 @@ Just provide the raw JSON object directly. Generate segments first. Each segment
           }
         }
       }
-      const outbound = (addToHistory ? conversationHistory : [{ role: 'user', content: message }]).map(item => ({ ...item }));
-      if (options.attachment) outbound[outbound.length - 1].content = screenshotMessageContent(message, options.attachment);
-      const replyText = await requestAgentReply(outbound, options);
+      const replyText = await requestAgentReply([
+        { role: 'user', content: options.attachment ? screenshotMessageContent(message, options.attachment) : message }
+      ], options);
 
-      if (addToHistory) {
-        conversationHistory.push({ role: 'assistant', content: replyText });
+      const command = parseAgentResponse(replyText);
+      if (addToHistory && command) {
+        conversationHistory.push({ role: 'assistant', content: command.text });
       }
-      
-      return replyText;
+      return command;
     }
 
     function prepareInitialGreeting() {
@@ -3948,11 +3537,7 @@ Use the shared response protocol for this greeting.`;
             const parsedResponse = initialGreetingCommand || parseAgentResponse(reply);
             if (parsedResponse && parsedResponse.text) {
               await executeAgentCommand(parsedResponse, { shouldPresent: () => !initialGreetingCancelled, preserveDraft: !window.electronAPI });
-            } else {
-              window.addLocalHistoryMessage?.('agent', reply);
-              if (window.lipSyncSystem) {
-                await window.lipSyncSystem.startSpeaking(reply, '');
-              }
+
             }
           }
 
@@ -4003,7 +3588,7 @@ Use the shared response protocol for this greeting.`;
       setTimeout(() => { if (typeof updateHikariState === 'function') updateHikariState({ directInteraction: false }); }, 350);
       try {
         // Use the same response contract as greetings, touch, and event replies.
-        const replyText = await sendAgentViaHttp(message, true, options);
+        const parsedResponse = await sendAgentViaHttp(message, true, options);
 
         // Add user message to local history — but filter out system-generated touch messages
         if (window.addLocalHistoryMessage) {
@@ -4012,22 +3597,11 @@ Use the shared response protocol for this greeting.`;
           }
         }
 
-        // Ignore non-JSON replies (e.g., "No response from Hermes")
-        if (replyText.includes('No response from Hermes') || replyText.trim().length < 2) {
-          logger.info('http', 'Ignoring non-JSON reply:', replyText.substring(0, 50));
-          if (window.enableMessaging) window.enableMessaging();
-          if (window.resetMessagingPanel) window.resetMessagingPanel();
-          return false;
-        }
-
-        const parsedResponse = parseAgentResponse(replyText);
-        
         if (parsedResponse && parsedResponse.text) {
           await executeAgentCommand(parsedResponse);
           return true;
         } else {
-          // Not valid JSON — ignore it
-          logger.info('http', 'Reply does not match required JSON format, ignoring:', replyText.substring(0, 50));
+          logger.info('http', 'Reply has no dialogue');
           if (window.enableMessaging) window.enableMessaging();
           if (window.resetMessagingPanel) window.resetMessagingPanel();
           return false;
@@ -4054,26 +3628,19 @@ Use the shared response protocol for this greeting.`;
      */
     function extractFieldsViaRegex(text) {
       try {
+        if (/(?:'|")(?:reply|react|speak)(?:'|")\s*:\s*false\b/.test(text)) return { reply: false };
         const result = {};
         
         // Extract text field - handles both double and single quotes, escaped quotes, and newlines
-        const textMatch = text.match(/(?:'text'|"text")\s*:\s*(?:'([^']*(?:\\'[^']*)*)'|"((?:[^"\\]|\\.)*)")/s);
+        const textMatch = text.match(/(?:'text'|"text")\s*:\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/s);
         if (textMatch) {
           result.text = (textMatch[1] || textMatch[2] || '')
             .replace(/\\'/g, "'")
             .replace(/\\"/g, '"')
-            .replace(/\\n/g, '\n')
-            .replace(/\\r/g, '\r')
             .replace(/\\t/g, '\t');
         }
         
         // Extract animation file
-        const japaneseMatch = text.match(/(?:'text_ja'|"text_ja")\s*:\s*(?:'([^']*(?:\\'[^']*)*)'|"((?:[^"\\]|\\.)*)")/s);
-        if (japaneseMatch) {
-          result.text_ja = normalizeJapaneseText((japaneseMatch[1] || japaneseMatch[2] || '')
-            .replace(/\\'/g, "'").replace(/\\"/g, '"'));
-        }
-
         const animFileMatch = text.match(/(?:'file'|"file")\s*:\s*(?:'([^']*)'|"([^"]*)")/);
         if (animFileMatch) {
           result.animation = { file: animFileMatch[1] || animFileMatch[2] || null };
@@ -4109,69 +3676,30 @@ Use the shared response protocol for this greeting.`;
     function parseAgentResponse(text) {
       const timing = replyTimings.consume(text);
       try {
-        let parsed;
-        let needsUnescape = false;
+        let response;
         try {
-          // First attempt: parse raw text as-is (handles properly formatted JSON)
-          parsed = JSON.parse(text.trim());
-        } catch (e1) {
-          // Second attempt: sanitize literal newlines/tabs in string values
-          // Only do this if the raw parse failed (agent returned malformed JSON)
-          logger.info('agent', 'Raw JSON parse failed, trying with newline sanitization');
-          try {
-            const sanitized = text
-              .trim()
-              .replace(/\n/g, '\\n')
-              .replace(/\r/g, '\\r')
-              .replace(/\t/g, '\\t');
-            parsed = JSON.parse(sanitized);
-            needsUnescape = true;
-          } catch (e2) {
-            logger.info('agent', 'Sanitized parse failed, trying single quote handling');
-            const fixedText = text
-              .trim()
-              .replace(/\n/g, '\\n')
-              .replace(/\r/g, '\\r')
-              .replace(/\t/g, '\\t')
-              .replace(/'/g, '"')
-              .replace(/""/g, '""');
-            try {
-              parsed = JSON.parse(fixedText);
-              needsUnescape = true;
-            } catch (e3) {
-              // Last resort: try regex extraction of text, animation, expression fields
-              logger.info('agent', 'JSON parse failed, trying regex field extraction');
-              parsed = extractFieldsViaRegex(text);
-              if (!parsed) {
-                timing?.finish('invalid_response');
-                logger.warn('agent', 'Failed to parse JSON response:', e3);
-                return null;
-              }
-            }
-          }
-        }
-        
-        const pairedSegments = normalizePairedSegments(parsed.segments);
-        if (pairedSegments) {
-          parsed.segments = pairedSegments;
-          parsed.text = pairedSegments.map(item => item.text).join('\n');
-          parsed.text_ja = pairedSegments.map(item => item.text_ja).join('\n');
-        } else {
-          delete parsed.segments;
+          response = JSON.parse(text.trim());
+        } catch {
+          response = extractFieldsViaRegex(text) ?? { text: text.trim() };
         }
 
-        if (!parsed.text || typeof parsed.text !== 'string') {
-          timing?.finish(parsed.react === false || parsed.speak === false ? 'no_speech' : 'invalid_response');
-          logger.warn('agent', 'Invalid JSON response: missing or invalid text field');
+        if (response?.reply === false || response?.react === false || response?.speak === false) {
+          timing?.finish('no_speech');
           return null;
         }
-        
-        // Unescape any \n back to actual newlines in the text field
-        parsed.text = parsed.text.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
-        parsed.text_ja = normalizeJapaneseText(parsed.text_ja);
-        
+
+        const parsed = {
+          text: normalizeJapaneseText(response?.text),
+          animation: response?.animation ?? null,
+          expression: response?.expression ?? null
+        };
+        if (!parsed.text) {
+          timing?.finish('invalid_response');
+          return null;
+        }
+
         if (parsed.animation && parsed.animation.file) {
-                    const validAnimations = getAvailableAnimationFiles();
+          const validAnimations = getAvailableAnimationFiles();
           
           if (!validAnimations.includes(parsed.animation.file)) {
             logger.warn('agent', 'Invalid animation:', parsed.animation.file);
@@ -4265,7 +3793,6 @@ Use the shared response protocol for this greeting.`;
       };
       const presentation = {
         shouldPresent: () => historyAdded || options.shouldPresent?.() !== false,
-        segments: command.segments,
         prepared: prepareCommandSpeech(command),
         onTiming: stage => timing?.mark(stage),
         beforePlay: async () => {
@@ -4303,7 +3830,7 @@ Use the shared response protocol for this greeting.`;
           statusDiv.textContent = '準備日文語音…';
         }
         
-        await window.lipSyncSystem.startSpeaking(command.text, normalizeJapaneseText(command.text_ja), presentation);
+        await window.lipSyncSystem.startSpeaking(command.text, presentation);
         if (options.shouldPresent?.() === false) return false;
         
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -4384,9 +3911,7 @@ Use the shared response protocol for this greeting.`;
      */
     async function sendAgentMessageRaw(message, options = {}) {
       try {
-        const oneShot = options.requestType === 'awareness' || options.requestType === 'greeting';
         return await requestAgentReply([
-          ...(oneShot ? [] : conversationHistory),
           { role: 'user', content: options.attachment
             ? screenshotMessageContent(message, normalizeScreenshotAttachment(options.attachment))
             : message }

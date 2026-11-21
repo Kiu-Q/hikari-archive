@@ -478,12 +478,19 @@ export function createHikariServer(options = {}) {
       response.once('close', abortUpstream);
 
       try {
+        const sessionId = request.headers['x-hermes-session-id'];
+        const headers = {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`
+        };
+        // Node joins repeated custom headers in request.headers.
+        if (typeof sessionId === 'string' && sessionId.length > 0 && sessionId.length <= 128
+          && request.headersDistinct['x-hermes-session-id']?.length === 1) {
+          headers['X-Hermes-Session-Id'] = sessionId;
+        }
         const upstream = await fetchImpl(HERMES_URL, {
           method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${token}`
-          },
+          headers,
           body: JSON.stringify({ model: 'hikari', messages }),
           signal: upstreamController.signal
         });
@@ -507,7 +514,8 @@ export function createHikariServer(options = {}) {
           sendJson(response, 502, errorBody('Hermes returned invalid JSON'));
           return;
         }
-        sendJson(response, 200, value);
+        const upstreamSessionId = upstream.headers.get('x-hermes-session-id');
+        sendJson(response, 200, value, upstreamSessionId ? { 'X-Hermes-Session-Id': upstreamSessionId } : {});
       } catch {
         if (timedOut) sendJson(response, 504, errorBody('Hermes request timed out'));
         else if (!response.destroyed) sendJson(response, 502, errorBody('Hermes is unavailable'));

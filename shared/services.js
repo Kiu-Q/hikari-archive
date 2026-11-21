@@ -309,11 +309,14 @@ export function createServices({
       }
       return httpTts.synthesize(request, options);
     },
-    async chat({ messages, model } = {}, { gatewayUrl, token, signal } = {}) {
+    async chat({ messages, model } = {}, { gatewayUrl, token, signal, sessionId } = {}) {
       if (!Array.isArray(messages)) throw new TypeError('Chat messages must be an array');
       const body = { messages };
       if (model !== undefined) body.model = model;
       const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+      if (typeof sessionId === 'string' && sessionId.length > 0 && sessionId.length <= 128) {
+        headers['X-Hermes-Session-Id'] = sessionId;
+      }
       let url = '/api/chat';
 
       if (isElectron) {

@@ -20,7 +20,7 @@ const server = createHikariServer({ port: 3099, allowedOrigins: ['http://127.0.0
   ttsService: { synthesize: async () => ({ audio: wav, durationSeconds: 0.1, sampleRate: 24000, channels: 1 }) },
   fetch: async (_url, init) => {
     requests.push(JSON.parse(init.body));
-    return Response.json({ choices: [{ message: { content: JSON.stringify({ text: '?©æ™¨ï¼?, text_ja: '?Šã¯?ˆã?ï¼?, segments: [{ text: '?©æ™¨ï¼?, text_ja: '?Šã¯?ˆã?ï¼? }] }) } }] });
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ text: "ãŠã¯ã‚ˆã†ï¼", animation: null, expression: null }) } }] });
   }
 });
 let window;

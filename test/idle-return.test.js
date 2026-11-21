@@ -71,7 +71,7 @@ test('welcome-back guidance uses observed input and shared speech protocol witho
   const prompt = buildAwarenessPrompt({ trigger: 'idle_return', activity: { idleDurationMs: 90000, inputType: 'clicking' } });
   assert.match(prompt, /Quiet period before resumed input: 90s/);
   assert.match(prompt, /short, warm welcome-back greeting/);
-  assert.match(prompt, /shared bilingual response/);
+  assert.match(prompt, /shared spoken response/);
   assert.match(prompt, /Do not claim the user physically left/);
 });
 

@@ -154,7 +154,7 @@ async function run() {
       data.setUint32(24,rate,true); data.setUint32(28,rate*2,true); data.setUint16(32,2,true); data.setUint16(34,16,true);
       ascii(36,'data'); data.setUint32(40,samples*2,true);
       let start;
-      await window.lipSyncSystem.startSpeaking('好呀！', 'はい！', {
+      await window.lipSyncSystem.startSpeaking('はい！', {
         prepared:[{result:Promise.resolve({audio, durationSeconds:.25, sampleRate:rate, channels:1})}],
         beforePlay:async () => { start = await window.prepareSpeakingAnimation(window.getVRMAAnimationUrl('wave_fast.vrma')); },
         onStart:() => { window.smokeVoiceStarted = true; start?.(); },

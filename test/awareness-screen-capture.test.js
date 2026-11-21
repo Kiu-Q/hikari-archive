@@ -5,7 +5,7 @@ import { awarenessConfig } from '../electron/awareness-config.js';
 
 const candidate = { id: 'event-1', timestamp: Date.now(), trigger: 'window_changed', priority: 'normal', context: { appName: 'Editor', windowTitle: 'notes.md' } };
 const capture = { dataUrl: 'data:image/jpeg;base64,/9j/2Q==', width: 1120, height: 630, capturedAt: Date.now(), context: { appName: 'Browser', windowTitle: 'New page' } };
-const spoken = JSON.stringify({ reply: true, text: '有新進展。', text_ja: '進んだね。' });
+const spoken = JSON.stringify({ reply: true, text: '進んだね。' });
 const captureRequest = '{"capture_screen":true}';
 
 function harness(replies, captureImpl = async () => capture) {
@@ -70,8 +70,7 @@ test('automatic capture happens before analysis and only the response is present
   assert.doesNotMatch(h.requests[0].prompt, /capture_screen/);
   assert.equal(h.requests[0].options.requestType, 'awareness');
   assert.equal(h.commands.length, 1);
-  assert.equal(h.commands[0].text, '有新進展。');
-  assert.equal(h.commands[0].text_ja, '進んだね。');
+  assert.equal(h.commands[0].text, '進んだね。');
   assert.equal(h.history.length, 0);
   assert.equal(h.controller.recentReactions.length, 1);
   assert.equal(h.controller.reactionTimes.length, 1);
