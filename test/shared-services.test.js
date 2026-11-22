@@ -6,8 +6,10 @@ import { createRemoteTtsService, validateRemoteTtsUrl } from '../electron/remote
 
 const SAMPLE_RATE = 24_000;
 
-function makeWav({ sampleRate = SAMPLE_RATE, channels = 1 } = {}) {
-  const bytes = new Uint8Array(46);
+function makeWav({ sampleRate = SAMPLE_RATE, channels = 1, frames = 1, extraChunk = false } = {}) {
+  const dataOffset = extraChunk ? 46 : 36;
+  const dataBytes = frames * channels * 2;
+  const bytes = new Uint8Array(dataOffset + 8 + dataBytes);
   const view = new DataView(bytes.buffer);
   bytes.set(new TextEncoder().encode('RIFF'), 0);
   view.setUint32(4, bytes.byteLength - 8, true);
@@ -19,9 +21,12 @@ function makeWav({ sampleRate = SAMPLE_RATE, channels = 1 } = {}) {
   view.setUint32(28, sampleRate * channels * 2, true);
   view.setUint16(32, channels * 2, true);
   view.setUint16(34, 16, true);
-  bytes.set(new TextEncoder().encode('data'), 36);
-  view.setUint32(40, 2, true);
-  view.setInt16(44, 0, true);
+  if (extraChunk) {
+    bytes.set(new TextEncoder().encode('JUNK'), 36);
+    view.setUint32(40, 1, true);
+  }
+  bytes.set(new TextEncoder().encode('data'), dataOffset);
+  view.setUint32(dataOffset + 4, dataBytes, true);
   return bytes;
 }
 
@@ -101,7 +106,7 @@ test('browser TTS validates the WAV and returns audio metadata', async () => {
     fetchImpl: async (...args) => { calls.push(args); return wavResponse(); }
   });
 
-  const result = await services.synthesize({ text: '  こんにちは  ', speed: 1.1 });
+  const result = await services.synthesize({ text: '  こんにちは  ', speed: 1.1 }, { ttsUrl: '  ', ttsToken: 'unused' });
   assert.deepEqual(result, {
     audio: makeWav(), durationSeconds: 1.25, sampleRate: SAMPLE_RATE, channels: 1, voice: 'custom_voice'
   });
@@ -120,10 +125,69 @@ test('Electron TTS uses its native adapter and normalizes the result shape', asy
     fetchImpl: async () => { throw new Error('native path should not fetch'); }
   });
 
-  const result = await services.synthesize({ text: ' hello ', speed: 1 });
+  const result = await services.synthesize({ text: ' hello ', speed: 1 }, { ttsUrl: '', ttsModel: 'unused' });
   assert.deepEqual(nativeCalls, [{ text: 'hello', speed: 1 }]);
   assert.equal(result.voice, 'custom_voice');
   assert.deepEqual(result.audio, makeWav());
+});
+
+test('configured oMLX TTS posts speech with a bearer token and reads metadata from WAV chunks', async () => {
+  const calls = [];
+  const audio = makeWav({ sampleRate: 48_000, channels: 2, frames: 12_000, extraChunk: true });
+  const services = createServices({
+    electronAPI: { tts: { synthesize: async () => assert.fail('oMLX should bypass the native adapter') } },
+    fetchImpl: async (...args) => {
+      calls.push(args);
+      return new Response(audio, { headers: { 'Content-Type': 'audio/wav' } });
+    }
+  });
+  const baseUrl = 'http://10.211.55.7:8000';
+  const speechUrl = `${baseUrl}/v1/audio/speech`;
+
+  for (const ttsUrl of [` ${baseUrl}/ `, `${speechUrl}/`]) {
+    const result = await services.synthesize({ text: '  hello  ', speed: 1.25 }, {
+      ttsUrl, ttsToken: 'test-token', ttsModel: ' speech-model '
+    });
+    const [url, request] = calls.at(-1);
+    assert.equal(url, speechUrl);
+    assert.equal(request.method, 'POST');
+    assert.deepEqual(request.headers, { 'Content-Type': 'application/json', Authorization: 'Bearer test-token' });
+    assert.deepEqual(JSON.parse(request.body), { model: 'speech-model', input: 'hello', speed: 1.25, response_format: 'wav' });
+    assert.deepEqual(result, { audio, durationSeconds: 0.25, sampleRate: 48_000, channels: 2, voice: 'custom_voice' });
+  }
+});
+
+test('oMLX TTS rejects malformed WAV audio and invalid WAV metadata', async () => {
+  const badPcm = makeWav();
+  new DataView(badPcm.buffer).setUint16(34, 8, true);
+  const invalidResponses = [
+    [makeWav().subarray(0, 45), 'INVALID_TTS_AUDIO'],
+    [badPcm, 'INVALID_TTS_AUDIO'],
+    [makeWav({ sampleRate: 7_000 }), 'INVALID_TTS_METADATA'],
+    [makeWav({ frames: 0 }), 'INVALID_TTS_METADATA'],
+  ];
+  for (const [audio, code] of invalidResponses) {
+    const services = createServices({ fetchImpl: async () => new Response(audio) });
+    await assert.rejects(services.synthesize({ text: 'hello', speed: 1 }, {
+      ttsUrl: 'https://tts.example', ttsModel: 'speech-model'
+    }), { code });
+  }
+});
+
+test('oMLX TTS requires a non-empty model and reports upstream HTTP failures', async () => {
+  let requestCount = 0;
+  const services = createServices({ fetchImpl: async () => {
+    requestCount++;
+    return new Response('Model unavailable', { status: 503 });
+  } });
+  const input = { text: 'hello', speed: 1 };
+  const ttsUrl = 'https://tts.example';
+  await assert.rejects(services.synthesize(input, { ttsUrl, ttsModel: ' ' }), { code: 'INVALID_TTS_MODEL' });
+  assert.equal(requestCount, 0);
+  await assert.rejects(services.synthesize(input, { ttsUrl, ttsModel: 'speech-model' }), {
+    code: 'TTS_HTTP_ERROR', status: 503, message: 'TTS request failed (HTTP 503): Model unavailable'
+  });
+  assert.equal(requestCount, 1);
 });
 
 test('TTS rejects malformed metadata, mismatched WAV data, and oversized responses', async () => {

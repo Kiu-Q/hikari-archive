@@ -7,13 +7,15 @@ import { prepareSpeechSegments, cancelSpeechPreparations, splitSpeechSegments } 
 
 const source = readFileSync(new URL('../electron/app.js', import.meta.url), 'utf8');
 const factory = source.slice(source.indexOf('    function createLipSyncSystem()'), source.indexOf('    function createBlinkSystem()'));
+const synthesizeSource = source.slice(source.indexOf('function synthesizeSpeech('), source.indexOf('function setupTokenDialog()'));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const voice = { audio: new Uint8Array([1]), durationSeconds: 1 };
 
-function harness({ synthesize = async () => voice, begin = async () => ({ sessionId: 'reply', voiceGain: 0.9 }) } = {}) {
+function harness({ synthesize = async () => voice, begin = async () => ({ sessionId: 'reply', voiceGain: 0.9 }), saved = {} } = {}) {
   const subtitles = [], audios = [], ended = [], requests = [];
   const context = vm.createContext({
     window: { electronAPI: { replyAudio: { begin, end: async id => ended.push(id) } } },
+    localStorage: { getItem: key => saved[key] ?? null },
     services: { synthesize: (input, options) => { requests.push(input); return synthesize(input, options); } },
     createJapaneseSpeechPlayer: options => createJapaneseSpeechPlayer({ ...options,
       createContext: () => null,
@@ -32,7 +34,7 @@ function harness({ synthesize = async () => voice, begin = async () => ({ sessio
     hideSpeakingBubble() {}, scheduleRandomIdle() {}, statusDiv: { textContent: '' },
     setTimeout: callback => setTimeout(callback, 0), clearTimeout,
   });
-  const system = vm.runInContext(factory + '\ncreateLipSyncSystem();', context);
+  const system = vm.runInContext(synthesizeSource + factory + '\ncreateLipSyncSystem();', context);
   return { system, subtitles, audios, ended, requests, context };
 }
 
@@ -65,6 +67,25 @@ test('Electron streams prepared lines in order and presents corresponding subtit
   assert.equal(beginCalls, 1);
   assert.deepEqual(h.ended, ['reply']);
   assert.equal(h.system.isTalking(), false);
+});
+
+test('Electron speech preparation uses the current saved TTS configuration and keeps its abort signal', async () => {
+  const saved = { tts_url: 'https://tts.example', tts_token: 'test-token', tts_model: 'speech-model' };
+  const optionsUsed = [];
+  const h = harness({ saved, synthesize: async (_input, options) => { optionsUsed.push(options); return voice; } });
+
+  const speaking = h.system.startSpeaking('おはよう！');
+  const { signal, ...config } = optionsUsed[0];
+  assert.ok(signal instanceof AbortSignal);
+  assert.deepEqual(config, { ttsUrl: saved.tts_url, ttsToken: saved.tts_token, ttsModel: saved.tts_model });
+  h.system.stopSpeaking();
+  await speaking;
+
+  delete saved.tts_url;
+  const next = h.system.startSpeaking('またね。');
+  assert.equal(optionsUsed[1].ttsUrl, null);
+  h.system.stopSpeaking();
+  await next;
 });
 
 test('Electron streams Japanese phrases without requiring line breaks', async () => {

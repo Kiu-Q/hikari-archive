@@ -256,6 +256,27 @@ test('connection Save and Enter update or clear the exact keys used by requests'
   assert.equal(h.storage.has('Hermes_token'), false);
 });
 
+test('oMLX settings restore, trim, and clear all three fields on Save or Enter', () => {
+  const saved = { tts_url: 'http://localhost:8000', tts_token: 'saved-token', tts_model: 'saved-model' };
+  const h = harness(saved);
+  const fields = [
+    ['tts_url', h.elements.get('ttsUrlInput'), 'https://tts.example'],
+    ['tts_token', h.elements.get('ttsTokenInput'), 'new-token'],
+    ['tts_model', h.elements.get('ttsModelInput'), 'new-model'],
+  ];
+  for (const [key, input, value] of fields) {
+    assert.equal(input.value, saved[key]);
+    input.value = ` ${value} `;
+  }
+  h.elements.get('saveConnectBtn').click();
+  for (const [key, input, value] of fields) {
+    assert.equal(h.storage.get(key), value);
+    input.value = '   ';
+    input.listeners.keypress({ key: 'Enter' });
+    assert.equal(h.storage.has(key), false);
+  }
+});
+
 test('cursor/environment opt-outs are restored before renderer initialization', () => {
   const h = harness({ desktop_cursor_gaze_enabled: 'false', environment_reactions_enabled: 'false' });
   assert.equal(h.elements.get('desktopCursorGazeToggle').checked, false);

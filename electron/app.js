@@ -1267,7 +1267,7 @@ const CoreModule = (() => {
         let speechGeneration = 0;
         const createSpeechPlayer = window.electronAPI ? createJapaneseSpeechPlayer : createBrowserSpeechPlayer;
         const japanesePlayer = createSpeechPlayer({
-            synthesize: (input, options) => services.synthesize(input, options),
+            synthesize: synthesizeSpeech,
             onPlaybackBlocked: !window.electronAPI ? (retry, signal) => window.hikariPlaybackPrompt?.(retry, signal) : undefined,
             onMouth: shape => { mouthTarget = shape; },
             ...(!window.electronAPI && window.hikariCreateAudioContext ? { createContext: window.hikariCreateAudioContext } : {}),
@@ -1305,7 +1305,7 @@ const CoreModule = (() => {
             presentation.onTiming?.('speech_queued');
             const generation = speechGeneration;
             const prepared = presentation.prepared || prepareSpeechSegments(
-                (input, options) => services.synthesize(input, options), text,
+                synthesizeSpeech, text,
                 Math.max(0.5, Math.min(2, speakingSpeedMultiplier))
             );
             const preparations = Array.isArray(prepared) ? prepared : prepared ? [prepared] : [];
@@ -3375,7 +3375,7 @@ Just provide the raw JSON object directly.`;
             const end = timing?.span('audio_render', index);
             if (index === 0) timing?.mark('first_audio_render_started');
             try {
-              const audio = await services.synthesize(input, options);
+              const audio = await synthesizeSpeech(input, options);
               end?.('ready');
               if (index === 0) timing?.mark('first_audio_ready');
               return audio;
@@ -4694,7 +4694,7 @@ logger.info('electron', 'Setting up UI event listeners');
     // Animation toggle settings
     setupAnimationToggles();
 
-    // Gateway URL and token configuration
+    // Connection settings
     setupWebSocketUrlInput();
     
     const gazeToggle = document.getElementById('desktopCursorGazeToggle');
@@ -5022,14 +5022,19 @@ function setupToggleButtons() {
 }
 
 /**
- * Setup gateway URL input
+ * Setup connection settings
  */
 function setupWebSocketUrlInput() {
     if (!window.electronAPI) return;
-    logger.info('electron', 'Setting up gateway URL input');
+    logger.info('electron', 'Setting up connection settings');
     
     const wsUrlInput = document.getElementById('websocketUrlInput');
     const tokenInput = document.getElementById('tokenInput');
+    const ttsFields = [
+        ['tts_url', document.getElementById('ttsUrlInput')],
+        ['tts_token', document.getElementById('ttsTokenInput')],
+        ['tts_model', document.getElementById('ttsModelInput')],
+    ].filter(([, input]) => input);
     // Use the actual button ID from the HTML (id="saveConnectBtn")
     const saveConnectBtn = document.getElementById('saveConnectBtn');
     
@@ -5040,6 +5045,9 @@ function setupWebSocketUrlInput() {
     }
     if (tokenInput) {
         tokenInput.value = localStorage.getItem('Hermes_token') || '';
+    }
+    for (const [key, input] of ttsFields) {
+        input.value = localStorage.getItem(key) || '';
     }
     
     if (saveConnectBtn) {
@@ -5064,7 +5072,13 @@ function setupWebSocketUrlInput() {
                 logger.info('electron', 'Token cleared');
             }
             
-            // 3. Show status message
+            for (const [key, input] of ttsFields) {
+                const value = input.value.trim();
+                if (value) localStorage.setItem(key, value);
+                else localStorage.removeItem(key);
+            }
+
+            // Show status message
             const statusDiv = document.getElementById('status');
             if (statusDiv) {
                 statusDiv.textContent = 'Settings saved!';
@@ -5073,21 +5087,27 @@ function setupWebSocketUrlInput() {
             
         });
         
-        // Allow Enter key to trigger connect from either input
         const triggerSave = (e) => {
             if (e.key === 'Enter') {
                 saveConnectBtn.click();
             }
         };
-        if (wsUrlInput) {
-            wsUrlInput.addEventListener('keypress', triggerSave);
-        }
-        if (tokenInput) {
-            tokenInput.addEventListener('keypress', triggerSave);
+        for (const input of [wsUrlInput, tokenInput, ...ttsFields.map(([, input]) => input)]) {
+            input?.addEventListener('keypress', triggerSave);
         }
     } else {
         logger.warn('electron', 'Save button (#saveConnectBtn) not found in DOM');
     }
+}
+
+function synthesizeSpeech(input, options) {
+    if (!window.electronAPI) return services.synthesize(input, options);
+    return services.synthesize(input, {
+        ...options,
+        ttsUrl: localStorage.getItem('tts_url'),
+        ttsToken: localStorage.getItem('tts_token'),
+        ttsModel: localStorage.getItem('tts_model'),
+    });
 }
 
 /**

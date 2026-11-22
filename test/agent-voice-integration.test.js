@@ -18,6 +18,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const moduleSource = source.slice(source.indexOf('const AgentApiModule ='), source.indexOf('const HistoryModule ='))
   .replaceAll('import.meta.env', 'testEnv');
 const eventSource = source.slice(source.indexOf('async function sendEventToAgent('), source.indexOf('// CORE MODULE -'));
+const synthesizeSource = source.slice(source.indexOf('function synthesizeSpeech('), source.indexOf('function setupTokenDialog()'));
 
 function harness(reply, speak = async () => {}, awareness = null, { browser = false, environmentContext = "" } = {}) {
   const requests = [], history = [], events = [], syntheses = [], presentations = [];
@@ -69,7 +70,7 @@ function harness(reply, speak = async () => {}, awareness = null, { browser = fa
     clearTimeout, AbortController,
     services,
   });
-  const api = vm.runInContext(eventSource + moduleSource + '\nAgentApiModule;', context);
+  const api = vm.runInContext(synthesizeSource + eventSource + moduleSource + '\nAgentApiModule;', context);
   window.sendAgentMessage = api.sendAgentMessage;
   return { api, requests, history, events, syntheses, presentations, window };
 }

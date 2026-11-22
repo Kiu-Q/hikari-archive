@@ -122,8 +122,8 @@ function validateWav(audio, sampleRate, channels) {
   const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
   if (view.getUint32(4, true) + 8 !== audio.byteLength) fail();
   let offset = 12;
-  let formatFound = false;
-  let dataFound = false;
+  let format;
+  let dataBytes;
   while (offset + 8 <= audio.byteLength) {
     const chunkName = ascii(offset, 4);
     const chunkSize = view.getUint32(offset + 4, true);
@@ -132,15 +132,21 @@ function validateWav(audio, sampleRate, channels) {
     if (chunkEnd > audio.byteLength) fail();
     if (chunkName === 'fmt ') {
       if (chunkSize < 16) fail();
-      if (view.getUint16(chunkStart + 2, true) !== channels || view.getUint32(chunkStart + 4, true) !== sampleRate) {
+      format = {
+        audioFormat: view.getUint16(chunkStart, true),
+        channels: view.getUint16(chunkStart + 2, true),
+        sampleRate: view.getUint32(chunkStart + 4, true),
+        bitsPerSample: view.getUint16(chunkStart + 14, true)
+      };
+      if (sampleRate !== undefined && (format.channels !== channels || format.sampleRate !== sampleRate)) {
         throw serviceError('TTS metadata does not match its WAV audio', { code: 'TTS_METADATA_MISMATCH' });
       }
-      formatFound = true;
     }
-    if (chunkName === 'data') dataFound = true;
+    if (chunkName === 'data') dataBytes = chunkSize;
     offset = chunkEnd + (chunkSize % 2);
   }
-  if (offset !== audio.byteLength || !formatFound || !dataFound) fail();
+  if (offset !== audio.byteLength || !format || dataBytes === undefined) fail();
+  return { ...format, dataBytes };
 }
 
 function normalizeAudioBuffer(value) {
@@ -190,30 +196,21 @@ function makeRequestController(signal, timeoutMs, activeControllers) {
   };
 }
 
-/**
- * Create the HTTP transport used by browser TTS and Electron's remote TTS
- * adapter. `endpoint` may be relative for a same-origin browser request.
- */
-export function createHttpTtsClient({
-  fetchImpl = globalThis.fetch,
-  endpoint = '/api/tts',
-  timeoutMs = HTTP_TTS_TIMEOUT_MS,
-  maxAudioBytes = MAX_AUDIO_BYTES
-} = {}) {
+function createTtsClient({ fetchImpl, timeoutMs = HTTP_TTS_TIMEOUT_MS, buildRequest, readResult }) {
   if (typeof fetchImpl !== 'function') throw new TypeError('A fetch implementation is required');
   const activeControllers = new Set();
   let disposed = false;
 
   return {
-    async synthesize(input, { signal } = {}) {
+    async synthesize(input, options = {}) {
       if (disposed) throw serviceError('TTS client is disposed', { code: 'SERVICE_DISPOSED' });
-      const request = validateSynthesisInput(input);
-      const requestController = makeRequestController(signal, timeoutMs, activeControllers);
+      const { endpoint, headers, body } = buildRequest(validateSynthesisInput(input), options);
+      const requestController = makeRequestController(options.signal, timeoutMs, activeControllers);
       try {
         const response = await fetchImpl(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'audio/wav' },
-          body: JSON.stringify(request),
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify(body),
           signal: requestController.signal
         });
         if (!response.ok) await throwForResponse(response, 'TTS');
@@ -223,14 +220,7 @@ export function createHttpTtsClient({
           throw serviceError('TTS service returned a non-WAV response', { code: 'INVALID_TTS_AUDIO' });
         }
 
-        const durationSeconds = Number(response.headers?.get?.('x-audio-duration'));
-        const sampleRate = Number(response.headers?.get?.('x-audio-sample-rate'));
-        const channels = Number(response.headers?.get?.('x-audio-channels'));
-        validateSpeechMetadata(durationSeconds, sampleRate, channels);
-
-        const audio = await readBoundedBytes(response, maxAudioBytes);
-        validateWav(audio, sampleRate, channels);
-        return { audio, durationSeconds, sampleRate, channels, voice: 'custom_voice' };
+        return { ...await readResult(response), voice: 'custom_voice' };
       } finally {
         requestController.dispose();
       }
@@ -241,6 +231,75 @@ export function createHttpTtsClient({
       for (const controller of activeControllers) controller.abort(serviceError('TTS client is disposed', { code: 'SERVICE_DISPOSED' }));
     }
   };
+}
+
+/**
+ * Create the HTTP transport used by browser TTS and Electron's remote TTS
+ * adapter. `endpoint` may be relative for a same-origin browser request.
+ */
+export function createHttpTtsClient({
+  fetchImpl = globalThis.fetch,
+  endpoint = '/api/tts',
+  timeoutMs = HTTP_TTS_TIMEOUT_MS,
+  maxAudioBytes = MAX_AUDIO_BYTES
+} = {}) {
+  return createTtsClient({
+    fetchImpl,
+    timeoutMs,
+    buildRequest: body => ({ endpoint, headers: { Accept: 'audio/wav' }, body }),
+    async readResult(response) {
+      const durationSeconds = Number(response.headers?.get?.('x-audio-duration'));
+      const sampleRate = Number(response.headers?.get?.('x-audio-sample-rate'));
+      const channels = Number(response.headers?.get?.('x-audio-channels'));
+      validateSpeechMetadata(durationSeconds, sampleRate, channels);
+
+      const audio = await readBoundedBytes(response, maxAudioBytes);
+      validateWav(audio, sampleRate, channels);
+      return { audio, durationSeconds, sampleRate, channels };
+    }
+  });
+}
+
+function normalizeOmlxTtsUrl(value) {
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch (cause) {
+    throw serviceError('Invalid TTS endpoint URL', { code: 'INVALID_TTS_URL', cause });
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw serviceError('Invalid TTS endpoint URL', { code: 'INVALID_TTS_URL' });
+  }
+  const base = url.toString().replace(/\/+$/, '');
+  const speechPath = '/v1/audio/speech';
+  return base.endsWith(speechPath) ? base : `${base}${speechPath}`;
+}
+
+function createOmlxTtsClient(fetchImpl) {
+  return createTtsClient({
+    fetchImpl,
+    buildRequest({ text, speed }, { ttsUrl, ttsToken, ttsModel }) {
+      const model = ttsModel?.trim();
+      if (!model) throw serviceError('Set a TTS model in Connection settings', { code: 'INVALID_TTS_MODEL' });
+      const token = ttsToken?.trim();
+      return {
+        endpoint: normalizeOmlxTtsUrl(ttsUrl),
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: { model, input: text, speed, response_format: 'wav' }
+      };
+    },
+    async readResult(response) {
+      const audio = await readBoundedBytes(response, MAX_AUDIO_BYTES);
+      const { audioFormat, sampleRate, channels, bitsPerSample, dataBytes } = validateWav(audio);
+      const frameBytes = channels * 2;
+      const durationSeconds = dataBytes / (sampleRate * frameBytes);
+      validateSpeechMetadata(durationSeconds, sampleRate, channels);
+      if (audioFormat !== 1 || bitsPerSample !== 16 || dataBytes % frameBytes !== 0) {
+        throw serviceError('TTS service returned invalid 16-bit PCM WAV audio', { code: 'INVALID_TTS_AUDIO' });
+      }
+      return { audio, durationSeconds, sampleRate, channels };
+    }
+  });
 }
 
 function isNativeTtsAvailable(electronAPI) {
@@ -282,6 +341,7 @@ export function createServices({
   const isElectron = Boolean(electronAPI);
   const hasNativeTts = isNativeTtsAvailable(electronAPI);
   const httpTts = createHttpTtsClient({ fetchImpl, endpoint: '/api/tts' });
+  const omlxTts = createOmlxTtsClient(fetchImpl);
   const chatControllers = new Set();
   const healthControllers = new Set();
 
@@ -302,6 +362,7 @@ export function createServices({
   return {
     capabilities,
     async synthesize(input, options = {}) {
+      if (options.ttsUrl?.trim()) return omlxTts.synthesize(input, options);
       const request = validateSynthesisInput(input);
       if (hasNativeTts) {
         const result = await electronAPI.tts.synthesize(request);
@@ -363,6 +424,7 @@ export function createServices({
     },
     dispose() {
       httpTts.dispose();
+      omlxTts.dispose();
       const disposedError = serviceError('Service client is disposed', { code: 'SERVICE_DISPOSED' });
       for (const controller of [...chatControllers, ...healthControllers]) controller.abort(disposedError);
     }
