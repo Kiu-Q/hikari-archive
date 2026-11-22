@@ -39,6 +39,7 @@ module.exports = {
     ],
     extraResource: ['./tools/companion-tts', './tools/media-state', './tools/voice-stt', './tools/music-beat'],
     extendInfo: {
+      NSLocalNetworkUsageDescription: 'Hikari connects to the Hermes gateway you configure on your local network.',
       NSAudioCaptureUsageDescription: 'Hikari analyses music beats locally to gently sway with your music. Audio is never saved or sent anywhere.',
       NSMicrophoneUsageDescription: 'Hikari uses the microphone only while Voice Listening is enabled.',
       NSSpeechRecognitionUsageDescription: 'Hikari uses on-device speech recognition to transcribe addressed voice commands.'

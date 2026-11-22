@@ -2,6 +2,7 @@ const MAX_TEXT_LENGTH = 500;
 const MAX_ERROR_BYTES = 1_024;
 const MAX_HEALTH_BYTES = 64 * 1_024;
 const MAX_AUDIO_BYTES = 32 * 1_024 * 1_024;
+const MAX_CHAT_BYTES = 4 * 1_024 * 1_024;
 const HTTP_TTS_TIMEOUT_MS = 450_000;
 const CHAT_TIMEOUT_MS = 180_000;
 const HEALTH_TIMEOUT_MS = 8_000;
@@ -332,6 +333,30 @@ function requireResponse(response, context) {
   return response;
 }
 
+export async function serializeChatResponse(response) {
+  const body = response.body === null ? null : new TextDecoder().decode(await readBoundedBytes(response, MAX_CHAT_BYTES));
+  return { body, status: response.status, statusText: response.statusText };
+}
+
+function createChatRequest({ messages, model } = {}, sessionId) {
+  if (!Array.isArray(messages)) throw new TypeError('Chat messages must be an array');
+  const body = { messages };
+  if (model !== undefined) body.model = model;
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  if (typeof sessionId === 'string' && sessionId.length > 0 && sessionId.length <= 128) {
+    headers['X-Hermes-Session-Id'] = sessionId;
+  }
+  return { body, headers };
+}
+
+export function fetchHermesChat(input, { gatewayUrl, token, signal, sessionId }, fetchImpl, redirect) {
+  const { body, headers } = createChatRequest(input, sessionId);
+  if (typeof token === 'string' && token.length > 0) headers.Authorization = `Bearer ${token}`;
+  return fetchImpl(normalizeGatewayUrl(gatewayUrl), {
+    method: 'POST', headers, body: JSON.stringify(body), signal, redirect,
+  });
+}
+
 /** Create the portable app service boundary for Electron and browser clients. */
 export function createServices({
   electronAPI = globalThis.window?.electronAPI,
@@ -370,24 +395,35 @@ export function createServices({
       }
       return httpTts.synthesize(request, options);
     },
-    async chat({ messages, model } = {}, { gatewayUrl, token, signal, sessionId } = {}) {
-      if (!Array.isArray(messages)) throw new TypeError('Chat messages must be an array');
-      const body = { messages };
-      if (model !== undefined) body.model = model;
-      const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
-      if (typeof sessionId === 'string' && sessionId.length > 0 && sessionId.length <= 128) {
-        headers['X-Hermes-Session-Id'] = sessionId;
-      }
-      let url = '/api/chat';
-
-      if (isElectron) {
-        url = normalizeGatewayUrl(gatewayUrl);
-        if (typeof token === 'string' && token.length > 0) headers.Authorization = `Bearer ${token}`;
-      }
-
+    async chat(input, { gatewayUrl, token, signal, sessionId } = {}) {
       const requestController = makeRequestController(signal, CHAT_TIMEOUT_MS, chatControllers);
       try {
-        const response = await fetchImpl(url, {
+        if (typeof electronAPI?.hermes?.chat === 'function') {
+          const { body } = createChatRequest(input, sessionId);
+          const requestSignal = requestController.signal;
+          requestSignal.throwIfAborted();
+          const id = globalThis.crypto.randomUUID();
+          const cancel = () => electronAPI.hermes.cancelChat(id);
+          requestSignal.addEventListener('abort', cancel, { once: true });
+          try {
+            const result = await electronAPI.hermes.chat(id, body, { gatewayUrl, token, sessionId });
+            requestSignal.throwIfAborted();
+            return new Response(result.body, { status: result.status, statusText: result.statusText });
+          } catch (error) {
+            requestSignal.throwIfAborted();
+            throw error;
+          } finally {
+            requestSignal.removeEventListener('abort', cancel);
+          }
+        }
+        if (isElectron) {
+          const response = await fetchHermesChat(input, {
+            gatewayUrl, token, sessionId, signal: requestController.signal,
+          }, fetchImpl);
+          return requireResponse(response, 'Chat');
+        }
+        const { body, headers } = createChatRequest(input, sessionId);
+        const response = await fetchImpl('/api/chat', {
           method: 'POST',
           headers,
           body: JSON.stringify(body),

@@ -99,6 +99,40 @@ test('Electron chat keeps caller gateway, token, and abort signal configurable',
   assert.equal(services.capabilities.windowControl, true);
 });
 
+test('Electron chat delegates to the desktop process and preserves HTTP errors and cancellation', async () => {
+  const calls = [];
+  let finishRequest;
+  const services = createServices({
+    electronAPI: {
+      hermes: {
+        chat(id, body, options) {
+          calls.push({ id, body, options });
+          return new Promise(resolve => { finishRequest = resolve; });
+        },
+        cancelChat(id) {
+          assert.equal(id, calls.at(-1).id);
+          finishRequest({ body: null, status: 204 });
+        }
+      }
+    },
+    fetchImpl: () => assert.fail('Desktop chat should not use renderer fetch')
+  });
+  const body = { messages: [{ role: 'user', content: 'hello' }], model: 'hikari' };
+  const options = { gatewayUrl: 'http://10.211.55.7:8643', token: 'test-token', sessionId: 'hikari-main' };
+  const request = services.chat(body, options);
+  assert.deepEqual(calls[0].body, body);
+  assert.deepEqual(calls[0].options, options);
+  finishRequest({ body: '{"error":"invalid token"}', status: 401, statusText: 'Unauthorized' });
+  const response = await request;
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: 'invalid token' });
+
+  const controller = new AbortController();
+  const pending = services.chat(body, { ...options, signal: controller.signal });
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+});
+
 test('browser TTS validates the WAV and returns audio metadata', async () => {
   const calls = [];
   const services = createServices({

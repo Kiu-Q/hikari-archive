@@ -3,6 +3,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
+  hermes: {
+    chat: (id, body, options) => ipcRenderer.invoke('hermes:chat', id, body, options),
+    cancelChat: id => ipcRenderer.send('hermes:cancel-chat', id),
+  },
   screenCapture: {
     capture: () => ipcRenderer.invoke('screen:capture'),
     openPermissionSettings: () => ipcRenderer.invoke('awareness:request-screen-capture'),

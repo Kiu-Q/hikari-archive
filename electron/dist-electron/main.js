@@ -1,22 +1,23 @@
-import { desktopCapturer as je, systemPreferences as j, shell as Te, app as v, screen as U, nativeImage as ct, ipcMain as y, session as ut, BrowserWindow as $e, powerMonitor as qe } from "electron";
-import S from "path";
-import { fileURLToPath as dt } from "url";
-import { readdirSync as ht, existsSync as V } from "fs";
-import { execFile as Ge, spawn as xe } from "node:child_process";
-import { existsSync as de } from "node:fs";
-import _ from "node:path";
-import { promisify as Ve } from "node:util";
-import { fileURLToPath as pt } from "node:url";
-const _e = Object.freeze({
-  accessibilityPermission: !1,
+import { desktopCapturer, systemPreferences, shell, app, screen, nativeImage, ipcMain, session, BrowserWindow, powerMonitor } from "electron";
+import path$1 from "path";
+import { fileURLToPath as fileURLToPath$1 } from "url";
+import { readdirSync, existsSync as existsSync$1 } from "fs";
+import { execFile as execFile$2, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+const activeWindowOptions = Object.freeze({
+  accessibilityPermission: false,
   // get-windows' native helper has its own macOS TCC identity. Keep it from
   // requesting Screen Recording; Electron's desktopCapturer owns that access.
-  screenRecordingPermission: !1
-}), ke = {
-  enabledByDefault: !1,
+  screenRecordingPermission: false
+});
+const awarenessConfig = {
+  enabledByDefault: false,
   idleReturn: {
     minimumIdleMs: 90 * 1e3,
-    greetingCooldownMs: 300 * 1e3
+    greetingCooldownMs: 5 * 60 * 1e3
   },
   activity: {
     // Short, deliberate bursts should still produce an observation while the
@@ -59,7 +60,7 @@ const _e = Object.freeze({
     normalSpeechCooldownMs: 2e4,
     importantSpeechCooldownMs: 15e3,
     normalBudgetCount: 6,
-    normalBudgetWindowMs: 600 * 1e3
+    normalBudgetWindowMs: 10 * 60 * 1e3
   },
   dedupe: {
     sameContextReactionCooldownMs: 9e4
@@ -71,106 +72,129 @@ const _e = Object.freeze({
     recentCandidateLimit: 20,
     recentReactionLimit: 10
   },
-  debug: !0
-}, ne = 2 * 1024 * 1024, ge = 1920;
-function F(t, e) {
-  return Object.assign(new Error(e), { code: t });
+  debug: true
+};
+const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+const MAX_DIMENSION = 1920;
+function captureError(code, message) {
+  return Object.assign(new Error(message), { code });
 }
-function ft({ getSources: t, getDisplay: e, getPermissionStatus: i = () => "granted", platform: n = process.platform, now: s = () => Date.now(), captureTimeoutMs: r = 15e3 }) {
-  let a = !1;
+function createScreenCaptureService({ getSources, getDisplay, getPermissionStatus = () => "granted", platform = process.platform, now = () => Date.now(), captureTimeoutMs = 15e3 }) {
+  let capturing = false;
   return {
     async capture() {
-      if (a) throw F("CAPTURE_BUSY", "A screenshot is already being captured.");
-      a = !0;
+      if (capturing) throw captureError("CAPTURE_BUSY", "A screenshot is already being captured.");
+      capturing = true;
       try {
-        if (n === "darwin" && i() !== "granted")
-          throw F("SCREEN_PERMISSION_REQUIRED", "Allow Screen Recording for Hikari in macOS Settings, then capture again.");
-        const o = e();
-        if (!o?.size?.width || !o?.size?.height) throw F("CAPTURE_UNAVAILABLE", "The current display is unavailable.");
-        const l = Math.min(1, ge / Math.max(o.size.width, o.size.height));
-        let u, c;
+        if (platform === "darwin" && getPermissionStatus() !== "granted") {
+          throw captureError("SCREEN_PERMISSION_REQUIRED", "Allow Screen Recording for Hikari in macOS Settings, then capture again.");
+        }
+        const display = getDisplay();
+        if (!display?.size?.width || !display?.size?.height) throw captureError("CAPTURE_UNAVAILABLE", "The current display is unavailable.");
+        const scale = Math.min(1, MAX_DIMENSION / Math.max(display.size.width, display.size.height));
+        let captureTimer;
+        let sources;
         try {
-          c = await Promise.race([
-            t({
+          sources = await Promise.race([
+            getSources({
               types: ["screen"],
-              fetchWindowIcons: !1,
-              thumbnailSize: { width: Math.max(1, Math.round(o.size.width * l)), height: Math.max(1, Math.round(o.size.height * l)) }
+              fetchWindowIcons: false,
+              thumbnailSize: { width: Math.max(1, Math.round(display.size.width * scale)), height: Math.max(1, Math.round(display.size.height * scale)) }
             }),
-            new Promise((C, K) => {
-              u = setTimeout(() => K(F("CAPTURE_TIMEOUT", "Screen capture timed out. Check Screen Recording permission and try again.")), r);
+            new Promise((_, reject) => {
+              captureTimer = setTimeout(() => reject(captureError("CAPTURE_TIMEOUT", "Screen capture timed out. Check Screen Recording permission and try again.")), captureTimeoutMs);
             })
           ]);
         } finally {
-          clearTimeout(u);
+          clearTimeout(captureTimer);
         }
-        let d = c.find((C) => String(C.display_id) === String(o.id))?.thumbnail;
-        if (!d || d.isEmpty()) throw F("CAPTURE_UNAVAILABLE", "No screenshot was returned for the current display.");
-        let f = d.getSize();
-        if (Math.max(f.width, f.height) > ge) {
-          const C = ge / Math.max(f.width, f.height);
-          d = d.resize({ width: Math.round(f.width * C), height: Math.round(f.height * C), quality: "good" });
+        const source = sources.find((item) => String(item.display_id) === String(display.id));
+        let image = source?.thumbnail;
+        if (!image || image.isEmpty()) throw captureError("CAPTURE_UNAVAILABLE", "No screenshot was returned for the current display.");
+        let size = image.getSize();
+        if (Math.max(size.width, size.height) > MAX_DIMENSION) {
+          const ratio = MAX_DIMENSION / Math.max(size.width, size.height);
+          image = image.resize({ width: Math.round(size.width * ratio), height: Math.round(size.height * ratio), quality: "good" });
         }
-        let m;
-        for (const C of [80, 65, 50])
-          if (m = d.toJPEG(C), m.length <= ne) break;
-        if (!m?.length || m.length > ne) throw F("SCREENSHOT_TOO_LARGE", "The screenshot is too large. Try capturing a smaller display.");
-        f = d.getSize();
-        const A = d.resize({ width: Math.min(320, f.width), quality: "good" }).toJPEG(65);
+        let jpeg;
+        for (const quality of [80, 65, 50]) {
+          jpeg = image.toJPEG(quality);
+          if (jpeg.length <= MAX_SCREENSHOT_BYTES) break;
+        }
+        if (!jpeg?.length || jpeg.length > MAX_SCREENSHOT_BYTES) throw captureError("SCREENSHOT_TOO_LARGE", "The screenshot is too large. Try capturing a smaller display.");
+        size = image.getSize();
+        const thumbnail = image.resize({ width: Math.min(320, size.width), quality: "good" }).toJPEG(65);
         return {
           mimeType: "image/jpeg",
-          width: f.width,
-          height: f.height,
-          capturedAt: s(),
-          dataUrl: `data:image/jpeg;base64,${m.toString("base64")}`,
-          thumbnailDataUrl: `data:image/jpeg;base64,${A.toString("base64")}`
+          width: size.width,
+          height: size.height,
+          capturedAt: now(),
+          dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}`,
+          thumbnailDataUrl: `data:image/jpeg;base64,${thumbnail.toString("base64")}`
         };
       } finally {
-        a = !1;
+        capturing = false;
       }
     }
   };
 }
-function mt(t) {
-  if (typeof t != "string") return null;
-  const e = t.trim();
-  return e === "1" ? !0 : e === "0" ? !1 : null;
+function parseMediaPlaybackOutput(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (normalized === "1") return true;
+  if (normalized === "0") return false;
+  return null;
 }
-function gt(t) {
+function parseSystemAudioOutput(value) {
   try {
-    const e = JSON.parse(String(t ?? "").trim());
-    if (e?.available !== !0) return { available: !1, running: !1, volume: null, muted: null };
-    const i = e.volume == null ? null : Number(e.volume);
+    const parsed = JSON.parse(String(value ?? "").trim());
+    if (parsed?.available !== true) return { available: false, running: false, volume: null, muted: null };
+    const volume = parsed.volume == null ? null : Number(parsed.volume);
     return {
-      available: !0,
-      running: !!e.running,
-      volume: Number.isFinite(i) && i >= 0 && i <= 1 ? i : null,
-      muted: typeof e.muted == "boolean" ? e.muted : null,
-      deviceId: Number.isSafeInteger(e.deviceId) && e.deviceId > 0 ? e.deviceId : null
+      available: true,
+      running: Boolean(parsed.running),
+      volume: Number.isFinite(volume) && volume >= 0 && volume <= 1 ? volume : null,
+      muted: typeof parsed.muted === "boolean" ? parsed.muted : null,
+      deviceId: Number.isSafeInteger(parsed.deviceId) && parsed.deviceId > 0 ? parsed.deviceId : null
     };
   } catch {
     return null;
   }
 }
-class wt {
-  constructor({ debounceSamples: e = 2 } = {}) {
-    this.debounceSamples = Math.max(1, Math.floor(Number(e) || 1)), this.reset();
+class MediaPlaybackStateTracker {
+  constructor({ debounceSamples = 2 } = {}) {
+    this.debounceSamples = Math.max(1, Math.floor(Number(debounceSamples) || 1));
+    this.reset();
   }
   reset() {
-    this.stablePlaying = !1, this.pendingPlaying = null, this.pendingCount = 0;
+    this.stablePlaying = false;
+    this.pendingPlaying = null;
+    this.pendingCount = 0;
   }
-  observe(e) {
-    if (typeof e != "boolean") return null;
-    if (e === this.stablePlaying)
-      return this.pendingPlaying = null, this.pendingCount = 0, null;
-    if (this.pendingPlaying === e ? this.pendingCount += 1 : (this.pendingPlaying = e, this.pendingCount = 1), this.pendingCount < this.debounceSamples) return null;
-    const i = this.stablePlaying ? "playing" : "stopped";
-    return this.stablePlaying = e, this.pendingPlaying = null, this.pendingCount = 0, {
-      previousState: i,
-      state: e ? "playing" : "stopped"
+  observe(isPlaying) {
+    if (typeof isPlaying !== "boolean") return null;
+    if (isPlaying === this.stablePlaying) {
+      this.pendingPlaying = null;
+      this.pendingCount = 0;
+      return null;
+    }
+    if (this.pendingPlaying === isPlaying) this.pendingCount += 1;
+    else {
+      this.pendingPlaying = isPlaying;
+      this.pendingCount = 1;
+    }
+    if (this.pendingCount < this.debounceSamples) return null;
+    const previousState = this.stablePlaying ? "playing" : "stopped";
+    this.stablePlaying = isPlaying;
+    this.pendingPlaying = null;
+    this.pendingCount = 0;
+    return {
+      previousState,
+      state: isPlaying ? "playing" : "stopped"
     };
   }
 }
-const he = {
+const EMPTY_STATE = {
   revision: 0,
   updatedAt: 0,
   desktop: {
@@ -180,231 +204,361 @@ const he = {
     windowId: null,
     windowBounds: null,
     contextUpdatedAt: 0,
-    contextStale: !0,
-    pointer: { x: null, y: null, displayId: null, updatedAt: 0, stale: !0 },
-    activity: { typing: !1, scrolling: !1, clicking: !1, lastInputAt: 0, idleForMs: 0, idle: !1, updatedAt: 0, stale: !0 },
-    screen: { changeLevel: "unknown", changeAt: 0, changeStale: !0, lastSummary: "", summaryAt: 0, summaryStale: !0, summaryContextKey: "", available: !1, visionAvailable: !1 }
+    contextStale: true,
+    pointer: { x: null, y: null, displayId: null, updatedAt: 0, stale: true },
+    activity: { typing: false, scrolling: false, clicking: false, lastInputAt: 0, idleForMs: 0, idle: false, updatedAt: 0, stale: true },
+    screen: { changeLevel: "unknown", changeAt: 0, changeStale: true, lastSummary: "", summaryAt: 0, summaryStale: true, summaryContextKey: "", available: false, visionAvailable: false }
   },
-  browser: { available: !1, activeTab: null, tabs: [], updatedAt: 0 },
+  browser: { available: false, activeTab: null, tabs: [], updatedAt: 0 },
   audio: {
-    microphone: { enabled: !1, permission: "unknown", voiceActive: !1, lastSpeechAt: 0 },
-    wake: { active: !1, expiresAt: 0 },
+    microphone: { enabled: false, permission: "unknown", voiceActive: false, lastSpeechAt: 0 },
+    wake: { active: false, expiresAt: 0 },
     stt: { status: "unavailable", language: "", lastAddressedAt: 0 },
-    system: { available: !1, captureAvailable: !1, running: !1, volume: null, muted: null, level: null, classification: "unknown", confidence: 0, updatedAt: 0 }
+    system: { available: false, captureAvailable: false, running: false, volume: null, muted: null, level: null, classification: "unknown", confidence: 0, updatedAt: 0 }
   },
-  hikari: { speaking: !1, listening: !1, thinking: !1, dragging: !1, directInteraction: !1, currentBehavior: "idle", attentionTarget: "none", semanticReaction: null, updatedAt: 0, stale: !0 }
+  hikari: { speaking: false, listening: false, thinking: false, dragging: false, directInteraction: false, currentBehavior: "idle", attentionTarget: "none", semanticReaction: null, updatedAt: 0, stale: true }
 };
-function Ee(t) {
-  return structuredClone(t);
+function clone(value) {
+  return structuredClone(value);
 }
-function yt() {
-  return Ee(he);
+function createWorldState() {
+  return clone(EMPTY_STATE);
 }
-function bt({ typingSession: t, scrollSession: e, clickSession: i, lastInputAt: n = 0 } = {}, s = Date.now()) {
-  const r = n ? Math.max(0, s - n) : 0;
+function deriveDesktopActivityState({ typingSession, scrollSession, clickSession, lastInputAt = 0 } = {}, now = Date.now()) {
+  const idleForMs = lastInputAt ? Math.max(0, now - lastInputAt) : 0;
   return {
-    typing: !!t,
-    scrolling: !!e,
-    clicking: !!i,
-    lastInputAt: n,
-    idleForMs: r,
-    idle: r >= 6e4
+    typing: Boolean(typingSession),
+    scrolling: Boolean(scrollSession),
+    clicking: Boolean(clickSession),
+    lastInputAt,
+    idleForMs,
+    idle: idleForMs >= 6e4
   };
 }
-function Ke(t, e) {
-  if (!e || typeof e != "object" || Array.isArray(e)) return t;
-  for (const [i, n] of Object.entries(e))
-    n && typeof n == "object" && !Array.isArray(n) && t[i] && typeof t[i] == "object" ? Ke(t[i], n) : t[i] = n;
-  return t;
-}
-function vt(t, e, i = Date.now()) {
-  const n = Ke(Ee(t || he), Je(e));
-  return e?.hikari && typeof e.hikari == "object" && e.hikari.updatedAt === void 0 && e.hikari.stale === void 0 && (n.hikari.updatedAt = i, n.hikari.stale = !1), n.revision = Math.max(Number(n.revision) || 0, Number(t?.revision) || 0) + 1, n.updatedAt = i, n;
-}
-const St = /* @__PURE__ */ new Set(["speaking", "listening", "thinking", "dragging", "directInteraction", "currentBehavior", "attentionTarget", "semanticReaction"]);
-function Tt(t) {
-  if (!t || typeof t != "object" || Array.isArray(t)) return {};
-  const e = {};
-  if (t.hikari && typeof t.hikari == "object" && !Array.isArray(t.hikari)) {
-    e.hikari = {};
-    for (const [i, n] of Object.entries(t.hikari))
-      St.has(i) && (["speaking", "listening", "thinking", "dragging", "directInteraction"].includes(i) && typeof n == "boolean" ? e.hikari[i] = n : i === "currentBehavior" && typeof n == "string" ? e.hikari[i] = n.slice(0, 64) : i === "attentionTarget" && ["none", "user-pointer", "screen-center"].includes(n) ? e.hikari[i] = n : i === "semanticReaction" && (n === null || typeof n == "string") && (e.hikari[i] = typeof n == "string" ? n.slice(0, 64) : null));
-    Object.keys(e.hikari).length || delete e.hikari;
+function mergeObject(target, patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return target;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && target[key] && typeof target[key] === "object") {
+      mergeObject(target[key], value);
+    } else {
+      target[key] = value;
+    }
   }
-  return typeof t.audio?.microphone?.voiceActive == "boolean" && (e.audio = { microphone: { voiceActive: t.audio.microphone.voiceActive } }), e;
+  return target;
 }
-const At = he;
-function Je(t, e = At) {
-  if (!t || typeof t != "object" || Array.isArray(t)) return {};
-  const i = {};
-  for (const [n, s] of Object.entries(t)) {
-    if (n === "__proto__" || n === "constructor" || n === "prototype" || !(n in e)) continue;
-    const r = e[n];
-    if (r && typeof r == "object" && !Array.isArray(r)) {
-      s && typeof s == "object" && !Array.isArray(s) && (i[n] = Je(s, r));
+function mergeWorldStatePatch(state, patch, now = Date.now()) {
+  const next = mergeObject(clone(state || EMPTY_STATE), sanitizeWorldStatePatch(patch));
+  if (patch?.hikari && typeof patch.hikari === "object" && patch.hikari.updatedAt === void 0 && patch.hikari.stale === void 0) {
+    next.hikari.updatedAt = now;
+    next.hikari.stale = false;
+  }
+  next.revision = Math.max(Number(next.revision) || 0, Number(state?.revision) || 0) + 1;
+  next.updatedAt = now;
+  return next;
+}
+const RENDERER_HIKARI_FIELDS = /* @__PURE__ */ new Set(["speaking", "listening", "thinking", "dragging", "directInteraction", "currentBehavior", "attentionTarget", "semanticReaction"]);
+function sanitizeRendererWorldPatch(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return {};
+  const safe = {};
+  if (patch.hikari && typeof patch.hikari === "object" && !Array.isArray(patch.hikari)) {
+    safe.hikari = {};
+    for (const [key, value] of Object.entries(patch.hikari)) {
+      if (!RENDERER_HIKARI_FIELDS.has(key)) continue;
+      if (["speaking", "listening", "thinking", "dragging", "directInteraction"].includes(key) && typeof value === "boolean") safe.hikari[key] = value;
+      else if (key === "currentBehavior" && typeof value === "string") safe.hikari[key] = value.slice(0, 64);
+      else if (key === "attentionTarget" && ["none", "user-pointer", "screen-center"].includes(value)) safe.hikari[key] = value;
+      else if (key === "semanticReaction" && (value === null || typeof value === "string")) safe.hikari[key] = typeof value === "string" ? value.slice(0, 64) : null;
+    }
+    if (!Object.keys(safe.hikari).length) delete safe.hikari;
+  }
+  if (typeof patch.audio?.microphone?.voiceActive === "boolean") {
+    safe.audio = { microphone: { voiceActive: patch.audio.microphone.voiceActive } };
+  }
+  return safe;
+}
+const PATCH_SHAPE = EMPTY_STATE;
+function sanitizeWorldStatePatch(patch, shape = PATCH_SHAPE) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return {};
+  const clean = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype" || !(key in shape)) continue;
+    const expected = shape[key];
+    if (expected && typeof expected === "object" && !Array.isArray(expected)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) clean[key] = sanitizeWorldStatePatch(value, expected);
       continue;
     }
-    if (Array.isArray(r)) {
-      Array.isArray(s) && (i[n] = s.slice(0, 50).map((a) => se(a)).filter((a) => a !== void 0));
+    if (Array.isArray(expected)) {
+      if (Array.isArray(value)) clean[key] = value.slice(0, 50).map((item) => sanitizeLooseValue(item)).filter((item) => item !== void 0);
       continue;
     }
-    r === null ? s === null ? i[n] = null : typeof s == "string" ? i[n] = s.slice(0, 1e3) : typeof s == "number" && Number.isFinite(s) ? i[n] = s : s && typeof s == "object" && !Array.isArray(s) && (i[n] = se(s)) : typeof r == "number" ? typeof s == "number" && Number.isFinite(s) && (i[n] = s) : typeof r == "boolean" ? typeof s == "boolean" && (i[n] = s) : typeof r == "string" && typeof s == "string" && (i[n] = s.slice(0, 1e3));
-  }
-  return i;
-}
-function se(t, e = 0) {
-  if (!(e > 4)) {
-    if (t === null || typeof t == "boolean") return t;
-    if (typeof t == "number") return Number.isFinite(t) ? t : void 0;
-    if (typeof t == "string") return t.slice(0, 1e3);
-    if (Array.isArray(t)) return t.slice(0, 50).map((i) => se(i, e + 1)).filter((i) => i !== void 0);
-    if (t && typeof t == "object") {
-      const i = {};
-      for (const [n, s] of Object.entries(t).slice(0, 50)) {
-        if (["__proto__", "constructor", "prototype"].includes(n)) continue;
-        const r = se(s, e + 1);
-        r !== void 0 && (i[n] = r);
-      }
-      return i;
+    if (expected === null) {
+      if (value === null) clean[key] = null;
+      else if (typeof value === "string") clean[key] = value.slice(0, 1e3);
+      else if (typeof value === "number" && Number.isFinite(value)) clean[key] = value;
+      else if (value && typeof value === "object" && !Array.isArray(value)) clean[key] = sanitizeLooseValue(value);
+    } else if (typeof expected === "number") {
+      if (typeof value === "number" && Number.isFinite(value)) clean[key] = value;
+    } else if (typeof expected === "boolean") {
+      if (typeof value === "boolean") clean[key] = value;
+    } else if (typeof expected === "string" && typeof value === "string") {
+      clean[key] = value.slice(0, 1e3);
     }
   }
+  return clean;
 }
-function Ct(t, e = Date.now(), { screenSummaryMaxAgeMs: i = 12e4, screenChangeMaxAgeMs: n = 12e4, pointerMaxAgeMs: s = 2e3, activityMaxAgeMs: r = 3e3, contextMaxAgeMs: a = 5e3 } = {}) {
-  const o = Ee(t || he), l = o.desktop?.activity;
-  l && (l.idleForMs = l.lastInputAt ? Math.max(0, e - l.lastInputAt) : 0, l.stale = !l.updatedAt || e - l.updatedAt > r, l.stale && (l.typing = l.scrolling = l.clicking = !1)), o.desktop && (o.desktop.contextStale = !o.desktop.contextUpdatedAt || e - o.desktop.contextUpdatedAt > a);
-  const u = o.desktop?.screen;
-  u && (u.changeStale = !u.changeAt || e - u.changeAt > n, u.changeStale && (u.changeLevel = "unknown")), u?.summaryAt && e - u.summaryAt > i && (u.lastSummary = "", u.summaryAt = 0, u.summaryStale = !0, u.summaryContextKey = ""), u && !u.summaryAt && (u.summaryStale = !0);
-  const c = o.desktop?.pointer;
-  c && (!c.updatedAt || e - c.updatedAt > s) && (c.x = null, c.y = null, c.displayId = null, c.stale = !0);
-  const h = o.audio?.system;
-  h && (h.stale = !h.updatedAt || e - h.updatedAt > 15e3);
-  const d = o.hikari;
-  return d && (d.stale = !d.updatedAt || e - d.updatedAt > 6e4, d.stale && (d.speaking = d.listening = d.thinking = d.dragging = d.directInteraction = !1, d.semanticReaction = null, d.currentBehavior = "idle", d.attentionTarget = "none")), o.audio?.wake?.expiresAt && e >= o.audio.wake.expiresAt && (o.audio.wake = { active: !1, expiresAt: 0 }), o;
+function sanitizeLooseValue(value, depth = 0) {
+  if (depth > 4) return void 0;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : void 0;
+  if (typeof value === "string") return value.slice(0, 1e3);
+  if (Array.isArray(value)) return value.slice(0, 50).map((item) => sanitizeLooseValue(item, depth + 1)).filter((item) => item !== void 0);
+  if (value && typeof value === "object") {
+    const clean = {};
+    for (const [key, item] of Object.entries(value).slice(0, 50)) {
+      if (["__proto__", "constructor", "prototype"].includes(key)) continue;
+      const sanitized = sanitizeLooseValue(item, depth + 1);
+      if (sanitized !== void 0) clean[key] = sanitized;
+    }
+    return clean;
+  }
+  return void 0;
 }
-class It {
-  constructor({ minimumIdleMs: e = 9e4, greetingCooldownMs: i = 3e5, now: n = () => Date.now() } = {}) {
-    this.minimumIdleMs = Math.max(6e4, e), this.greetingCooldownMs = i, this.now = n, this.reset();
+function expireWorldStateFields(state, now = Date.now(), { screenSummaryMaxAgeMs = 12e4, screenChangeMaxAgeMs = 12e4, pointerMaxAgeMs = 2e3, activityMaxAgeMs = 3e3, contextMaxAgeMs = 5e3 } = {}) {
+  const next = clone(state || EMPTY_STATE);
+  const activity = next.desktop?.activity;
+  if (activity) {
+    activity.idleForMs = activity.lastInputAt ? Math.max(0, now - activity.lastInputAt) : 0;
+    activity.stale = !activity.updatedAt || now - activity.updatedAt > activityMaxAgeMs;
+    if (activity.stale) activity.typing = activity.scrolling = activity.clicking = false;
+  }
+  if (next.desktop) next.desktop.contextStale = !next.desktop.contextUpdatedAt || now - next.desktop.contextUpdatedAt > contextMaxAgeMs;
+  const screen2 = next.desktop?.screen;
+  if (screen2) {
+    screen2.changeStale = !screen2.changeAt || now - screen2.changeAt > screenChangeMaxAgeMs;
+    if (screen2.changeStale) screen2.changeLevel = "unknown";
+  }
+  if (screen2?.summaryAt && now - screen2.summaryAt > screenSummaryMaxAgeMs) {
+    screen2.lastSummary = "";
+    screen2.summaryAt = 0;
+    screen2.summaryStale = true;
+    screen2.summaryContextKey = "";
+  }
+  if (screen2 && !screen2.summaryAt) screen2.summaryStale = true;
+  const pointer = next.desktop?.pointer;
+  if (pointer && (!pointer.updatedAt || now - pointer.updatedAt > pointerMaxAgeMs)) {
+    pointer.x = null;
+    pointer.y = null;
+    pointer.displayId = null;
+    pointer.stale = true;
+  }
+  const systemAudio = next.audio?.system;
+  if (systemAudio) systemAudio.stale = !systemAudio.updatedAt || now - systemAudio.updatedAt > 15e3;
+  const hikari = next.hikari;
+  if (hikari) {
+    hikari.stale = !hikari.updatedAt || now - hikari.updatedAt > 6e4;
+    if (hikari.stale) {
+      hikari.speaking = hikari.listening = hikari.thinking = hikari.dragging = hikari.directInteraction = false;
+      hikari.semanticReaction = null;
+      hikari.currentBehavior = "idle";
+      hikari.attentionTarget = "none";
+    }
+  }
+  if (next.audio?.wake?.expiresAt && now >= next.audio.wake.expiresAt) next.audio.wake = { active: false, expiresAt: 0 };
+  return next;
+}
+class IdleReturnTracker {
+  constructor({ minimumIdleMs = 9e4, greetingCooldownMs = 3e5, now = () => Date.now() } = {}) {
+    this.minimumIdleMs = Math.max(6e4, minimumIdleMs);
+    this.greetingCooldownMs = greetingCooldownMs;
+    this.now = now;
+    this.reset();
   }
   reset() {
-    this.lastInputAt = this.now(), this.lastReturnAt = -1 / 0;
+    this.lastInputAt = this.now();
+    this.lastReturnAt = -Infinity;
   }
-  record(e, i = this.now()) {
-    const n = Math.max(0, i - this.lastInputAt);
-    return this.lastInputAt = i, n < this.minimumIdleMs || i - this.lastReturnAt < this.greetingCooldownMs ? null : (this.lastReturnAt = i, { idleDurationMs: n, inputType: e, resumedAt: i, eventCount: 1 });
+  record(inputType, timestamp = this.now()) {
+    const idleDurationMs = Math.max(0, timestamp - this.lastInputAt);
+    this.lastInputAt = timestamp;
+    if (idleDurationMs < this.minimumIdleMs || timestamp - this.lastReturnAt < this.greetingCooldownMs) return null;
+    this.lastReturnAt = timestamp;
+    return { idleDurationMs, inputType, resumedAt: timestamp, eventCount: 1 };
   }
 }
-const Re = { low: 0, normal: 1, important: 2 }, Mt = 24, xt = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture", kt = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility", Et = /* @__PURE__ */ new Set([
+const PRIORITY_RANK = { low: 0, normal: 1, important: 2 };
+const PIXEL_CHANGE_DELTA = 24;
+const MACOS_SCREEN_CAPTURE_SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+const MACOS_ACCESSIBILITY_SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+const BACKGROUND_WINDOW_EXCLUSIONS = /* @__PURE__ */ new Set([
   "com.apple.notificationcenterui",
   "com.apple.WindowManager",
   "com.apple.dock",
   "com.apple.controlcenter",
   "com.apple.systemuiserver"
-]), we = Ve(Ge);
-function q(t) {
-  return typeof t == "string" ? t.trim() : "";
+]);
+const execFile$1 = promisify(execFile$2);
+function normalizeText(value) {
+  return typeof value === "string" ? value.trim() : "";
 }
-function Ye(t) {
-  if (!t) return null;
-  const e = Number(t.x), i = Number(t.y), n = Number(t.width), s = Number(t.height);
-  return [e, i, n, s].every(Number.isFinite) ? { x: e, y: i, width: n, height: s } : null;
+function cloneBounds(bounds) {
+  if (!bounds) return null;
+  const x = Number(bounds.x);
+  const y = Number(bounds.y);
+  const width = Number(bounds.width);
+  const height = Number(bounds.height);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  return { x, y, width, height };
 }
-function Ne(t) {
-  if (!t?.owner) return null;
-  const e = Number(t.id);
+function normalizeActiveWindow(activeWindow) {
+  if (!activeWindow?.owner) return null;
+  const windowId = Number(activeWindow.id);
   return {
-    appName: q(t.owner.name) || "Unknown application",
-    bundleId: q(t.owner.bundleId),
-    windowTitle: q(t.title),
-    windowId: Number.isFinite(e) ? e : null,
-    processId: Number.isFinite(Number(t.owner.processId)) ? Number(t.owner.processId) : null,
-    bounds: Ye(t.bounds)
+    appName: normalizeText(activeWindow.owner.name) || "Unknown application",
+    bundleId: normalizeText(activeWindow.owner.bundleId),
+    windowTitle: normalizeText(activeWindow.title),
+    windowId: Number.isFinite(windowId) ? windowId : null,
+    processId: Number.isFinite(Number(activeWindow.owner.processId)) ? Number(activeWindow.owner.processId) : null,
+    bounds: cloneBounds(activeWindow.bounds)
   };
 }
-function Pt(t, e) {
-  if (!t || q(t.windowTitle) || !e) return t;
-  const i = q(e.name);
-  return i ? { ...t, windowTitle: i } : t;
+function enrichWindowTitleFromSource(context, exactSource) {
+  if (!context || normalizeText(context.windowTitle) || !exactSource) return context;
+  const windowTitle = normalizeText(exactSource.name);
+  return windowTitle ? { ...context, windowTitle } : context;
 }
-function re(t) {
-  if (!t) return "";
-  const e = t.bundleId || t.appName || "unknown", i = t.windowId ?? (t.windowTitle || "unknown");
-  return `${e}:${i}`;
+function getContextKey(context) {
+  if (!context) return "";
+  const owner = context.bundleId || context.appName || "unknown";
+  const windowIdentity = context.windowId ?? (context.windowTitle || "unknown");
+  return `${owner}:${windowIdentity}`;
 }
-function ye(t, e) {
-  return !!(t && e && re(t) === re(e));
+function sameContext(left, right) {
+  return Boolean(left && right && getContextKey(left) === getContextKey(right));
 }
-function B(t) {
-  return t ? {
-    appName: t.appName,
-    bundleId: t.bundleId,
-    windowTitle: t.windowTitle
-  } : null;
+function publicContext(context) {
+  if (!context) return null;
+  return {
+    appName: context.appName,
+    bundleId: context.bundleId,
+    windowTitle: context.windowTitle
+  };
 }
-function _t(t) {
-  const e = /^window:(\d+):/.exec(t || "");
-  return e ? Number(e[1]) : null;
+function sourceWindowId(sourceId) {
+  const match = /^window:(\d+):/.exec(sourceId || "");
+  return match ? Number(match[1]) : null;
 }
-function D(t) {
-  const e = t?.getSize?.();
-  return e && e.width > 0 && e.height > 0 ? e : null;
+function imageSize(image) {
+  const size = image?.getSize?.();
+  return size && size.width > 0 && size.height > 0 ? size : null;
 }
-function Rt(t, e, i) {
-  return !t || t.isEmpty() ? null : t.resize({ width: e, height: i, quality: "good" });
+function resizeExact(image, width, height) {
+  if (!image || image.isEmpty()) return null;
+  return image.resize({ width, height, quality: "good" });
 }
-function Le(t, e, i) {
-  return !!(i && t >= i.x && e >= i.y && t < i.x + i.width && e < i.y + i.height);
+function isMasked(x, y, mask) {
+  return Boolean(
+    mask && x >= mask.x && y >= mask.y && x < mask.x + mask.width && y < mask.y + mask.height
+  );
 }
-function Nt(t, e, i = ke.screen) {
-  const n = D(t?.image), s = D(e?.image);
-  if (!n || !s || n.width !== s.width || n.height !== s.height)
+function compareCapturedImages(previous, current, config = awarenessConfig.screen) {
+  const previousSize = imageSize(previous?.image);
+  const currentSize = imageSize(current?.image);
+  if (!previousSize || !currentSize || previousSize.width !== currentSize.width || previousSize.height !== currentSize.height) {
     return null;
-  const r = t.image.getBitmap(), a = e.image.getBitmap();
-  if (r.length !== a.length) return null;
-  const o = s.width, l = s.height, u = 2;
-  let c = 0, h = 0;
-  for (let m = 0; m < l; m += u)
-    for (let A = 0; A < o; A += u) {
-      if (Le(A, m, t.mask) || Le(A, m, e.mask)) continue;
-      const C = (m * o + A) * 4, K = Math.abs(r[C] - a[C]), I = Math.abs(r[C + 1] - a[C + 1]), Z = Math.abs(r[C + 2] - a[C + 2]);
-      Math.max(Z, I, K) >= Mt && (c += 1), h += 1;
+  }
+  const previousBitmap = previous.image.getBitmap();
+  const currentBitmap = current.image.getBitmap();
+  if (previousBitmap.length !== currentBitmap.length) return null;
+  const width = currentSize.width;
+  const height = currentSize.height;
+  const step = 2;
+  let changed = 0;
+  let compared = 0;
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      if (isMasked(x, y, previous.mask) || isMasked(x, y, current.mask)) continue;
+      const offset = (y * width + x) * 4;
+      const blueDelta = Math.abs(previousBitmap[offset] - currentBitmap[offset]);
+      const greenDelta = Math.abs(previousBitmap[offset + 1] - currentBitmap[offset + 1]);
+      const redDelta = Math.abs(previousBitmap[offset + 2] - currentBitmap[offset + 2]);
+      if (Math.max(redDelta, greenDelta, blueDelta) >= PIXEL_CHANGE_DELTA) changed += 1;
+      compared += 1;
     }
-  if (h === 0) return null;
-  const d = c / h;
-  let f = "none";
-  return d >= i.majorChangeThreshold ? f = "major" : d >= i.significantChangeThreshold ? f = "significant" : d >= i.minorChangeThreshold && (f = "minor"), {
-    ratio: d,
-    level: f,
-    significant: d >= i.significantChangeThreshold
+  }
+  if (compared === 0) return null;
+  const ratio = changed / compared;
+  let level = "none";
+  if (ratio >= config.majorChangeThreshold) level = "major";
+  else if (ratio >= config.significantChangeThreshold) level = "significant";
+  else if (ratio >= config.minorChangeThreshold) level = "minor";
+  return {
+    ratio,
+    level,
+    significant: ratio >= config.significantChangeThreshold
   };
 }
-function Y() {
-  return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `awareness-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+function createId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `awareness-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
-class Lt {
+class DesktopAwarenessService {
   constructor({
-    emitCandidate: e,
-    getHikariBounds: i,
-    config: n = ke,
-    activeWindowProvider: s,
-    openWindowsProvider: r,
-    captureSourcesProvider: a,
-    mediaPlaybackProvider: o
+    emitCandidate,
+    getHikariBounds,
+    config = awarenessConfig,
+    activeWindowProvider,
+    openWindowsProvider,
+    captureSourcesProvider,
+    mediaPlaybackProvider
   } = {}) {
-    this.config = n, this.emitCandidate = typeof e == "function" ? e : () => {
-    }, this.getHikariBounds = typeof i == "function" ? i : () => null, this.activeWindowProvider = s || null, this.openWindowsProvider = r || null, this.captureSourcesProvider = a || ((l) => je.getSources(l)), this.mediaPlaybackProvider = o || null, this.mediaPlaybackTracker = new wt({
+    this.config = config;
+    this.emitCandidate = typeof emitCandidate === "function" ? emitCandidate : () => {
+    };
+    this.getHikariBounds = typeof getHikariBounds === "function" ? getHikariBounds : () => null;
+    this.activeWindowProvider = activeWindowProvider || null;
+    this.openWindowsProvider = openWindowsProvider || null;
+    this.captureSourcesProvider = captureSourcesProvider || ((options) => desktopCapturer.getSources(options));
+    this.mediaPlaybackProvider = mediaPlaybackProvider || null;
+    this.mediaPlaybackTracker = new MediaPlaybackStateTracker({
       debounceSamples: this.config.media?.debounceSamples
-    }), this.enabled = !1, this.inputHook = null, this.currentContext = null, this.pendingContext = null, this.comparisonHistory = /* @__PURE__ */ new Map(), this.snapshots = /* @__PURE__ */ new Map(), this.lastDirectInteractionAt = 0, this.lastCandidateAt = 0, this.pendingCandidate = null, this.observationChain = Promise.resolve(), this.typingSession = null, this.scrollSession = null, this.clickSession = null, this.contextTimer = null, this.contextSettleTimer = null, this.pendingCandidateTimer = null, this.mediaPlaybackTimer = null, this.mediaPlaybackPollRunning = !1, this.lastInputAt = 0, this.idleReturnTracker = new It(this.config.idleReturn), this.status = {
-      enabled: !1,
-      inputMonitoringAvailable: !1,
-      screenCaptureAvailable: !1,
+    });
+    this.enabled = false;
+    this.inputHook = null;
+    this.currentContext = null;
+    this.pendingContext = null;
+    this.comparisonHistory = /* @__PURE__ */ new Map();
+    this.snapshots = /* @__PURE__ */ new Map();
+    this.lastDirectInteractionAt = 0;
+    this.lastCandidateAt = 0;
+    this.pendingCandidate = null;
+    this.observationChain = Promise.resolve();
+    this.typingSession = null;
+    this.scrollSession = null;
+    this.clickSession = null;
+    this.contextTimer = null;
+    this.contextSettleTimer = null;
+    this.pendingCandidateTimer = null;
+    this.mediaPlaybackTimer = null;
+    this.mediaPlaybackPollRunning = false;
+    this.lastInputAt = 0;
+    this.idleReturnTracker = new IdleReturnTracker(this.config.idleReturn);
+    this.status = {
+      enabled: false,
+      inputMonitoringAvailable: false,
+      screenCaptureAvailable: false,
       screenCaptureStatus: process.platform === "darwin" ? "unknown" : "granted",
-      activeWindowAvailable: !1,
-      mediaPlaybackAvailable: !1,
+      activeWindowAvailable: false,
+      mediaPlaybackAvailable: false,
       errors: {}
-    }, this.handleKeydown = () => this.recordKeyboardActivity(), this.handleMousedown = () => this.recordClickActivity(), this.handleWheel = () => this.recordWheelActivity();
+    };
+    this.handleKeydown = () => this.recordKeyboardActivity();
+    this.handleMousedown = () => this.recordClickActivity();
+    this.handleWheel = () => this.recordWheelActivity();
   }
-  debug(e, i, n) {
-    this.config.debug && (n === void 0 ? console.info(`[AWARENESS ${e}] ${i}`) : console.info(`[AWARENESS ${e}] ${i}`, n));
+  debug(stage, message, detail) {
+    if (!this.config.debug) return;
+    if (detail === void 0) console.info(`[AWARENESS ${stage}] ${message}`);
+    else console.info(`[AWARENESS ${stage}] ${message}`, detail);
   }
   getStatus() {
     return {
@@ -412,78 +566,135 @@ class Lt {
       errors: { ...this.status.errors }
     };
   }
-  getActivityState(e = Date.now()) {
-    return bt(this, e);
+  getActivityState(now = Date.now()) {
+    return deriveDesktopActivityState(this, now);
   }
   async getGreetingContext() {
-    const e = (async () => {
-      this.activeWindowProvider || await this.initializeActiveWindowProvider();
-      const r = await this.getActiveContext();
-      let a = r && !this.isHikariContext(r) ? r : this.currentContext;
-      if (!a && this.openWindowsProvider) {
-        const o = await this.openWindowsProvider();
-        a = (Array.isArray(o) ? o : []).map(Ne).find((l) => l && !this.isHikariContext(l) && !Et.has(l.bundleId)) || null;
+    const activeWindowPromise = (async () => {
+      if (!this.activeWindowProvider) await this.initializeActiveWindowProvider();
+      const context = await this.getActiveContext();
+      let foreground = context && !this.isHikariContext(context) ? context : this.currentContext;
+      if (!foreground && this.openWindowsProvider) {
+        const windows = await this.openWindowsProvider();
+        foreground = (Array.isArray(windows) ? windows : []).map(normalizeActiveWindow).find((window) => window && !this.isHikariContext(window) && !BACKGROUND_WINDOW_EXCLUSIONS.has(window.bundleId)) || null;
       }
-      return B(a);
-    })().catch((r) => (this.debug("GREETING", "foreground context unavailable", r?.message || r), null)), i = (async () => {
+      return publicContext(foreground);
+    })().catch((error) => {
+      this.debug("GREETING", "foreground context unavailable", error?.message || error);
+      return null;
+    });
+    const mediaPromise = (async () => {
       if (!this.ensureMediaPlaybackProvider()) return null;
-      const r = await this.mediaPlaybackProvider();
-      return typeof r == "boolean" ? r ? "playing" : "stopped" : null;
-    })().catch((r) => (this.debug("GREETING", "media context unavailable", r?.message || r), null)), [n, s] = await Promise.all([
-      e,
-      i
+      const isPlaying = await this.mediaPlaybackProvider();
+      return typeof isPlaying === "boolean" ? isPlaying ? "playing" : "stopped" : null;
+    })().catch((error) => {
+      this.debug("GREETING", "media context unavailable", error?.message || error);
+      return null;
+    });
+    const [activeWindow, mediaPlaybackState] = await Promise.all([
+      activeWindowPromise,
+      mediaPromise
     ]);
-    return { activeWindow: n, mediaPlaybackState: s };
+    return { activeWindow, mediaPlaybackState };
   }
-  async setEnabled(e) {
-    return e ? await this.start() : this.stop(), this.getStatus();
+  async setEnabled(enabled) {
+    if (enabled) await this.start();
+    else this.stop();
+    return this.getStatus();
   }
   async start() {
-    return this.enabled ? this.getStatus() : (this.enabled = !0, this.status.enabled = !0, this.status.errors = {}, this.idleReturnTracker.reset(), this.refreshScreenCaptureStatus(), await this.initializeActiveWindowProvider(), await this.initializeInputMonitoring(), await this.initializeContextAndBaseline(), this.initializeMediaPlaybackMonitoring(), this.debug("STATUS", "desktop awareness enabled", this.getStatus()), this.getStatus());
+    if (this.enabled) return this.getStatus();
+    this.enabled = true;
+    this.status.enabled = true;
+    this.status.errors = {};
+    this.idleReturnTracker.reset();
+    this.refreshScreenCaptureStatus();
+    await this.initializeActiveWindowProvider();
+    await this.initializeInputMonitoring();
+    await this.initializeContextAndBaseline();
+    this.initializeMediaPlaybackMonitoring();
+    this.debug("STATUS", "desktop awareness enabled", this.getStatus());
+    return this.getStatus();
   }
   stop() {
-    for (const e of [this.typingSession, this.scrollSession, this.clickSession])
-      e?.timer && clearTimeout(e.timer);
+    for (const session2 of [this.typingSession, this.scrollSession, this.clickSession]) {
+      if (session2?.timer) clearTimeout(session2.timer);
+    }
     if (this.inputHook) {
-      this.inputHook.removeListener("keydown", this.handleKeydown), this.inputHook.removeListener("mousedown", this.handleMousedown), this.inputHook.removeListener("wheel", this.handleWheel);
+      this.inputHook.removeListener("keydown", this.handleKeydown);
+      this.inputHook.removeListener("mousedown", this.handleMousedown);
+      this.inputHook.removeListener("wheel", this.handleWheel);
       try {
         this.inputHook.stop();
-      } catch (e) {
-        this.debug("STATUS", "input hook stop failed", e?.message || e);
+      } catch (error) {
+        this.debug("STATUS", "input hook stop failed", error?.message || error);
       }
     }
-    this.enabled = !1, this.status.enabled = !1, this.inputHook = null, this.currentContext = null, this.pendingContext = null, this.typingSession = null, this.scrollSession = null, this.clickSession = null, this.pendingCandidate = null, this.mediaPlaybackTracker.reset(), this.mediaPlaybackPollRunning = !1, this.comparisonHistory.clear();
-    for (const e of this.snapshots.keys()) this.deleteSnapshot(e);
-    for (const e of [this.contextTimer, this.contextSettleTimer, this.pendingCandidateTimer, this.mediaPlaybackTimer])
-      e && clearTimeout(e);
-    this.contextTimer = null, this.contextSettleTimer = null, this.pendingCandidateTimer = null, this.mediaPlaybackTimer = null, this.debug("STATUS", "desktop awareness disabled");
+    this.enabled = false;
+    this.status.enabled = false;
+    this.inputHook = null;
+    this.currentContext = null;
+    this.pendingContext = null;
+    this.typingSession = null;
+    this.scrollSession = null;
+    this.clickSession = null;
+    this.pendingCandidate = null;
+    this.mediaPlaybackTracker.reset();
+    this.mediaPlaybackPollRunning = false;
+    this.comparisonHistory.clear();
+    for (const id of this.snapshots.keys()) this.deleteSnapshot(id);
+    for (const timer of [this.contextTimer, this.contextSettleTimer, this.pendingCandidateTimer, this.mediaPlaybackTimer]) {
+      if (timer) clearTimeout(timer);
+    }
+    this.contextTimer = null;
+    this.contextSettleTimer = null;
+    this.pendingCandidateTimer = null;
+    this.mediaPlaybackTimer = null;
+    this.debug("STATUS", "desktop awareness disabled");
   }
   noteDirectInteraction() {
-    this.lastDirectInteractionAt = Date.now(), this.pendingCandidate = null, this.pendingCandidateTimer && clearTimeout(this.pendingCandidateTimer), this.pendingCandidateTimer = null, this.debug("POLICY", "direct Hikari interaction suppression started");
+    this.lastDirectInteractionAt = Date.now();
+    this.pendingCandidate = null;
+    if (this.pendingCandidateTimer) clearTimeout(this.pendingCandidateTimer);
+    this.pendingCandidateTimer = null;
+    this.debug("POLICY", "direct Hikari interaction suppression started");
   }
   refreshScreenCaptureStatus() {
     if (process.platform !== "darwin") {
-      this.status.screenCaptureAvailable = !0, this.status.screenCaptureStatus = "granted", delete this.status.errors.screenCapture;
+      this.status.screenCaptureAvailable = true;
+      this.status.screenCaptureStatus = "granted";
+      delete this.status.errors.screenCapture;
       return;
     }
     try {
-      const e = j.getMediaAccessStatus("screen");
-      this.status.screenCaptureStatus = e, this.status.screenCaptureAvailable = e === "granted", this.status.screenCaptureAvailable ? delete this.status.errors.screenCapture : this.status.errors.screenCapture = e;
-    } catch (e) {
-      this.status.screenCaptureAvailable = !1, this.status.screenCaptureStatus = "unknown", this.status.errors.screenCapture = e?.message || String(e);
+      const permission = systemPreferences.getMediaAccessStatus("screen");
+      this.status.screenCaptureStatus = permission;
+      this.status.screenCaptureAvailable = permission === "granted";
+      if (this.status.screenCaptureAvailable) delete this.status.errors.screenCapture;
+      else this.status.errors.screenCapture = permission;
+    } catch (error) {
+      this.status.screenCaptureAvailable = false;
+      this.status.screenCaptureStatus = "unknown";
+      this.status.errors.screenCapture = error?.message || String(error);
     }
   }
   refreshInputMonitoringStatus() {
-    if (this.inputHook)
-      return this.status.inputMonitoringAvailable = !0, delete this.status.errors.inputMonitoring, !0;
+    if (this.inputHook) {
+      this.status.inputMonitoringAvailable = true;
+      delete this.status.errors.inputMonitoring;
+      return true;
+    }
     if (process.platform !== "darwin") return this.status.inputMonitoringAvailable;
-    const e = j.isTrustedAccessibilityClient(!1);
-    return this.status.inputMonitoringAvailable = !1, this.status.errors.inputMonitoring = e ? "Keyboard monitor is not running." : "Accessibility permission is denied.", e;
+    const trusted = systemPreferences.isTrustedAccessibilityClient(false);
+    this.status.inputMonitoringAvailable = false;
+    this.status.errors.inputMonitoring = trusted ? "Keyboard monitor is not running." : "Accessibility permission is denied.";
+    return trusted;
   }
   async refreshPermissionStatus() {
     this.refreshScreenCaptureStatus();
-    const e = this.refreshInputMonitoringStatus();
-    return this.enabled && e && !this.inputHook && await this.initializeInputMonitoring(), this.getStatus();
+    const trusted = this.refreshInputMonitoringStatus();
+    if (this.enabled && trusted && !this.inputHook) await this.initializeInputMonitoring();
+    return this.getStatus();
   }
   /**
    * macOS does not expose an Electron API that can grant Screen Recording
@@ -492,60 +703,79 @@ class Lt {
    */
   async requestScreenCapturePermission() {
     this.refreshScreenCaptureStatus();
-    let e = !1, i = null, n = !1;
+    let settingsOpened = false;
+    let openError = null;
+    let probeAttempted = false;
     if (process.platform === "darwin" && !this.status.screenCaptureAvailable) {
-      n = !0;
+      probeAttempted = true;
       try {
         await this.captureSourcesProvider({
           types: ["screen"],
           thumbnailSize: { width: 1, height: 1 },
-          fetchWindowIcons: !1
-        }), delete this.status.errors.screenCaptureProbe;
-      } catch (s) {
-        this.status.errors.screenCaptureProbe = s?.message || String(s), this.debug("SCREEN", "permission probe failed", this.status.errors.screenCaptureProbe);
+          fetchWindowIcons: false
+        });
+        delete this.status.errors.screenCaptureProbe;
+      } catch (error) {
+        this.status.errors.screenCaptureProbe = error?.message || String(error);
+        this.debug("SCREEN", "permission probe failed", this.status.errors.screenCaptureProbe);
       }
       this.refreshScreenCaptureStatus();
     }
-    if (process.platform === "darwin" && !this.status.screenCaptureAvailable)
+    if (process.platform === "darwin" && !this.status.screenCaptureAvailable) {
       try {
-        await Te.openExternal(xt), e = !0;
-      } catch (s) {
-        i = s?.message || String(s), this.status.errors.screenCaptureSettings = i;
+        await shell.openExternal(MACOS_SCREEN_CAPTURE_SETTINGS_URL);
+        settingsOpened = true;
+      } catch (error) {
+        openError = error?.message || String(error);
+        this.status.errors.screenCaptureSettings = openError;
       }
-    return this.refreshScreenCaptureStatus(), {
+    }
+    this.refreshScreenCaptureStatus();
+    return {
       ...this.getStatus(),
-      settingsOpened: e,
+      settingsOpened,
       permissionKind: "screen",
-      probeAttempted: n,
+      probeAttempted,
       requiresUserAction: process.platform === "darwin" && !this.status.screenCaptureAvailable,
-      error: i
+      error: openError
     };
   }
   async requestInputMonitoringPermission() {
-    let e = !1, i = !1, n = null;
-    if (process.platform === "darwin" && !this.inputHook && (i = !0, j.isTrustedAccessibilityClient(!0) && await this.initializeInputMonitoring()), process.platform === "darwin" && !this.status.inputMonitoringAvailable)
+    let settingsOpened = false;
+    let promptAttempted = false;
+    let openError = null;
+    if (process.platform === "darwin" && !this.inputHook) {
+      promptAttempted = true;
+      const trusted = systemPreferences.isTrustedAccessibilityClient(true);
+      if (trusted) await this.initializeInputMonitoring();
+    }
+    if (process.platform === "darwin" && !this.status.inputMonitoringAvailable) {
       try {
-        await Te.openExternal(kt), e = !0;
-      } catch (s) {
-        n = s?.message || String(s), this.status.errors.inputMonitoringSettings = n;
+        await shell.openExternal(MACOS_ACCESSIBILITY_SETTINGS_URL);
+        settingsOpened = true;
+      } catch (error) {
+        openError = error?.message || String(error);
+        this.status.errors.inputMonitoringSettings = openError;
       }
-    return this.refreshInputMonitoringStatus(), {
+    }
+    this.refreshInputMonitoringStatus();
+    return {
       ...this.getStatus(),
-      settingsOpened: e,
+      settingsOpened,
       permissionKind: "inputMonitoring",
-      promptAttempted: i,
+      promptAttempted,
       requiresUserAction: process.platform === "darwin" && !this.status.inputMonitoringAvailable,
-      error: n
+      error: openError
     };
   }
   async initializeActiveWindowProvider() {
     if (this.activeWindowProvider) {
-      this.status.activeWindowAvailable = !0;
+      this.status.activeWindowAvailable = true;
       return;
     }
     try {
-      if (process.platform === "darwin" && v.isPackaged) {
-        const n = _.join(
+      if (process.platform === "darwin" && app.isPackaged) {
+        const helperPath = path.join(
           process.resourcesPath,
           "app.asar.unpacked",
           "node_modules",
@@ -553,1561 +783,2199 @@ class Lt {
           "main"
         );
         this.activeWindowProvider = async () => {
-          const s = ["--no-accessibility-permission", "--no-screen-recording-permission"], { stdout: r } = await we(n, s, { encoding: "utf8" });
-          return JSON.parse(r);
-        }, this.openWindowsProvider = async () => {
-          const s = [
+          const args = ["--no-accessibility-permission", "--no-screen-recording-permission"];
+          const { stdout } = await execFile$1(helperPath, args, { encoding: "utf8" });
+          return JSON.parse(stdout);
+        };
+        this.openWindowsProvider = async () => {
+          const args = [
             "--no-accessibility-permission",
             "--no-screen-recording-permission",
             "--open-windows-list"
-          ], { stdout: r } = await we(n, s, { encoding: "utf8" });
-          return JSON.parse(r);
-        }, this.status.activeWindowAvailable = !0;
+          ];
+          const { stdout } = await execFile$1(helperPath, args, { encoding: "utf8" });
+          return JSON.parse(stdout);
+        };
+        this.status.activeWindowAvailable = true;
         return;
       }
-      const { activeWindow: e, openWindows: i } = await import("./index-imCoeF09.js");
-      this.activeWindowProvider = () => e(_e), this.openWindowsProvider = () => i(_e), this.status.activeWindowAvailable = !0;
-    } catch (e) {
-      this.status.activeWindowAvailable = !1, this.status.errors.activeWindow = e?.message || String(e), this.debug("STATUS", "active-window support unavailable", this.status.errors.activeWindow);
+      const { activeWindow, openWindows } = await import("./index-D7v8WbNU.js");
+      this.activeWindowProvider = () => activeWindow(activeWindowOptions);
+      this.openWindowsProvider = () => openWindows(activeWindowOptions);
+      this.status.activeWindowAvailable = true;
+    } catch (error) {
+      this.status.activeWindowAvailable = false;
+      this.status.errors.activeWindow = error?.message || String(error);
+      this.debug("STATUS", "active-window support unavailable", this.status.errors.activeWindow);
     }
   }
   async initializeInputMonitoring() {
     if (this.inputHook) {
-      this.status.inputMonitoringAvailable = !0, delete this.status.errors.inputMonitoring;
+      this.status.inputMonitoringAvailable = true;
+      delete this.status.errors.inputMonitoring;
       return;
     }
-    if (process.platform === "darwin" && !j.isTrustedAccessibilityClient(!1)) {
-      this.status.inputMonitoringAvailable = !1, this.status.errors.inputMonitoring = "Accessibility permission is denied.";
+    if (process.platform === "darwin" && !systemPreferences.isTrustedAccessibilityClient(false)) {
+      this.status.inputMonitoringAvailable = false;
+      this.status.errors.inputMonitoring = "Accessibility permission is denied.";
       return;
     }
     try {
-      const { uIOhook: e } = await import("./index-BIO8bREU.js").then((i) => i.i);
-      this.inputHook = e, e.on("keydown", this.handleKeydown), e.on("mousedown", this.handleMousedown), e.on("wheel", this.handleWheel), e.start(), this.status.inputMonitoringAvailable = !0, delete this.status.errors.inputMonitoring;
-    } catch (e) {
-      this.inputHook && (this.inputHook.removeListener("keydown", this.handleKeydown), this.inputHook.removeListener("mousedown", this.handleMousedown), this.inputHook.removeListener("wheel", this.handleWheel)), this.inputHook = null, this.status.inputMonitoringAvailable = !1, this.status.errors.inputMonitoring = e?.message || String(e), this.debug("STATUS", "global input monitoring unavailable", this.status.errors.inputMonitoring);
+      const { uIOhook } = await import("./index-C5658-X_.js").then((n) => n.i);
+      this.inputHook = uIOhook;
+      uIOhook.on("keydown", this.handleKeydown);
+      uIOhook.on("mousedown", this.handleMousedown);
+      uIOhook.on("wheel", this.handleWheel);
+      uIOhook.start();
+      this.status.inputMonitoringAvailable = true;
+      delete this.status.errors.inputMonitoring;
+    } catch (error) {
+      if (this.inputHook) {
+        this.inputHook.removeListener("keydown", this.handleKeydown);
+        this.inputHook.removeListener("mousedown", this.handleMousedown);
+        this.inputHook.removeListener("wheel", this.handleWheel);
+      }
+      this.inputHook = null;
+      this.status.inputMonitoringAvailable = false;
+      this.status.errors.inputMonitoring = error?.message || String(error);
+      this.debug("STATUS", "global input monitoring unavailable", this.status.errors.inputMonitoring);
     }
   }
   initializeMediaPlaybackMonitoring() {
-    this.ensureMediaPlaybackProvider() && this.pollMediaPlayback();
+    if (!this.ensureMediaPlaybackProvider()) return;
+    void this.pollMediaPlayback();
   }
   ensureMediaPlaybackProvider() {
-    if (process.platform !== "darwin")
-      return this.status.mediaPlaybackAvailable = !1, this.status.errors.mediaPlayback = "System audio activity detection is currently available on macOS only.", !1;
+    if (process.platform !== "darwin") {
+      this.status.mediaPlaybackAvailable = false;
+      this.status.errors.mediaPlayback = "System audio activity detection is currently available on macOS only.";
+      return false;
+    }
     if (!this.mediaPlaybackProvider) {
-      const i = (v.isPackaged ? [_.join(process.resourcesPath, "media-state", "media-state")] : [
-        _.join(v.getAppPath(), "tools", "media-state", "media-state"),
-        _.resolve(process.cwd(), "tools", "media-state", "media-state")
-      ]).find((n) => de(n));
-      if (!i)
-        return this.status.mediaPlaybackAvailable = !1, this.status.errors.mediaPlayback = "Media-state helper is missing. Run npm run build.", !1;
+      const candidates = app.isPackaged ? [path.join(process.resourcesPath, "media-state", "media-state")] : [
+        path.join(app.getAppPath(), "tools", "media-state", "media-state"),
+        path.resolve(process.cwd(), "tools", "media-state", "media-state")
+      ];
+      const helperPath = candidates.find((candidate) => existsSync(candidate));
+      if (!helperPath) {
+        this.status.mediaPlaybackAvailable = false;
+        this.status.errors.mediaPlayback = "Media-state helper is missing. Run npm run build.";
+        return false;
+      }
       this.mediaPlaybackProvider = async () => {
-        const { stdout: n } = await we(i, [], {
+        const { stdout } = await execFile$1(helperPath, [], {
           encoding: "utf8",
           timeout: Math.max(1e3, this.config.media.pollIntervalMs)
-        }), s = mt(n);
-        if (s === null) throw new Error("Media-state helper returned an invalid result.");
-        return s;
+        });
+        const isPlaying = parseMediaPlaybackOutput(stdout);
+        if (isPlaying === null) throw new Error("Media-state helper returned an invalid result.");
+        return isPlaying;
       };
     }
-    return this.status.mediaPlaybackAvailable = !0, delete this.status.errors.mediaPlayback, !0;
+    this.status.mediaPlaybackAvailable = true;
+    delete this.status.errors.mediaPlayback;
+    return true;
   }
   async pollMediaPlayback() {
-    if (!(!this.enabled || !this.mediaPlaybackProvider || this.mediaPlaybackPollRunning)) {
-      this.mediaPlaybackPollRunning = !0;
-      try {
-        const e = await this.mediaPlaybackProvider();
-        if (!this.enabled) return;
-        if (this.status.mediaPlaybackAvailable = typeof e == "boolean", !this.status.mediaPlaybackAvailable) throw new Error("Media playback state was unavailable.");
-        delete this.status.errors.mediaPlayback;
-        const i = this.mediaPlaybackTracker.observe(e);
-        i && await this.handleMediaPlaybackTransition(i);
-      } catch (e) {
-        this.status.mediaPlaybackAvailable = !1, this.status.errors.mediaPlayback = e?.message || String(e), this.debug("MEDIA", "playback-state query failed", this.status.errors.mediaPlayback);
-      } finally {
-        this.mediaPlaybackPollRunning = !1, this.enabled && (this.mediaPlaybackTimer = setTimeout(
+    if (!this.enabled || !this.mediaPlaybackProvider || this.mediaPlaybackPollRunning) return;
+    this.mediaPlaybackPollRunning = true;
+    try {
+      const isPlaying = await this.mediaPlaybackProvider();
+      if (!this.enabled) return;
+      this.status.mediaPlaybackAvailable = typeof isPlaying === "boolean";
+      if (!this.status.mediaPlaybackAvailable) throw new Error("Media playback state was unavailable.");
+      delete this.status.errors.mediaPlayback;
+      const transition = this.mediaPlaybackTracker.observe(isPlaying);
+      if (transition) await this.handleMediaPlaybackTransition(transition);
+    } catch (error) {
+      this.status.mediaPlaybackAvailable = false;
+      this.status.errors.mediaPlayback = error?.message || String(error);
+      this.debug("MEDIA", "playback-state query failed", this.status.errors.mediaPlayback);
+    } finally {
+      this.mediaPlaybackPollRunning = false;
+      if (this.enabled) {
+        this.mediaPlaybackTimer = setTimeout(
           () => this.pollMediaPlayback(),
           this.config.media.pollIntervalMs
-        ));
+        );
       }
     }
   }
-  async handleMediaPlaybackTransition(e) {
-    let i = await this.getActiveContext();
-    (!i || this.isHikariContext(i)) && (i = this.currentContext);
-    const n = e.state === "playing", s = {
-      id: Y(),
+  async handleMediaPlaybackTransition(transition) {
+    let context = await this.getActiveContext();
+    if (!context || this.isHikariContext(context)) context = this.currentContext;
+    const started = transition.state === "playing";
+    const candidate = {
+      id: createId(),
       timestamp: Date.now(),
-      trigger: n ? "media_playback_started" : "media_playback_stopped",
+      trigger: started ? "media_playback_started" : "media_playback_stopped",
       activity: {},
       media: {
-        ...e,
+        ...transition,
         source: "system_audio_output"
       },
-      context: B(i),
+      context: publicContext(context),
       visualChange: null,
-      priority: n ? "important" : "low"
+      priority: started ? "important" : "low"
     };
-    this.debug("MEDIA", `${e.previousState} -> ${e.state}`), this.offerCandidate(s, null);
+    this.debug("MEDIA", `${transition.previousState} -> ${transition.state}`);
+    this.offerCandidate(candidate, null);
   }
   async initializeContextAndBaseline() {
-    const e = await this.getActiveContext();
-    if (!e || this.isHikariContext(e)) return;
-    const i = await this.captureContext(e), n = i?.context || e;
-    this.currentContext = n, i?.comparison && this.rememberComparison(n, i.comparison), this.debug("CONTEXT", `${n.appName} / ${n.windowTitle || "(untitled window)"}`);
+    const context = await this.getActiveContext();
+    if (!context || this.isHikariContext(context)) return;
+    const capture = await this.captureContext(context);
+    const resolvedContext = capture?.context || context;
+    this.currentContext = resolvedContext;
+    if (capture?.comparison) this.rememberComparison(resolvedContext, capture.comparison);
+    this.debug("CONTEXT", `${resolvedContext.appName} / ${resolvedContext.windowTitle || "(untitled window)"}`);
   }
-  isHikariContext(e) {
-    return e?.processId === process.pid || e?.bundleId === "com.electron.hikari";
+  isHikariContext(context) {
+    return context?.processId === process.pid || context?.bundleId === "com.electron.hikari";
   }
-  isDirectInteractionSuppressed(e = Date.now()) {
-    return e - this.lastDirectInteractionAt < this.config.hikariInteraction.suppressionMs;
+  isDirectInteractionSuppressed(now = Date.now()) {
+    return now - this.lastDirectInteractionAt < this.config.hikariInteraction.suppressionMs;
   }
-  recordInputActivity(e, i) {
-    this.lastInputAt = i;
-    const n = this.idleReturnTracker.record(e, i);
-    n && this.observeIdleReturn(n).catch((s) => this.debug("IDLE", "return context unavailable", s?.message || s));
+  recordInputActivity(inputType, now) {
+    this.lastInputAt = now;
+    const activity = this.idleReturnTracker.record(inputType, now);
+    if (activity) {
+      void this.observeIdleReturn(activity).catch((error) => this.debug("IDLE", "return context unavailable", error?.message || error));
+    }
   }
-  async observeIdleReturn(e) {
+  async observeIdleReturn(activity) {
     if (!this.enabled || this.isDirectInteractionSuppressed()) return;
-    const i = await this.getActiveContext();
-    !this.enabled || this.isHikariContext(i) || this.offerCandidate({
-      id: Y(),
-      timestamp: e.resumedAt,
+    const context = await this.getActiveContext();
+    if (!this.enabled || this.isHikariContext(context)) return;
+    this.offerCandidate({
+      id: createId(),
+      timestamp: activity.resumedAt,
       trigger: "idle_return",
-      activity: e,
-      context: B(i || this.currentContext),
+      activity,
+      context: publicContext(context || this.currentContext),
       visualChange: null,
       priority: "important"
     }, null);
   }
   recordKeyboardActivity() {
     if (!this.enabled) return;
-    const e = Date.now();
-    this.recordInputActivity("typing", e), this.debug("RAW", "keyboard activity"), this.scheduleContextInspection(), this.typingSession || (this.typingSession = { startedAt: e, lastAt: e, count: 0, timer: null }), this.typingSession.lastAt = e, this.typingSession.count += 1, this.typingSession.timer && clearTimeout(this.typingSession.timer), this.typingSession.timer = setTimeout(() => this.endTypingSession(), this.config.activity.typingPauseMs);
+    const now = Date.now();
+    this.recordInputActivity("typing", now);
+    this.debug("RAW", "keyboard activity");
+    this.scheduleContextInspection();
+    if (!this.typingSession) this.typingSession = { startedAt: now, lastAt: now, count: 0, timer: null };
+    this.typingSession.lastAt = now;
+    this.typingSession.count += 1;
+    if (this.typingSession.timer) clearTimeout(this.typingSession.timer);
+    this.typingSession.timer = setTimeout(() => this.endTypingSession(), this.config.activity.typingPauseMs);
   }
   endTypingSession() {
-    const e = this.typingSession;
-    if (this.typingSession = null, !e || e.count < this.config.activity.minimumTypingKeys) {
-      this.debug("SESSION", "typing session rejected: too few keys", e?.count || 0);
+    const session2 = this.typingSession;
+    this.typingSession = null;
+    if (!session2 || session2.count < this.config.activity.minimumTypingKeys) {
+      this.debug("SESSION", "typing session rejected: too few keys", session2?.count || 0);
       return;
     }
-    const i = {
-      durationMs: Math.max(0, e.lastAt - e.startedAt),
-      eventCount: e.count
+    const activity = {
+      durationMs: Math.max(0, session2.lastAt - session2.startedAt),
+      eventCount: session2.count
     };
-    this.debug("SESSION", "typing session ended", i), this.queueObservation("typing_session_end", i);
+    this.debug("SESSION", "typing session ended", activity);
+    this.queueObservation("typing_session_end", activity);
   }
   recordWheelActivity() {
     if (!this.enabled) return;
-    const e = Date.now();
-    this.recordInputActivity("scrolling", e), this.debug("RAW", "wheel activity"), this.scheduleContextInspection(), this.scrollSession || (this.scrollSession = { startedAt: e, lastAt: e, count: 0, timer: null }), this.scrollSession.lastAt = e, this.scrollSession.count += 1, this.scrollSession.timer && clearTimeout(this.scrollSession.timer), this.scrollSession.timer = setTimeout(() => this.endScrollSession(), this.config.activity.scrollPauseMs);
+    const now = Date.now();
+    this.recordInputActivity("scrolling", now);
+    this.debug("RAW", "wheel activity");
+    this.scheduleContextInspection();
+    if (!this.scrollSession) this.scrollSession = { startedAt: now, lastAt: now, count: 0, timer: null };
+    this.scrollSession.lastAt = now;
+    this.scrollSession.count += 1;
+    if (this.scrollSession.timer) clearTimeout(this.scrollSession.timer);
+    this.scrollSession.timer = setTimeout(() => this.endScrollSession(), this.config.activity.scrollPauseMs);
   }
   endScrollSession() {
-    const e = this.scrollSession;
-    if (this.scrollSession = null, !e || e.count < this.config.activity.minimumWheelEvents) {
-      this.debug("SESSION", "scroll session rejected: too few wheel events", e?.count || 0);
+    const session2 = this.scrollSession;
+    this.scrollSession = null;
+    if (!session2 || session2.count < this.config.activity.minimumWheelEvents) {
+      this.debug("SESSION", "scroll session rejected: too few wheel events", session2?.count || 0);
       return;
     }
-    const i = {
-      durationMs: Math.max(0, e.lastAt - e.startedAt),
-      eventCount: e.count
+    const activity = {
+      durationMs: Math.max(0, session2.lastAt - session2.startedAt),
+      eventCount: session2.count
     };
-    this.debug("SESSION", "scroll session ended", i), this.queueObservation("scroll_session_end", i);
+    this.debug("SESSION", "scroll session ended", activity);
+    this.queueObservation("scroll_session_end", activity);
   }
   recordClickActivity() {
     if (!this.enabled) return;
-    const e = Date.now();
-    this.recordInputActivity("clicking", e), this.debug("RAW", "mouse click activity"), this.scheduleContextInspection(), this.clickSession || (this.clickSession = { startedAt: e, lastAt: e, count: 0, timer: null }), this.clickSession.lastAt = e, this.clickSession.count += 1, this.clickSession.timer && clearTimeout(this.clickSession.timer), this.clickSession.timer = setTimeout(() => this.endClickSession(), this.config.activity.clickObservationDelayMs);
+    const now = Date.now();
+    this.recordInputActivity("clicking", now);
+    this.debug("RAW", "mouse click activity");
+    this.scheduleContextInspection();
+    if (!this.clickSession) this.clickSession = { startedAt: now, lastAt: now, count: 0, timer: null };
+    this.clickSession.lastAt = now;
+    this.clickSession.count += 1;
+    if (this.clickSession.timer) clearTimeout(this.clickSession.timer);
+    this.clickSession.timer = setTimeout(() => this.endClickSession(), this.config.activity.clickObservationDelayMs);
   }
   endClickSession() {
-    const e = this.clickSession;
-    if (this.clickSession = null, !e) return;
-    const i = {
-      durationMs: Math.max(0, e.lastAt - e.startedAt),
-      eventCount: e.count
+    const session2 = this.clickSession;
+    this.clickSession = null;
+    if (!session2) return;
+    const activity = {
+      durationMs: Math.max(0, session2.lastAt - session2.startedAt),
+      eventCount: session2.count
     };
-    this.debug("SESSION", "click activity settled", i), this.queueObservation("click_caused_screen_change", i);
+    this.debug("SESSION", "click activity settled", activity);
+    this.queueObservation("click_caused_screen_change", activity);
   }
   scheduleContextInspection() {
-    this.contextTimer && clearTimeout(this.contextTimer), this.contextTimer = setTimeout(
+    if (this.contextTimer) clearTimeout(this.contextTimer);
+    this.contextTimer = setTimeout(
       () => this.inspectPossibleContextChange(),
       this.config.screen.stableWindowDebounceMs
     );
   }
   async inspectPossibleContextChange() {
-    if (this.contextTimer = null, !this.enabled || this.isDirectInteractionSuppressed()) return;
-    const e = await this.getActiveContext();
-    !e || this.isHikariContext(e) || ye(e, this.currentContext) || (this.pendingContext = e, this.contextSettleTimer && clearTimeout(this.contextSettleTimer), this.contextSettleTimer = setTimeout(
+    this.contextTimer = null;
+    if (!this.enabled || this.isDirectInteractionSuppressed()) return;
+    const observed = await this.getActiveContext();
+    if (!observed || this.isHikariContext(observed) || sameContext(observed, this.currentContext)) return;
+    this.pendingContext = observed;
+    if (this.contextSettleTimer) clearTimeout(this.contextSettleTimer);
+    this.contextSettleTimer = setTimeout(
       () => this.commitStableContextChange(),
       this.config.screen.stableWindowDebounceMs
-    ));
+    );
   }
   async commitStableContextChange() {
-    if (this.contextSettleTimer = null, !this.enabled || !this.pendingContext || this.isDirectInteractionSuppressed()) return;
-    const e = await this.getActiveContext();
-    if (!e || this.isHikariContext(e) || !ye(e, this.pendingContext)) return;
-    const i = this.currentContext;
+    this.contextSettleTimer = null;
+    if (!this.enabled || !this.pendingContext || this.isDirectInteractionSuppressed()) return;
+    const confirmed = await this.getActiveContext();
+    if (!confirmed || this.isHikariContext(confirmed) || !sameContext(confirmed, this.pendingContext)) return;
+    const previous = this.currentContext;
     this.pendingContext = null;
-    const n = await this.captureContext(e), s = n?.context || e;
-    this.currentContext = s, n?.comparison && this.rememberComparison(s, n.comparison);
-    const r = !!(i && (i.bundleId || i.appName) !== (s.bundleId || s.appName)), a = r ? "application_changed" : "window_changed";
-    this.debug("CONTEXT", `${s.appName} / ${s.windowTitle || "(untitled window)"}`), this.offerCandidate({
-      id: Y(),
+    const capture = await this.captureContext(confirmed);
+    const resolvedContext = capture?.context || confirmed;
+    this.currentContext = resolvedContext;
+    if (capture?.comparison) this.rememberComparison(resolvedContext, capture.comparison);
+    const appChanged = Boolean(previous && (previous.bundleId || previous.appName) !== (resolvedContext.bundleId || resolvedContext.appName));
+    const trigger = appChanged ? "application_changed" : "window_changed";
+    this.debug("CONTEXT", `${resolvedContext.appName} / ${resolvedContext.windowTitle || "(untitled window)"}`);
+    this.offerCandidate({
+      id: createId(),
       timestamp: Date.now(),
-      trigger: a,
-      activity: r ? { fromApp: i?.appName || null, toApp: s.appName } : { fromWindow: i?.windowTitle || null, toWindow: s.windowTitle },
-      context: B(s),
+      trigger,
+      activity: appChanged ? { fromApp: previous?.appName || null, toApp: resolvedContext.appName } : { fromWindow: previous?.windowTitle || null, toWindow: resolvedContext.windowTitle },
+      context: publicContext(resolvedContext),
       visualChange: null,
       priority: "normal"
-    }, n?.semantic);
+    }, capture?.semantic);
   }
-  queueObservation(e, i) {
-    this.observationChain = this.observationChain.catch((n) => this.debug("ERROR", "previous observation failed", n?.message || n)).then(() => this.observeSession(e, i));
+  queueObservation(trigger, activity) {
+    this.observationChain = this.observationChain.catch((error) => this.debug("ERROR", "previous observation failed", error?.message || error)).then(() => this.observeSession(trigger, activity));
   }
-  async observeSession(e, i) {
+  async observeSession(trigger, activity) {
     if (!this.enabled || this.isDirectInteractionSuppressed()) {
-      this.debug("POLICY", `${e} dropped: direct interaction or awareness disabled`);
+      this.debug("POLICY", `${trigger} dropped: direct interaction or awareness disabled`);
       return;
     }
-    const n = await this.getActiveContext();
-    if (!n || this.isHikariContext(n)) return;
-    if (!ye(n, this.currentContext)) {
-      this.scheduleContextInspection(), this.debug("POLICY", `${e} deferred: context is changing`);
+    const context = await this.getActiveContext();
+    if (!context || this.isHikariContext(context)) return;
+    if (!sameContext(context, this.currentContext)) {
+      this.scheduleContextInspection();
+      this.debug("POLICY", `${trigger} deferred: context is changing`);
       return;
     }
-    const s = await this.captureContext(n), r = s?.context || n;
-    if (this.currentContext = r, !s?.comparison) {
-      if (!this.status.screenCaptureAvailable && e !== "click_caused_screen_change") {
-        const d = e === "scroll_session_end" ? "low" : "normal";
-        this.debug("SCREEN", `${e} continuing without screenshot permission`), this.offerCandidate({
-          id: Y(),
+    const capture = await this.captureContext(context);
+    const resolvedContext = capture?.context || context;
+    this.currentContext = resolvedContext;
+    if (!capture?.comparison) {
+      if (!this.status.screenCaptureAvailable && trigger !== "click_caused_screen_change") {
+        const priority2 = trigger === "scroll_session_end" ? "low" : "normal";
+        this.debug("SCREEN", `${trigger} continuing without screenshot permission`);
+        this.offerCandidate({
+          id: createId(),
           timestamp: Date.now(),
-          trigger: e,
-          activity: i,
-          context: B(r),
+          trigger,
+          activity,
+          context: publicContext(resolvedContext),
           visualChange: null,
-          priority: d
+          priority: priority2
         }, null);
-      } else
-        this.debug("SCREEN", `${e} rejected: screenshot unavailable`);
+      } else {
+        this.debug("SCREEN", `${trigger} rejected: screenshot unavailable`);
+      }
       return;
     }
-    const a = re(r), o = this.comparisonHistory.get(a);
-    if (this.rememberComparison(r, s.comparison), !o) {
-      this.debug("SCREEN", `${e} established comparison baseline`);
+    const key = getContextKey(resolvedContext);
+    const previous = this.comparisonHistory.get(key);
+    this.rememberComparison(resolvedContext, capture.comparison);
+    if (!previous) {
+      this.debug("SCREEN", `${trigger} established comparison baseline`);
       return;
     }
-    const l = Nt(o, s.comparison, this.config.screen);
-    if (!l) return;
-    this.debug("SCREEN", `change: ${(l.ratio * 100).toFixed(1)}%`, l.level);
-    const u = e === "typing_session_end" ? this.config.screen.typingChangeThreshold : e === "scroll_session_end" ? this.config.screen.minorChangeThreshold : this.config.screen.significantChangeThreshold;
-    if (l.ratio < u) {
-      this.debug("CANDIDATE", `${e} rejected: visual change below threshold`);
+    const difference = compareCapturedImages(previous, capture.comparison, this.config.screen);
+    if (!difference) return;
+    this.debug("SCREEN", `change: ${(difference.ratio * 100).toFixed(1)}%`, difference.level);
+    const minimumRatio = trigger === "typing_session_end" ? this.config.screen.typingChangeThreshold : trigger === "scroll_session_end" ? this.config.screen.minorChangeThreshold : this.config.screen.significantChangeThreshold;
+    if (difference.ratio < minimumRatio) {
+      this.debug("CANDIDATE", `${trigger} rejected: visual change below threshold`);
       return;
     }
-    let c = e === "scroll_session_end" ? l.ratio >= this.config.screen.significantChangeThreshold ? "normal" : "low" : "normal";
-    l.ratio >= this.config.screen.majorChangeThreshold && (c = "important");
-    const h = {
-      id: Y(),
+    let priority = trigger === "scroll_session_end" ? difference.ratio >= this.config.screen.significantChangeThreshold ? "normal" : "low" : "normal";
+    if (difference.ratio >= this.config.screen.majorChangeThreshold) priority = "important";
+    const candidate = {
+      id: createId(),
       timestamp: Date.now(),
-      trigger: e,
-      activity: i,
-      context: B(r),
+      trigger,
+      activity,
+      context: publicContext(resolvedContext),
       visualChange: {
-        ratio: l.ratio,
-        level: l.level
+        ratio: difference.ratio,
+        level: difference.level
       },
-      priority: c
+      priority
     };
-    this.offerCandidate(h, s.semantic);
+    this.offerCandidate(candidate, capture.semantic);
   }
   async getActiveContext() {
     if (!this.activeWindowProvider) return null;
     try {
-      const e = await this.activeWindowProvider(), i = Ne(e);
-      return this.status.activeWindowAvailable = !!i, i && delete this.status.errors.activeWindow, i;
-    } catch (e) {
-      return this.status.activeWindowAvailable = !1, this.status.errors.activeWindow = e?.message || String(e), this.debug("CONTEXT", "active-window query failed", this.status.errors.activeWindow), null;
+      const active = await this.activeWindowProvider();
+      const context = normalizeActiveWindow(active);
+      this.status.activeWindowAvailable = Boolean(context);
+      if (context) delete this.status.errors.activeWindow;
+      return context;
+    } catch (error) {
+      this.status.activeWindowAvailable = false;
+      this.status.errors.activeWindow = error?.message || String(error);
+      this.debug("CONTEXT", "active-window query failed", this.status.errors.activeWindow);
+      return null;
     }
   }
-  async captureContext(e) {
-    if (this.refreshScreenCaptureStatus(), !this.status.screenCaptureAvailable) return null;
-    const i = this.config.screen.semanticSnapshotWidth, n = e.bounds?.width && e.bounds?.height ? e.bounds.width / e.bounds.height : 16 / 9, s = Math.max(1, Math.round(i / n));
+  async captureContext(context) {
+    this.refreshScreenCaptureStatus();
+    if (!this.status.screenCaptureAvailable) return null;
+    const semanticWidth = this.config.screen.semanticSnapshotWidth;
+    const aspectRatio = context.bounds?.width && context.bounds?.height ? context.bounds.width / context.bounds.height : 16 / 9;
+    const semanticHeight = Math.max(1, Math.round(semanticWidth / aspectRatio));
     try {
-      const r = await this.captureSourcesProvider({
+      const windowSources = await this.captureSourcesProvider({
         types: ["window"],
-        thumbnailSize: { width: i, height: s },
-        fetchWindowIcons: !1
-      }), a = e.windowId == null ? null : r.find((m) => _t(m.id) === e.windowId), o = a ? Pt(e, a) : e, l = r.find((m) => e.windowTitle && q(m.name) === e.windowTitle), u = a || l;
-      if (u?.thumbnail && !u.thumbnail.isEmpty()) {
-        const m = this.prepareCapture(u.thumbnail, null);
-        return m ? { ...m, context: o } : null;
+        thumbnailSize: { width: semanticWidth, height: semanticHeight },
+        fetchWindowIcons: false
+      });
+      const exactSource = context.windowId == null ? null : windowSources.find((source2) => sourceWindowId(source2.id) === context.windowId);
+      const enrichedContext = exactSource ? enrichWindowTitleFromSource(context, exactSource) : context;
+      const titleSource = windowSources.find((source2) => context.windowTitle && normalizeText(source2.name) === context.windowTitle);
+      const source = exactSource || titleSource;
+      if (source?.thumbnail && !source.thumbnail.isEmpty()) {
+        const prepared2 = this.prepareCapture(source.thumbnail, null);
+        return prepared2 ? { ...prepared2, context: enrichedContext } : null;
       }
-      const c = e.bounds ? U.getDisplayMatching(e.bounds) : U.getPrimaryDisplay(), h = await this.captureSourcesProvider({
+      const display = context.bounds ? screen.getDisplayMatching(context.bounds) : screen.getPrimaryDisplay();
+      const displaySources = await this.captureSourcesProvider({
         types: ["screen"],
         thumbnailSize: {
-          width: Math.max(1, Math.round(c.size.width * Math.min(1, i / c.size.width))),
-          height: Math.max(1, Math.round(c.size.height * Math.min(1, i / c.size.width)))
+          width: Math.max(1, Math.round(display.size.width * Math.min(1, semanticWidth / display.size.width))),
+          height: Math.max(1, Math.round(display.size.height * Math.min(1, semanticWidth / display.size.width)))
         },
-        fetchWindowIcons: !1
-      }), d = h.find((m) => String(m.display_id) === String(c.id)) || h[0];
-      if (!d?.thumbnail || d.thumbnail.isEmpty()) return null;
-      const f = this.prepareCapture(d.thumbnail, this.getDisplayMask(c, d.thumbnail));
-      return f ? { ...f, context: o } : null;
-    } catch (r) {
-      return this.status.screenCaptureAvailable = !1, this.status.errors.screenCapture = r?.message || String(r), this.debug("SCREEN", "capture failed", this.status.errors.screenCapture), null;
+        fetchWindowIcons: false
+      });
+      const displaySource = displaySources.find((sourceItem) => String(sourceItem.display_id) === String(display.id)) || displaySources[0];
+      if (!displaySource?.thumbnail || displaySource.thumbnail.isEmpty()) return null;
+      const prepared = this.prepareCapture(displaySource.thumbnail, this.getDisplayMask(display, displaySource.thumbnail));
+      return prepared ? { ...prepared, context: enrichedContext } : null;
+    } catch (error) {
+      this.status.screenCaptureAvailable = false;
+      this.status.errors.screenCapture = error?.message || String(error);
+      this.debug("SCREEN", "capture failed", this.status.errors.screenCapture);
+      return null;
     }
   }
-  prepareCapture(e, i) {
-    const n = Rt(
-      e,
+  prepareCapture(semanticImage, semanticMask) {
+    const comparisonImage = resizeExact(
+      semanticImage,
       this.config.screen.comparisonWidth,
       this.config.screen.comparisonHeight
     );
-    if (!n) return null;
-    const s = D(e), r = i && s ? {
-      x: Math.floor(i.x * this.config.screen.comparisonWidth / s.width),
-      y: Math.floor(i.y * this.config.screen.comparisonHeight / s.height),
-      width: Math.ceil(i.width * this.config.screen.comparisonWidth / s.width),
-      height: Math.ceil(i.height * this.config.screen.comparisonHeight / s.height)
+    if (!comparisonImage) return null;
+    const sourceSize = imageSize(semanticImage);
+    const comparisonMask = semanticMask && sourceSize ? {
+      x: Math.floor(semanticMask.x * this.config.screen.comparisonWidth / sourceSize.width),
+      y: Math.floor(semanticMask.y * this.config.screen.comparisonHeight / sourceSize.height),
+      width: Math.ceil(semanticMask.width * this.config.screen.comparisonWidth / sourceSize.width),
+      height: Math.ceil(semanticMask.height * this.config.screen.comparisonHeight / sourceSize.height)
     } : null;
     return {
-      comparison: { image: n, mask: r },
-      semantic: i ? Dt(e, i) : e
+      comparison: { image: comparisonImage, mask: comparisonMask },
+      semantic: semanticMask ? createMaskedNativeImage(semanticImage, semanticMask) : semanticImage
     };
   }
-  getDisplayMask(e, i) {
-    const n = Ye(this.getHikariBounds()), s = D(i);
-    if (!n || !s || !e?.bounds) return null;
-    const r = n.x - e.bounds.x, a = n.y - e.bounds.y;
+  getDisplayMask(display, capturedImage) {
+    const hikariBounds = cloneBounds(this.getHikariBounds());
+    const capturedSize = imageSize(capturedImage);
+    if (!hikariBounds || !capturedSize || !display?.bounds) return null;
+    const relativeX = hikariBounds.x - display.bounds.x;
+    const relativeY = hikariBounds.y - display.bounds.y;
     return {
-      x: Math.floor(r * s.width / e.bounds.width),
-      y: Math.floor(a * s.height / e.bounds.height),
-      width: Math.ceil(n.width * s.width / e.bounds.width),
-      height: Math.ceil(n.height * s.height / e.bounds.height)
+      x: Math.floor(relativeX * capturedSize.width / display.bounds.width),
+      y: Math.floor(relativeY * capturedSize.height / display.bounds.height),
+      width: Math.ceil(hikariBounds.width * capturedSize.width / display.bounds.width),
+      height: Math.ceil(hikariBounds.height * capturedSize.height / display.bounds.height)
     };
   }
-  rememberComparison(e, i) {
-    const n = re(e);
-    for (this.comparisonHistory.delete(n), this.comparisonHistory.set(n, i); this.comparisonHistory.size > this.config.memory.recentCandidateLimit; )
+  rememberComparison(context, capture) {
+    const key = getContextKey(context);
+    this.comparisonHistory.delete(key);
+    this.comparisonHistory.set(key, capture);
+    while (this.comparisonHistory.size > this.config.memory.recentCandidateLimit) {
       this.comparisonHistory.delete(this.comparisonHistory.keys().next().value);
+    }
   }
-  offerCandidate(e, i) {
+  offerCandidate(candidate, semanticImage) {
     if (!this.enabled || this.isDirectInteractionSuppressed()) return;
-    if (this.pruneSnapshots(), i && !i.isEmpty()) {
-      const r = e.timestamp + this.config.observation.candidateMaxAgeMs;
-      this.snapshots.set(e.id, {
-        image: i,
-        expiresAt: r,
-        timer: setTimeout(() => this.deleteSnapshot(e.id), Math.max(0, r - Date.now()))
+    this.pruneSnapshots();
+    if (semanticImage && !semanticImage.isEmpty()) {
+      const expiresAt = candidate.timestamp + this.config.observation.candidateMaxAgeMs;
+      this.snapshots.set(candidate.id, {
+        image: semanticImage,
+        expiresAt,
+        timer: setTimeout(() => this.deleteSnapshot(candidate.id), Math.max(0, expiresAt - Date.now()))
       });
     }
-    const n = Date.now(), s = this.config.observation.minimumCandidateIntervalMs - (n - this.lastCandidateAt);
-    if (s <= 0) {
-      let r = e;
-      this.pendingCandidate && (this.shouldReplaceCandidate(this.pendingCandidate, e) ? this.deleteSnapshot(this.pendingCandidate.id) : (r = this.pendingCandidate, this.deleteSnapshot(e.id)), this.pendingCandidate = null, this.pendingCandidateTimer && clearTimeout(this.pendingCandidateTimer), this.pendingCandidateTimer = null), this.emitNow(r);
+    const now = Date.now();
+    const intervalRemaining = this.config.observation.minimumCandidateIntervalMs - (now - this.lastCandidateAt);
+    if (intervalRemaining <= 0) {
+      let candidateToEmit = candidate;
+      if (this.pendingCandidate) {
+        if (this.shouldReplaceCandidate(this.pendingCandidate, candidate)) {
+          this.deleteSnapshot(this.pendingCandidate.id);
+        } else {
+          candidateToEmit = this.pendingCandidate;
+          this.deleteSnapshot(candidate.id);
+        }
+        this.pendingCandidate = null;
+        if (this.pendingCandidateTimer) clearTimeout(this.pendingCandidateTimer);
+        this.pendingCandidateTimer = null;
+      }
+      this.emitNow(candidateToEmit);
       return;
     }
-    !this.pendingCandidate || this.shouldReplaceCandidate(this.pendingCandidate, e) ? (this.pendingCandidate && this.deleteSnapshot(this.pendingCandidate.id), this.pendingCandidate = e) : this.deleteSnapshot(e.id), this.pendingCandidateTimer || (this.pendingCandidateTimer = setTimeout(() => {
-      this.pendingCandidateTimer = null;
-      const r = this.pendingCandidate;
-      this.pendingCandidate = null, r && Date.now() - r.timestamp <= this.config.observation.candidateMaxAgeMs && this.emitNow(r);
-    }, s));
+    if (!this.pendingCandidate || this.shouldReplaceCandidate(this.pendingCandidate, candidate)) {
+      if (this.pendingCandidate) this.deleteSnapshot(this.pendingCandidate.id);
+      this.pendingCandidate = candidate;
+    } else {
+      this.deleteSnapshot(candidate.id);
+    }
+    if (!this.pendingCandidateTimer) {
+      this.pendingCandidateTimer = setTimeout(() => {
+        this.pendingCandidateTimer = null;
+        const pending = this.pendingCandidate;
+        this.pendingCandidate = null;
+        if (pending && Date.now() - pending.timestamp <= this.config.observation.candidateMaxAgeMs) {
+          this.emitNow(pending);
+        }
+      }, intervalRemaining);
+    }
   }
-  shouldReplaceCandidate(e, i) {
-    const n = Re[e.priority] ?? 0, s = Re[i.priority] ?? 0;
-    return s > n || s === n && i.timestamp >= e.timestamp;
+  shouldReplaceCandidate(current, incoming) {
+    const currentRank = PRIORITY_RANK[current.priority] ?? 0;
+    const incomingRank = PRIORITY_RANK[incoming.priority] ?? 0;
+    return incomingRank > currentRank || incomingRank === currentRank && incoming.timestamp >= current.timestamp;
   }
-  emitNow(e) {
-    this.enabled && (this.lastCandidateAt = Date.now(), this.debug("CANDIDATE", "accepted", e), this.emitCandidate(e));
+  emitNow(candidate) {
+    if (!this.enabled) return;
+    this.lastCandidateAt = Date.now();
+    this.debug("CANDIDATE", "accepted", candidate);
+    this.emitCandidate(candidate);
   }
   async captureScreen() {
     if (!this.enabled || this.isDirectInteractionSuppressed()) return null;
-    let e = await this.getActiveContext();
-    if ((!e || this.isHikariContext(e)) && (e = this.currentContext), !this.enabled || this.isDirectInteractionSuppressed() || !e || this.isHikariContext(e)) return null;
-    let i, n;
+    let context = await this.getActiveContext();
+    if (!context || this.isHikariContext(context)) context = this.currentContext;
+    if (!this.enabled || this.isDirectInteractionSuppressed() || !context || this.isHikariContext(context)) return null;
+    let timeout;
+    let capture;
     try {
-      n = await Promise.race([
-        this.captureContext(e),
-        new Promise((o) => {
-          i = setTimeout(() => o(null), 15e3);
+      capture = await Promise.race([
+        this.captureContext(context),
+        new Promise((resolve) => {
+          timeout = setTimeout(() => resolve(null), 15e3);
         })
       ]);
     } finally {
-      clearTimeout(i);
+      clearTimeout(timeout);
     }
-    if (!this.enabled || this.isDirectInteractionSuppressed() || !n?.semantic) return null;
-    let s = n.semantic, r = D(s);
-    if (!r) return null;
-    if (Math.max(r.width, r.height) > 1920) {
-      const o = 1920 / Math.max(r.width, r.height);
-      s = s.resize({ width: Math.max(1, Math.round(r.width * o)), height: Math.max(1, Math.round(r.height * o)), quality: "good" }), r = D(s);
+    if (!this.enabled || this.isDirectInteractionSuppressed() || !capture?.semantic) return null;
+    let image = capture.semantic;
+    let size = imageSize(image);
+    if (!size) return null;
+    if (Math.max(size.width, size.height) > 1920) {
+      const ratio = 1920 / Math.max(size.width, size.height);
+      image = image.resize({ width: Math.max(1, Math.round(size.width * ratio)), height: Math.max(1, Math.round(size.height * ratio)), quality: "good" });
+      size = imageSize(image);
     }
-    let a;
-    for (const o of [this.config.screen.semanticSnapshotJpegQuality || 72, 50, 35])
-      if (a = s.toJPEG(o), a.length <= ne) break;
-    return !a?.length || a.length > ne || !r ? null : {
+    let jpeg;
+    for (const quality of [this.config.screen.semanticSnapshotJpegQuality || 72, 50, 35]) {
+      jpeg = image.toJPEG(quality);
+      if (jpeg.length <= MAX_SCREENSHOT_BYTES) break;
+    }
+    if (!jpeg?.length || jpeg.length > MAX_SCREENSHOT_BYTES || !size) return null;
+    return {
       mimeType: "image/jpeg",
-      width: r.width,
-      height: r.height,
+      width: size.width,
+      height: size.height,
       capturedAt: Date.now(),
-      context: B(n.context || e),
-      dataUrl: `data:image/jpeg;base64,${a.toString("base64")}`
+      context: publicContext(capture.context || context),
+      dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}`
     };
   }
-  requestSnapshot(e) {
+  requestSnapshot(candidateId) {
     this.pruneSnapshots();
-    const i = this.snapshots.get(e);
-    if (!i) return null;
-    this.deleteSnapshot(e);
-    const n = D(i.image);
-    if (!n) return null;
-    const s = this.config.screen.semanticSnapshotJpegQuality || 72, r = i.image.toJPEG(s);
+    const snapshot = this.snapshots.get(candidateId);
+    if (!snapshot) return null;
+    this.deleteSnapshot(candidateId);
+    const size = imageSize(snapshot.image);
+    if (!size) return null;
+    const quality = this.config.screen.semanticSnapshotJpegQuality || 72;
+    const jpeg = snapshot.image.toJPEG(quality);
     return {
-      candidateId: e,
+      candidateId,
       mimeType: "image/jpeg",
-      width: n.width,
-      height: n.height,
-      dataUrl: `data:image/jpeg;base64,${r.toString("base64")}`
+      width: size.width,
+      height: size.height,
+      dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}`
     };
   }
   pruneSnapshots() {
-    const e = Date.now();
-    for (const [i, n] of this.snapshots)
-      n.expiresAt <= e && this.deleteSnapshot(i);
-    for (; this.snapshots.size > this.config.memory.recentCandidateLimit; )
-      this.deleteSnapshot(this.snapshots.keys().next().value);
-  }
-  deleteSnapshot(e) {
-    const i = this.snapshots.get(e);
-    i?.timer && clearTimeout(i.timer), this.snapshots.delete(e);
-  }
-}
-function Dt(t, e) {
-  const i = D(t);
-  if (!i || !e) return t;
-  const n = Buffer.from(t.getBitmap());
-  for (let s = Math.max(0, e.y); s < Math.min(i.height, e.y + e.height); s += 1)
-    for (let r = Math.max(0, e.x); r < Math.min(i.width, e.x + e.width); r += 1) {
-      const a = (s * i.width + r) * 4;
-      n[a] = 0, n[a + 1] = 0, n[a + 2] = 0, n[a + 3] = 255;
+    const now = Date.now();
+    for (const [id, snapshot] of this.snapshots) {
+      if (snapshot.expiresAt <= now) this.deleteSnapshot(id);
     }
-  return ct.createFromBitmap(n, { width: i.width, height: i.height });
+    while (this.snapshots.size > this.config.memory.recentCandidateLimit) {
+      this.deleteSnapshot(this.snapshots.keys().next().value);
+    }
+  }
+  deleteSnapshot(candidateId) {
+    const snapshot = this.snapshots.get(candidateId);
+    if (snapshot?.timer) clearTimeout(snapshot.timer);
+    this.snapshots.delete(candidateId);
+  }
 }
-const X = "http://127.0.0.1:8010", Ot = 24e4, Wt = 3e3, Ut = 185e3, Bt = 32 * 1024 * 1024, Ht = "/opt/homebrew/bin/python3.11", zt = "/health", be = _.dirname(pt(import.meta.url));
-function Ft() {
-  const t = [
-    _.resolve(be, "../tools/companion-tts"),
-    _.resolve(be, "../../tools/companion-tts"),
-    _.resolve(be, "../../../tools/companion-tts")
+function createMaskedNativeImage(image, mask) {
+  const size = imageSize(image);
+  if (!size || !mask) return image;
+  const bitmap = Buffer.from(image.getBitmap());
+  for (let y = Math.max(0, mask.y); y < Math.min(size.height, mask.y + mask.height); y += 1) {
+    for (let x = Math.max(0, mask.x); x < Math.min(size.width, mask.x + mask.width); x += 1) {
+      const offset = (y * size.width + x) * 4;
+      bitmap[offset] = 0;
+      bitmap[offset + 1] = 0;
+      bitmap[offset + 2] = 0;
+      bitmap[offset + 3] = 255;
+    }
+  }
+  return nativeImage.createFromBitmap(bitmap, { width: size.width, height: size.height });
+}
+const ADAPTER_ORIGIN = "http://127.0.0.1:8010";
+const DEFAULT_STARTUP_TIMEOUT_MS = 24e4;
+const DEFAULT_HEALTH_TIMEOUT_MS = 3e3;
+const DEFAULT_SYNTHESIS_TIMEOUT_MS = 185e3;
+const DEFAULT_MAX_AUDIO_BYTES = 32 * 1024 * 1024;
+const DEFAULT_PYTHON_PATH = "/opt/homebrew/bin/python3.11";
+const HEALTH_PATH = "/health";
+const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+function defaultToolDir() {
+  const candidates = [
+    path.resolve(moduleDirectory, "../tools/companion-tts"),
+    path.resolve(moduleDirectory, "../../tools/companion-tts"),
+    path.resolve(moduleDirectory, "../../../tools/companion-tts")
   ];
-  return t.find((e) => de(_.join(e, "tts.py"))) ?? t[0];
+  return candidates.find((candidate) => existsSync(path.join(candidate, "tts.py"))) ?? candidates[0];
 }
-function $() {
-  const t = new Error("Local TTS service was disposed");
-  return t.name = "AbortError", t;
+function abortError() {
+  const error = new Error("Local TTS service was disposed");
+  error.name = "AbortError";
+  return error;
 }
-function ae(t, e) {
-  return e.aborted ? Promise.reject($()) : new Promise((i, n) => {
-    const s = () => n($());
-    e.addEventListener("abort", s, { once: !0 }), Promise.resolve(t).then(i, n).finally(() => {
-      e.removeEventListener("abort", s);
+function raceWithSignal(promise, signal) {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
     });
   });
 }
-function ve(t) {
-  return typeof t?.ok == "boolean" ? t.ok : Number.isInteger(t?.status) && t.status >= 200 && t.status < 300;
+function isSuccessfulResponse(response) {
+  if (typeof response?.ok === "boolean") return response.ok;
+  return Number.isInteger(response?.status) && response.status >= 200 && response.status < 300;
 }
-async function Xe(t, e, i) {
-  const n = Number(t.headers?.get?.("content-length"));
-  if (Number.isFinite(n) && n > e)
+async function readBoundedBody(response, limit, signal) {
+  const contentLength = Number(response.headers?.get?.("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > limit) {
     throw new Error("Local TTS response exceeded the allowed size");
-  if (!t.body?.getReader) {
-    const c = new Uint8Array(await ae(t.arrayBuffer(), i));
-    if (c.byteLength > e) throw new Error("Local TTS response exceeded the allowed size");
-    return c;
   }
-  const s = t.body.getReader(), r = [];
-  let a = 0;
-  const o = () => {
-    s.cancel().catch(() => {
+  if (!response.body?.getReader) {
+    const bytes = new Uint8Array(await raceWithSignal(response.arrayBuffer(), signal));
+    if (bytes.byteLength > limit) throw new Error("Local TTS response exceeded the allowed size");
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  const cancelReader = () => {
+    void reader.cancel().catch(() => {
     });
   };
-  i.addEventListener("abort", o, { once: !0 });
+  signal.addEventListener("abort", cancelReader, { once: true });
   try {
-    for (; ; ) {
-      const { done: c, value: h } = await ae(s.read(), i);
-      if (c) break;
-      if (a += h.byteLength, a > e)
-        throw o(), new Error("Local TTS response exceeded the allowed size");
-      r.push(h);
+    while (true) {
+      const { done, value } = await raceWithSignal(reader.read(), signal);
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > limit) {
+        cancelReader();
+        throw new Error("Local TTS response exceeded the allowed size");
+      }
+      chunks.push(value);
     }
   } finally {
-    i.removeEventListener("abort", o);
+    signal.removeEventListener("abort", cancelReader);
     try {
-      s.releaseLock();
+      reader.releaseLock();
     } catch {
     }
   }
-  const l = new Uint8Array(a);
-  let u = 0;
-  for (const c of r)
-    l.set(c, u), u += c.byteLength;
-  return l;
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
 }
-async function De(t, e) {
-  const i = await Xe(t, 65536, e);
+async function readJson(response, signal) {
+  const bytes = await readBoundedBody(response, 64 * 1024, signal);
   try {
-    return JSON.parse(new TextDecoder().decode(i));
+    return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     throw new Error("Local TTS adapter returned invalid JSON");
   }
 }
-function jt(t) {
-  if (!t || typeof t != "object")
+function validateInput(request) {
+  if (!request || typeof request !== "object") {
     throw new TypeError("Synthesis request must be an object");
-  if (typeof t.text != "string")
+  }
+  if (typeof request.text !== "string") {
     throw new TypeError("Synthesis text must be a string");
-  const e = t.text.trim(), i = Array.from(e).length;
-  if (i < 1 || i > 500)
+  }
+  const text = request.text.trim();
+  const textLength = Array.from(text).length;
+  if (textLength < 1 || textLength > 500) {
     throw new RangeError("Synthesis text must contain 1 to 500 characters");
-  const n = t.speed;
-  if (typeof n != "number" || !Number.isFinite(n) || n < 0.5 || n > 2)
+  }
+  const speed = request.speed;
+  if (typeof speed !== "number" || !Number.isFinite(speed) || speed < 0.5 || speed > 2) {
     throw new RangeError("Synthesis speed must be between 0.5 and 2");
-  return { text: e, speed: n };
+  }
+  return { text, speed };
 }
-function $t(t) {
-  if (!t || typeof t != "object" || Array.isArray(t))
+function validateMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
     throw new Error("Local TTS adapter returned invalid speech metadata");
-  const { audio_url: e, duration_seconds: i, sample_rate: n, channels: s, voice: r } = t;
-  if (typeof e != "string" || !/^\/v1\/audio\/[a-f0-9]{64}\.wav$/.test(e) || typeof i != "number" || !Number.isFinite(i) || i <= 0 || i > 600 || !Number.isInteger(n) || n < 8e3 || n > 192e3 || !Number.isInteger(s) || s < 1 || s > 2 || r !== "custom_voice")
+  }
+  const { audio_url: audioUrl, duration_seconds: durationSeconds, sample_rate: sampleRate, channels, voice } = metadata;
+  if (typeof audioUrl !== "string" || !/^\/v1\/audio\/[a-f0-9]{64}\.wav$/.test(audioUrl) || typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || durationSeconds > 600 || !Number.isInteger(sampleRate) || sampleRate < 8e3 || sampleRate > 192e3 || !Number.isInteger(channels) || channels < 1 || channels > 2 || voice !== "custom_voice") {
     throw new Error("Local TTS adapter returned invalid speech metadata");
-  const a = new URL(e, X);
-  if (a.origin !== X || a.pathname !== e || a.search || a.hash)
+  }
+  const audioUrlObject = new URL(audioUrl, ADAPTER_ORIGIN);
+  if (audioUrlObject.origin !== ADAPTER_ORIGIN || audioUrlObject.pathname !== audioUrl || audioUrlObject.search || audioUrlObject.hash) {
     throw new Error("Local TTS adapter returned an unsafe audio path");
-  return { audioUrl: e, durationSeconds: i, sampleRate: n, channels: s, voice: r };
+  }
+  return { audioUrl, durationSeconds, sampleRate, channels, voice };
 }
-function qt(t, e, i) {
-  if (t.byteLength < 44 || String.fromCharCode(...t.subarray(0, 4)) !== "RIFF" || String.fromCharCode(...t.subarray(8, 12)) !== "WAVE")
+function validateWav$1(audio, sampleRate, channels) {
+  if (audio.byteLength < 44 || String.fromCharCode(...audio.subarray(0, 4)) !== "RIFF" || String.fromCharCode(...audio.subarray(8, 12)) !== "WAVE") {
     throw new Error("Local TTS adapter returned invalid WAV audio");
-  const n = new DataView(t.buffer, t.byteOffset, t.byteLength);
-  if (n.getUint32(4, !0) + 8 !== t.byteLength)
+  }
+  const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
+  if (view.getUint32(4, true) + 8 !== audio.byteLength) {
     throw new Error("Local TTS adapter returned invalid WAV audio");
-  let s = 12, r = !1, a = !1;
-  for (; s + 8 <= t.byteLength; ) {
-    const o = String.fromCharCode(...t.subarray(s, s + 4)), l = n.getUint32(s + 4, !0), u = s + 8, c = u + l;
-    if (c > t.byteLength) throw new Error("Local TTS adapter returned invalid WAV audio");
-    if (o === "fmt ") {
-      if (l < 16) throw new Error("Local TTS adapter returned invalid WAV audio");
-      const h = n.getUint16(u + 2, !0), d = n.getUint32(u + 4, !0);
-      if (h !== i || d !== e)
+  }
+  let offset = 12;
+  let formatFound = false;
+  let dataFound = false;
+  while (offset + 8 <= audio.byteLength) {
+    const chunkName = String.fromCharCode(...audio.subarray(offset, offset + 4));
+    const chunkSize = view.getUint32(offset + 4, true);
+    const chunkStart = offset + 8;
+    const chunkEnd = chunkStart + chunkSize;
+    if (chunkEnd > audio.byteLength) throw new Error("Local TTS adapter returned invalid WAV audio");
+    if (chunkName === "fmt ") {
+      if (chunkSize < 16) throw new Error("Local TTS adapter returned invalid WAV audio");
+      const wavChannels = view.getUint16(chunkStart + 2, true);
+      const wavSampleRate = view.getUint32(chunkStart + 4, true);
+      if (wavChannels !== channels || wavSampleRate !== sampleRate) {
         throw new Error("Local TTS metadata did not match its WAV audio");
-      r = !0;
-    } else o === "data" && (a = !0);
-    s = c + l % 2;
+      }
+      formatFound = true;
+    } else if (chunkName === "data") {
+      dataFound = true;
+    }
+    offset = chunkEnd + chunkSize % 2;
   }
-  if (s !== t.byteLength || !r || !a)
+  if (offset !== audio.byteLength || !formatFound || !dataFound) {
     throw new Error("Local TTS adapter returned invalid WAV audio");
-}
-function Gt(t = {}) {
-  const e = t.fetch ?? t.fetchImpl ?? globalThis.fetch, i = t.spawn ?? xe, n = t.toolDir ?? Ft(), s = t.pythonPath ?? process.env.HIKARI_TTS_PYTHON ?? Ht, r = t.synthesisTimeoutMs ?? t.requestTimeoutMs ?? Ut, a = t.healthTimeoutMs ?? Wt, o = t.startupTimeoutMs ?? Ot, l = t.pollIntervalMs ?? 500, u = t.maxAudioBytes ?? Bt;
-  for (const [g, w] of Object.entries({ requestTimeoutMs: r, healthTimeoutMs: a, startupTimeoutMs: o, pollIntervalMs: l, maxAudioBytes: u }))
-    if (!Number.isFinite(w) || w <= 0) throw new RangeError(`${g} must be a positive number`);
-  if (typeof e != "function") throw new TypeError("A fetch implementation is required");
-  if (typeof i != "function") throw new TypeError("A spawn implementation is required");
-  let c = !1, h = null, d = Promise.resolve(), f = null;
-  const m = /* @__PURE__ */ new Set(), A = /* @__PURE__ */ new Set();
-  let C;
-  const K = new Promise((g) => {
-    C = g;
-  });
-  function I() {
-    if (c) throw $();
   }
-  function Z(g) {
+}
+function createLocalTtsService(options = {}) {
+  const fetchImpl = options.fetch ?? options.fetchImpl ?? globalThis.fetch;
+  const spawnImpl = options.spawn ?? spawn;
+  const toolDir = options.toolDir ?? defaultToolDir();
+  const pythonPath = options.pythonPath ?? process.env.HIKARI_TTS_PYTHON ?? DEFAULT_PYTHON_PATH;
+  const requestTimeoutMs = options.synthesisTimeoutMs ?? options.requestTimeoutMs ?? DEFAULT_SYNTHESIS_TIMEOUT_MS;
+  const healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
+  const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const maxAudioBytes = options.maxAudioBytes ?? DEFAULT_MAX_AUDIO_BYTES;
+  for (const [name, value] of Object.entries({ requestTimeoutMs, healthTimeoutMs, startupTimeoutMs, pollIntervalMs, maxAudioBytes })) {
+    if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be a positive number`);
+  }
+  if (typeof fetchImpl !== "function") throw new TypeError("A fetch implementation is required");
+  if (typeof spawnImpl !== "function") throw new TypeError("A spawn implementation is required");
+  let disposed = false;
+  let startupPromise = null;
+  let queueTail = Promise.resolve();
+  let ownedChild = null;
+  const activeControllers = /* @__PURE__ */ new Set();
+  const pendingTimers = /* @__PURE__ */ new Set();
+  let resolveDisposed;
+  const disposedPromise = new Promise((resolve) => {
+    resolveDisposed = resolve;
+  });
+  function assertActive() {
+    if (disposed) throw abortError();
+  }
+  function raceDisposed(promise) {
     return Promise.race([
-      g,
-      K.then(() => {
-        throw $();
+      promise,
+      disposedPromise.then(() => {
+        throw abortError();
       })
     ]);
   }
-  async function fe(g, w, b, E = r) {
-    I();
-    const N = new AbortController();
-    m.add(N);
-    let L = !1;
-    const J = setTimeout(() => {
-      L = !0, N.abort();
-    }, E);
+  async function withRequest(url, init, consumer, timeoutMs = requestTimeoutMs) {
+    assertActive();
+    const controller = new AbortController();
+    activeControllers.add(controller);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     try {
-      const z = await ae(e(g, { ...w, signal: N.signal }), N.signal);
-      return I(), await ae(b(z, N.signal), N.signal);
-    } catch (z) {
-      throw c ? $() : L ? new Error("Local TTS request timed out") : z;
+      const response = await raceWithSignal(fetchImpl(url, { ...init, signal: controller.signal }), controller.signal);
+      assertActive();
+      return await raceWithSignal(consumer(response, controller.signal), controller.signal);
+    } catch (error) {
+      if (disposed) throw abortError();
+      if (timedOut) throw new Error("Local TTS request timed out");
+      throw error;
     } finally {
-      clearTimeout(J), m.delete(N);
+      clearTimeout(timer);
+      activeControllers.delete(controller);
     }
   }
-  function ee() {
-    return f ? f.failure || f.exited ? new Error("Local TTS adapter process exited unexpectedly") : typeof f.process.exitCode == "number" ? new Error("Local TTS adapter process exited unexpectedly") : null : null;
+  function childFailure() {
+    if (!ownedChild) return null;
+    if (ownedChild.failure || ownedChild.exited) return new Error("Local TTS adapter process exited unexpectedly");
+    const exitCode = ownedChild.process.exitCode;
+    if (typeof exitCode === "number") return new Error("Local TTS adapter process exited unexpectedly");
+    return null;
   }
-  function tt() {
-    if (I(), f && !ee()) return;
-    let g;
+  function spawnAdapter() {
+    assertActive();
+    if (ownedChild && !childFailure()) return;
+    let child;
     try {
-      g = i(s, ["-u", "tts.py", "serve"], {
-        cwd: n,
+      child = spawnImpl(pythonPath, ["-u", "tts.py", "serve"], {
+        cwd: toolDir,
         stdio: "ignore",
-        windowsHide: !0
+        windowsHide: true
       });
     } catch {
       throw new Error("Unable to start the local TTS adapter");
     }
-    if (!g || typeof g.once != "function")
+    if (!child || typeof child.once !== "function") {
       throw new Error("Unable to start the local TTS adapter");
-    const w = { process: g, failure: null, exited: !1 };
-    g.once("error", () => {
-      w.failure = !0;
-    }), g.once("exit", () => {
-      w.exited = !0;
-    }), f = w;
-  }
-  async function me() {
-    try {
-      return await fe(`${X}${zt}`, { method: "GET" }, async (g, w) => {
-        if (!ve(g)) return !1;
-        const b = await De(g, w);
-        return b?.ready === !0 && b?.voice === "custom_voice";
-      }, a);
-    } catch {
-      if (c) throw $();
-      return !1;
     }
-  }
-  function it(g) {
-    I();
-    let w;
-    const b = new Promise((E) => {
-      w = setTimeout(E, g), A.add(w);
+    const record = { process: child, failure: null, exited: false };
+    child.once("error", () => {
+      record.failure = true;
     });
-    return Z(b).finally(() => {
-      clearTimeout(w), A.delete(w);
+    child.once("exit", () => {
+      record.exited = true;
+    });
+    ownedChild = record;
+  }
+  async function checkHealth() {
+    try {
+      return await withRequest(`${ADAPTER_ORIGIN}${HEALTH_PATH}`, { method: "GET" }, async (response, signal) => {
+        if (!isSuccessfulResponse(response)) return false;
+        const health = await readJson(response, signal);
+        return health?.ready === true && health?.voice === "custom_voice";
+      }, healthTimeoutMs);
+    } catch (error) {
+      if (disposed) throw abortError();
+      return false;
+    }
+  }
+  function waitForPoll(ms) {
+    assertActive();
+    let timer;
+    const delay = new Promise((resolve) => {
+      timer = setTimeout(resolve, ms);
+      pendingTimers.add(timer);
+    });
+    return raceDisposed(delay).finally(() => {
+      clearTimeout(timer);
+      pendingTimers.delete(timer);
     });
   }
-  async function nt(g) {
-    for (; ; ) {
-      I();
-      const w = ee();
-      if (w) throw w;
-      if (await me()) return;
-      I();
-      const b = ee();
-      if (b) throw b;
-      const E = g - Date.now();
-      if (E <= 0) throw new Error("Local TTS adapter did not become ready before the startup timeout");
-      await it(Math.min(l, E));
+  async function pollUntilReady(deadline) {
+    while (true) {
+      assertActive();
+      const failure = childFailure();
+      if (failure) throw failure;
+      if (await checkHealth()) return;
+      assertActive();
+      const childError = childFailure();
+      if (childError) throw childError;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error("Local TTS adapter did not become ready before the startup timeout");
+      await waitForPoll(Math.min(pollIntervalMs, remaining));
     }
   }
-  async function st(g = !1) {
-    I();
-    const w = Date.now() + o;
-    !g && await me() || (I(), tt(), await nt(w));
+  async function startOrReuseAdapter(healthAlreadyChecked = false) {
+    assertActive();
+    const deadline = Date.now() + startupTimeoutMs;
+    if (!healthAlreadyChecked && await checkHealth()) return;
+    assertActive();
+    spawnAdapter();
+    await pollUntilReady(deadline);
   }
-  async function rt() {
-    if (h) {
-      if (await h, I(), await me()) return;
-      h = null;
+  async function ensureAdapterReady() {
+    if (startupPromise) {
+      await startupPromise;
+      assertActive();
+      if (await checkHealth()) return;
+      startupPromise = null;
     }
-    return h || (h = st(h === null && f !== null).catch((w) => {
-      throw h = null, w;
-    })), h;
+    if (!startupPromise) {
+      const hadPriorStartup = startupPromise === null && ownedChild !== null;
+      startupPromise = startOrReuseAdapter(hadPriorStartup).catch((error) => {
+        startupPromise = null;
+        throw error;
+      });
+    }
+    return startupPromise;
   }
-  async function at(g) {
-    I(), await rt(), I();
-    const w = ee();
-    if (w) throw w;
+  async function synthesizeNow(request) {
+    assertActive();
+    await ensureAdapterReady();
+    assertActive();
+    const failure = childFailure();
+    if (failure) throw failure;
     try {
-      const b = await fe(`${X}/v1/speech`, {
+      const metadata = await withRequest(`${ADAPTER_ORIGIN}/v1/speech`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: g.text, speed: g.speed, cache: !0 })
-      }, async (L, J) => {
-        if (!ve(L)) throw new Error("Local TTS speech request failed");
-        return $t(await De(L, J));
+        body: JSON.stringify({ text: request.text, speed: request.speed, cache: true })
+      }, async (response, signal) => {
+        if (!isSuccessfulResponse(response)) throw new Error("Local TTS speech request failed");
+        return validateMetadata(await readJson(response, signal));
       });
-      I();
-      const E = new URL(b.audioUrl, X).href;
+      assertActive();
+      const absoluteAudioUrl = new URL(metadata.audioUrl, ADAPTER_ORIGIN).href;
+      const audio = await withRequest(absoluteAudioUrl, { method: "GET" }, async (response, signal) => {
+        if (!isSuccessfulResponse(response)) throw new Error("Local TTS audio request failed");
+        const bytes = await readBoundedBody(response, maxAudioBytes, signal);
+        validateWav$1(bytes, metadata.sampleRate, metadata.channels);
+        return bytes;
+      });
       return {
-        audio: await fe(E, { method: "GET" }, async (L, J) => {
-          if (!ve(L)) throw new Error("Local TTS audio request failed");
-          const z = await Xe(L, u, J);
-          return qt(z, b.sampleRate, b.channels), z;
-        }),
-        durationSeconds: b.durationSeconds,
-        sampleRate: b.sampleRate,
-        channels: b.channels,
-        voice: b.voice
+        audio,
+        durationSeconds: metadata.durationSeconds,
+        sampleRate: metadata.sampleRate,
+        channels: metadata.channels,
+        voice: metadata.voice
       };
-    } catch (b) {
-      throw c || (h = null), b;
+    } catch (error) {
+      if (!disposed) startupPromise = null;
+      throw error;
     }
   }
-  function ot(g) {
-    let w;
+  function synthesize(request) {
+    let normalized;
     try {
-      I(), w = jt(g);
-    } catch (E) {
-      return Promise.reject(E);
+      assertActive();
+      normalized = validateInput(request);
+    } catch (error) {
+      return Promise.reject(error);
     }
-    const b = d.then(() => (I(), at(w)));
-    return d = b.then(() => {
-    }, () => {
-    }), Z(b);
+    const operation = queueTail.then(() => {
+      assertActive();
+      return synthesizeNow(normalized);
+    });
+    queueTail = operation.then(() => void 0, () => void 0);
+    return raceDisposed(operation);
   }
-  function lt() {
-    if (!c) {
-      c = !0, C();
-      for (const g of m) g.abort();
-      for (const g of A) clearTimeout(g);
-      if (A.clear(), f && !f.exited && !f.failure && f.process.exitCode == null)
-        try {
-          f.process.kill("SIGTERM");
-        } catch {
-        }
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    resolveDisposed();
+    for (const controller of activeControllers) controller.abort();
+    for (const timer of pendingTimers) clearTimeout(timer);
+    pendingTimers.clear();
+    if (ownedChild && !ownedChild.exited && !ownedChild.failure && ownedChild.process.exitCode == null) {
+      try {
+        ownedChild.process.kill("SIGTERM");
+      } catch {
+      }
     }
   }
-  return { synthesize: ot, dispose: lt };
+  return { synthesize, dispose };
 }
-const Oe = 500, Ae = 1024, Vt = 32 * 1024 * 1024, Kt = 45e4;
-function Jt(t) {
-  if (!t || typeof t != "object")
+const MAX_TEXT_LENGTH = 500;
+const MAX_ERROR_BYTES = 1024;
+const MAX_AUDIO_BYTES = 32 * 1024 * 1024;
+const MAX_CHAT_BYTES = 4 * 1024 * 1024;
+const HTTP_TTS_TIMEOUT_MS = 45e4;
+function validateSynthesisInput(input) {
+  if (!input || typeof input !== "object") {
     throw new TypeError("Synthesis request must be an object");
-  if (typeof t.text != "string")
+  }
+  if (typeof input.text !== "string") {
     throw new TypeError("Synthesis text must be a string");
-  const e = t.text.trim(), i = Array.from(e).length;
-  if (i < 1 || i > Oe)
-    throw new RangeError(`Synthesis text must contain 1 to ${Oe} characters`);
-  if (typeof t.speed != "number" || !Number.isFinite(t.speed) || t.speed < 0.5 || t.speed > 2)
+  }
+  const text = input.text.trim();
+  const length = Array.from(text).length;
+  if (length < 1 || length > MAX_TEXT_LENGTH) {
+    throw new RangeError(`Synthesis text must contain 1 to ${MAX_TEXT_LENGTH} characters`);
+  }
+  if (typeof input.speed !== "number" || !Number.isFinite(input.speed) || input.speed < 0.5 || input.speed > 2) {
     throw new RangeError("Synthesis speed must be between 0.5 and 2");
-  return { text: e, speed: t.speed };
+  }
+  return { text, speed: input.speed };
 }
-function x(t, { code: e, status: i, statusText: n, bodySnippet: s, cause: r } = {}) {
-  const a = new Error(t, r === void 0 ? void 0 : { cause: r });
-  return e && (a.code = e), i !== void 0 && (a.status = i), n && (a.statusText = String(n).slice(0, 128)), s && (a.bodySnippet = s.slice(0, Ae)), a;
+function serviceError(message, { code, status, statusText, bodySnippet, cause } = {}) {
+  const error = new Error(message, cause === void 0 ? void 0 : { cause });
+  if (code) error.code = code;
+  if (status !== void 0) error.status = status;
+  if (statusText) error.statusText = String(statusText).slice(0, 128);
+  if (bodySnippet) error.bodySnippet = bodySnippet.slice(0, MAX_ERROR_BYTES);
+  return error;
 }
-async function Qe(t, e) {
-  const i = Number(t.headers?.get?.("content-length"));
-  if (Number.isFinite(i) && i > e)
-    throw x("Response exceeded the allowed size", { code: "RESPONSE_TOO_LARGE" });
-  if (t.body?.getReader) {
-    const n = t.body.getReader(), s = [];
-    let r = 0;
+async function readBoundedBytes(response, limit) {
+  const declaredLength = Number(response.headers?.get?.("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > limit) {
+    throw serviceError("Response exceeded the allowed size", { code: "RESPONSE_TOO_LARGE" });
+  }
+  if (response.body?.getReader) {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
     try {
-      for (; ; ) {
-        const { done: l, value: u } = await n.read();
-        if (l) break;
-        if (r += u.byteLength, r > e)
-          throw await n.cancel().catch(() => {
-          }), x("Response exceeded the allowed size", { code: "RESPONSE_TOO_LARGE" });
-        s.push(u);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > limit) {
+          await reader.cancel().catch(() => {
+          });
+          throw serviceError("Response exceeded the allowed size", { code: "RESPONSE_TOO_LARGE" });
+        }
+        chunks.push(value);
       }
     } finally {
-      n.releaseLock?.();
+      reader.releaseLock?.();
     }
-    const a = new Uint8Array(r);
-    let o = 0;
-    for (const l of s)
-      a.set(l, o), o += l.byteLength;
-    return a;
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
   }
-  if (typeof t.arrayBuffer == "function") {
-    const n = await t.arrayBuffer();
-    if (n.byteLength > e)
-      throw x("Response exceeded the allowed size", { code: "RESPONSE_TOO_LARGE" });
-    return new Uint8Array(n);
+  if (typeof response.arrayBuffer === "function") {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > limit) {
+      throw serviceError("Response exceeded the allowed size", { code: "RESPONSE_TOO_LARGE" });
+    }
+    return new Uint8Array(buffer);
   }
   return new Uint8Array();
 }
-async function Yt(t) {
+async function readErrorSnippet(response) {
   try {
-    const e = await Qe(t, Ae);
-    return new TextDecoder().decode(e).slice(0, Ae).trim();
-  } catch (e) {
-    return e?.code === "RESPONSE_TOO_LARGE" ? "[error response truncated]" : "";
+    const bytes = await readBoundedBytes(response, MAX_ERROR_BYTES);
+    return new TextDecoder().decode(bytes).slice(0, MAX_ERROR_BYTES).trim();
+  } catch (error) {
+    if (error?.code === "RESPONSE_TOO_LARGE") return "[error response truncated]";
+    return "";
   }
 }
-async function Xt(t, e) {
-  const i = await Yt(t), n = Number.isInteger(t.status) ? t.status : void 0, s = `${e} request failed${n === void 0 ? "" : ` (HTTP ${n})`}` + (i ? `: ${i}` : "");
-  throw x(s, {
-    code: `${e.toUpperCase()}_HTTP_ERROR`,
-    status: n,
-    statusText: t.statusText,
-    bodySnippet: i
+async function throwForResponse(response, context) {
+  const bodySnippet = await readErrorSnippet(response);
+  const status = Number.isInteger(response.status) ? response.status : void 0;
+  const message = `${context} request failed${status === void 0 ? "" : ` (HTTP ${status})`}` + (bodySnippet ? `: ${bodySnippet}` : "");
+  throw serviceError(message, {
+    code: `${context.toUpperCase()}_HTTP_ERROR`,
+    status,
+    statusText: response.statusText,
+    bodySnippet
   });
 }
-function Qt(t, e, i) {
-  if (typeof t != "number" || !Number.isFinite(t) || t <= 0 || t > 600)
-    throw x("TTS service returned invalid audio duration", { code: "INVALID_TTS_METADATA" });
-  if (!Number.isInteger(e) || e < 8e3 || e > 192e3)
-    throw x("TTS service returned invalid sample rate", { code: "INVALID_TTS_METADATA" });
-  if (!Number.isInteger(i) || i < 1 || i > 2)
-    throw x("TTS service returned invalid channel count", { code: "INVALID_TTS_METADATA" });
-}
-function Zt(t, e, i) {
-  const n = () => {
-    throw x("TTS service returned invalid WAV audio", { code: "INVALID_TTS_AUDIO" });
-  };
-  t.byteLength < 44 && n();
-  const s = (u, c) => String.fromCharCode(...t.subarray(u, u + c));
-  (s(0, 4) !== "RIFF" || s(8, 4) !== "WAVE") && n();
-  const r = new DataView(t.buffer, t.byteOffset, t.byteLength);
-  r.getUint32(4, !0) + 8 !== t.byteLength && n();
-  let a = 12, o = !1, l = !1;
-  for (; a + 8 <= t.byteLength; ) {
-    const u = s(a, 4), c = r.getUint32(a + 4, !0), h = a + 8, d = h + c;
-    if (d > t.byteLength && n(), u === "fmt ") {
-      if (c < 16 && n(), r.getUint16(h + 2, !0) !== i || r.getUint32(h + 4, !0) !== e)
-        throw x("TTS metadata does not match its WAV audio", { code: "TTS_METADATA_MISMATCH" });
-      o = !0;
-    }
-    u === "data" && (l = !0), a = d + c % 2;
+function validateSpeechMetadata(durationSeconds, sampleRate, channels) {
+  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || durationSeconds > 600) {
+    throw serviceError("TTS service returned invalid audio duration", { code: "INVALID_TTS_METADATA" });
   }
-  (a !== t.byteLength || !o || !l) && n();
+  if (!Number.isInteger(sampleRate) || sampleRate < 8e3 || sampleRate > 192e3) {
+    throw serviceError("TTS service returned invalid sample rate", { code: "INVALID_TTS_METADATA" });
+  }
+  if (!Number.isInteger(channels) || channels < 1 || channels > 2) {
+    throw serviceError("TTS service returned invalid channel count", { code: "INVALID_TTS_METADATA" });
+  }
 }
-function ei(t, e, i) {
-  const n = new AbortController();
-  i.add(n);
-  const s = () => n.abort(t?.reason);
-  t?.aborted ? s() : t?.addEventListener("abort", s, { once: !0 });
-  const r = e > 0 ? setTimeout(() => n.abort(x("TTS request timed out", { code: "TTS_TIMEOUT" })), e) : null;
+function validateWav(audio, sampleRate, channels) {
+  const fail = () => {
+    throw serviceError("TTS service returned invalid WAV audio", { code: "INVALID_TTS_AUDIO" });
+  };
+  if (audio.byteLength < 44) fail();
+  const ascii = (offset2, count) => String.fromCharCode(...audio.subarray(offset2, offset2 + count));
+  if (ascii(0, 4) !== "RIFF" || ascii(8, 4) !== "WAVE") fail();
+  const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
+  if (view.getUint32(4, true) + 8 !== audio.byteLength) fail();
+  let offset = 12;
+  let format;
+  let dataBytes;
+  while (offset + 8 <= audio.byteLength) {
+    const chunkName = ascii(offset, 4);
+    const chunkSize = view.getUint32(offset + 4, true);
+    const chunkStart = offset + 8;
+    const chunkEnd = chunkStart + chunkSize;
+    if (chunkEnd > audio.byteLength) fail();
+    if (chunkName === "fmt ") {
+      if (chunkSize < 16) fail();
+      format = {
+        audioFormat: view.getUint16(chunkStart, true),
+        channels: view.getUint16(chunkStart + 2, true),
+        sampleRate: view.getUint32(chunkStart + 4, true),
+        bitsPerSample: view.getUint16(chunkStart + 14, true)
+      };
+      if (sampleRate !== void 0 && (format.channels !== channels || format.sampleRate !== sampleRate)) {
+        throw serviceError("TTS metadata does not match its WAV audio", { code: "TTS_METADATA_MISMATCH" });
+      }
+    }
+    if (chunkName === "data") dataBytes = chunkSize;
+    offset = chunkEnd + chunkSize % 2;
+  }
+  if (offset !== audio.byteLength || !format || dataBytes === void 0) fail();
+  return { ...format, dataBytes };
+}
+function makeRequestController(signal, timeoutMs, activeControllers) {
+  const controller = new AbortController();
+  activeControllers.add(controller);
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abortFromCaller();
+  else signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(serviceError("TTS request timed out", { code: "TTS_TIMEOUT" })), timeoutMs) : null;
   return {
-    signal: n.signal,
+    signal: controller.signal,
     dispose() {
-      r && clearTimeout(r), t?.removeEventListener("abort", s), i.delete(n);
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", abortFromCaller);
+      activeControllers.delete(controller);
     }
   };
 }
-function ti({
-  fetchImpl: t = globalThis.fetch,
-  endpoint: e = "/api/tts",
-  timeoutMs: i = Kt,
-  maxAudioBytes: n = Vt
-} = {}) {
-  if (typeof t != "function") throw new TypeError("A fetch implementation is required");
-  const s = /* @__PURE__ */ new Set();
-  let r = !1;
+function createTtsClient({ fetchImpl, timeoutMs = HTTP_TTS_TIMEOUT_MS, buildRequest, readResult }) {
+  if (typeof fetchImpl !== "function") throw new TypeError("A fetch implementation is required");
+  const activeControllers = /* @__PURE__ */ new Set();
+  let disposed = false;
   return {
-    async synthesize(a, { signal: o } = {}) {
-      if (r) throw x("TTS client is disposed", { code: "SERVICE_DISPOSED" });
-      const l = Jt(a), u = ei(o, i, s);
+    async synthesize(input, options = {}) {
+      if (disposed) throw serviceError("TTS client is disposed", { code: "SERVICE_DISPOSED" });
+      const { endpoint, headers, body } = buildRequest(validateSynthesisInput(input), options);
+      const requestController = makeRequestController(options.signal, timeoutMs, activeControllers);
       try {
-        const c = await t(e, {
+        const response = await fetchImpl(endpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "audio/wav" },
-          body: JSON.stringify(l),
-          signal: u.signal
+          headers: { "Content-Type": "application/json", ...headers },
+          body: JSON.stringify(body),
+          signal: requestController.signal
         });
-        c.ok || await Xt(c, "TTS");
-        const h = c.headers?.get?.("content-type")?.split(";", 1)[0].trim().toLowerCase();
-        if (h && h !== "audio/wav" && h !== "audio/x-wav" && h !== "application/octet-stream")
-          throw x("TTS service returned a non-WAV response", { code: "INVALID_TTS_AUDIO" });
-        const d = Number(c.headers?.get?.("x-audio-duration")), f = Number(c.headers?.get?.("x-audio-sample-rate")), m = Number(c.headers?.get?.("x-audio-channels"));
-        Qt(d, f, m);
-        const A = await Qe(c, n);
-        return Zt(A, f, m), { audio: A, durationSeconds: d, sampleRate: f, channels: m, voice: "custom_voice" };
+        if (!response.ok) await throwForResponse(response, "TTS");
+        const contentType = response.headers?.get?.("content-type")?.split(";", 1)[0].trim().toLowerCase();
+        if (contentType && contentType !== "audio/wav" && contentType !== "audio/x-wav" && contentType !== "application/octet-stream") {
+          throw serviceError("TTS service returned a non-WAV response", { code: "INVALID_TTS_AUDIO" });
+        }
+        return { ...await readResult(response), voice: "custom_voice" };
       } finally {
-        u.dispose();
+        requestController.dispose();
       }
     },
     dispose() {
-      if (!r) {
-        r = !0;
-        for (const a of s) a.abort(x("TTS client is disposed", { code: "SERVICE_DISPOSED" }));
-      }
+      if (disposed) return;
+      disposed = true;
+      for (const controller of activeControllers) controller.abort(serviceError("TTS client is disposed", { code: "SERVICE_DISPOSED" }));
     }
   };
 }
-const ii = 45e4;
-function ni(t) {
-  const e = t.toLowerCase().replace(/^\[|\]$/g, "");
-  if (e === "localhost" || e === "::1") return !0;
-  const i = e.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  return !!(i && Number(i[1]) === 127 && i.slice(1).every((n) => Number(n) <= 255));
-}
-function si(t) {
-  if (typeof t != "string" || t.trim().length === 0 || t.length > 2048)
-    throw new TypeError("Remote TTS requires a configured loopback URL");
-  let e;
-  try {
-    e = new URL(t.trim());
-  } catch (i) {
-    throw new TypeError("Remote TTS URL must be a valid loopback HTTP URL", { cause: i });
-  }
-  if (e.protocol !== "http:" || e.username || e.password || e.search || e.hash || !ni(e.hostname))
-    throw new TypeError("Remote TTS URL must use HTTP on a loopback address");
-  return e.toString().replace(/\/+$/, "");
-}
-function ri({
-  url: t,
-  fetch: e = globalThis.fetch,
-  timeoutMs: i = ii
+function createHttpTtsClient({
+  fetchImpl = globalThis.fetch,
+  endpoint = "/api/tts",
+  timeoutMs = HTTP_TTS_TIMEOUT_MS,
+  maxAudioBytes = MAX_AUDIO_BYTES
 } = {}) {
-  if (!Number.isFinite(i) || i <= 0 || i > 9e5)
+  return createTtsClient({
+    fetchImpl,
+    timeoutMs,
+    buildRequest: (body) => ({ endpoint, headers: { Accept: "audio/wav" }, body }),
+    async readResult(response) {
+      const durationSeconds = Number(response.headers?.get?.("x-audio-duration"));
+      const sampleRate = Number(response.headers?.get?.("x-audio-sample-rate"));
+      const channels = Number(response.headers?.get?.("x-audio-channels"));
+      validateSpeechMetadata(durationSeconds, sampleRate, channels);
+      const audio = await readBoundedBytes(response, maxAudioBytes);
+      validateWav(audio, sampleRate, channels);
+      return { audio, durationSeconds, sampleRate, channels };
+    }
+  });
+}
+function normalizeGatewayUrl(gatewayUrl) {
+  if (typeof gatewayUrl !== "string" || gatewayUrl.trim().length === 0 || gatewayUrl.length > 2048) {
+    throw new TypeError("Electron chat requires a configured gatewayUrl");
+  }
+  const rawUrl = gatewayUrl.trim().replace(/^ws:/i, "http:").replace(/^wss:/i, "https:");
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch (cause) {
+    throw serviceError("Invalid Hermes gateway URL", { code: "INVALID_GATEWAY_URL", cause });
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw serviceError("Invalid Hermes gateway URL", { code: "INVALID_GATEWAY_URL" });
+  }
+  let base = url.toString().replace(/\/+$/, "");
+  if (base.endsWith("/v1/chat/completions")) return base;
+  return `${base}/v1/chat/completions`;
+}
+async function serializeChatResponse(response) {
+  const body = response.body === null ? null : new TextDecoder().decode(await readBoundedBytes(response, MAX_CHAT_BYTES));
+  return { body, status: response.status, statusText: response.statusText };
+}
+function createChatRequest({ messages, model } = {}, sessionId) {
+  if (!Array.isArray(messages)) throw new TypeError("Chat messages must be an array");
+  const body = { messages };
+  if (model !== void 0) body.model = model;
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  if (typeof sessionId === "string" && sessionId.length > 0 && sessionId.length <= 128) {
+    headers["X-Hermes-Session-Id"] = sessionId;
+  }
+  return { body, headers };
+}
+function fetchHermesChat(input, { gatewayUrl, token, signal, sessionId }, fetchImpl, redirect) {
+  const { body, headers } = createChatRequest(input, sessionId);
+  if (typeof token === "string" && token.length > 0) headers.Authorization = `Bearer ${token}`;
+  return fetchImpl(normalizeGatewayUrl(gatewayUrl), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal,
+    redirect
+  });
+}
+const DEFAULT_TIMEOUT_MS = 45e4;
+function isLoopbackAddress(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host === "::1") return true;
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  return Boolean(ipv4 && Number(ipv4[1]) === 127 && ipv4.slice(1).every((part) => Number(part) <= 255));
+}
+function validateRemoteTtsUrl(value) {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > 2048) {
+    throw new TypeError("Remote TTS requires a configured loopback URL");
+  }
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch (cause) {
+    throw new TypeError("Remote TTS URL must be a valid loopback HTTP URL", { cause });
+  }
+  if (url.protocol !== "http:" || url.username || url.password || url.search || url.hash || !isLoopbackAddress(url.hostname)) {
+    throw new TypeError("Remote TTS URL must use HTTP on a loopback address");
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+function createRemoteTtsService({
+  url,
+  fetch: fetchImpl = globalThis.fetch,
+  timeoutMs = DEFAULT_TIMEOUT_MS
+} = {}) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 9e5) {
     throw new RangeError("Remote TTS timeout must be between 1 and 900000 milliseconds");
-  const n = si(t), s = ti({
-    fetchImpl: e,
-    endpoint: `${n}/api/tts`,
-    timeoutMs: i
+  }
+  const baseUrl = validateRemoteTtsUrl(url);
+  const client = createHttpTtsClient({
+    fetchImpl,
+    endpoint: `${baseUrl}/api/tts`,
+    timeoutMs
   });
   return {
-    synthesize(r, a) {
-      return s.synthesize(r, a);
+    synthesize(input, options) {
+      return client.synthesize(input, options);
     },
     dispose() {
-      s.dispose();
+      client.dispose();
     }
   };
 }
-const ai = Ve(Ge);
-function oi(t) {
-  const e = /^(\d+)\s+((?:\d+(?:\.\d*)?|\.\d+))\s*$/.exec(String(t ?? ""));
-  if (!e) return null;
-  const i = Number(e[1]), n = Number(e[2]);
-  return Number.isSafeInteger(i) && i > 0 && Number.isFinite(n) && n >= 0 && n <= 1 ? { deviceId: i, scalar: n } : null;
+const execFile = promisify(execFile$2);
+function parseOutputVolume(value) {
+  const match = /^(\d+)\s+((?:\d+(?:\.\d*)?|\.\d+))\s*$/.exec(String(value ?? ""));
+  if (!match) return null;
+  const deviceId = Number(match[1]);
+  const scalar = Number(match[2]);
+  return Number.isSafeInteger(deviceId) && deviceId > 0 && Number.isFinite(scalar) && scalar >= 0 && scalar <= 1 ? { deviceId, scalar } : null;
 }
-class li {
-  constructor({ helperPath: e, execute: i = ai, fadeMs: n = 350, mediaPlaying: s } = {}) {
-    this.helperPath = e, this.execute = i, this.fadeMs = n, this.mediaPlaying = s || (async () => String(await this.call([])).trim() === "1"), this.active = null, this.nextSessionId = 1, this.chain = Promise.resolve();
+class ReplyVolumeService {
+  constructor({ helperPath, execute = execFile, fadeMs = 350, mediaPlaying } = {}) {
+    this.helperPath = helperPath;
+    this.execute = execute;
+    this.fadeMs = fadeMs;
+    this.mediaPlaying = mediaPlaying || (async () => String(await this.call([])).trim() === "1");
+    this.active = null;
+    this.nextSessionId = 1;
+    this.chain = Promise.resolve();
   }
-  serialize(e) {
-    const i = this.chain.catch(() => {
-    }).then(e);
-    return this.chain = i.catch(() => {
-    }), i;
+  serialize(operation) {
+    const result = this.chain.catch(() => {
+    }).then(operation);
+    this.chain = result.catch(() => {
+    });
+    return result;
   }
-  async call(e) {
-    return (await this.execute(this.helperPath, e, {
+  async call(args) {
+    const result = await this.execute(this.helperPath, args, {
       encoding: "utf8",
       timeout: 3e3
-    }))?.stdout ?? "";
+    });
+    return result?.stdout ?? "";
   }
   async readVolume() {
-    return oi(await this.call(["volume-get"]));
+    return parseOutputVolume(await this.call(["volume-get"]));
   }
-  async ramp(e, i) {
+  async ramp(deviceId, scalar) {
     await this.call([
       "volume-ramp",
-      String(e),
-      String(Math.max(0, Math.min(1, i))),
+      String(deviceId),
+      String(Math.max(0, Math.min(1, scalar))),
       String(this.fadeMs)
     ]);
   }
-  begin({ canBoost: e = !0 } = {}) {
+  begin({ canBoost = true } = {}) {
     return this.serialize(async () => {
-      this.active && await this.restoreActive();
-      const i = String(this.nextSessionId++), n = { sessionId: i, voiceGain: 0.9, mediaDucked: !1 };
-      if (this.active = { sessionId: i, duck: null }, !this.helperPath) return n;
+      if (this.active) await this.restoreActive();
+      const sessionId = String(this.nextSessionId++);
+      const fallback = { sessionId, voiceGain: 0.9, mediaDucked: false };
+      this.active = { sessionId, duck: null };
+      if (!this.helperPath) return fallback;
       try {
-        if (!await this.mediaPlaying() || (n.voiceGain = 0.45, !e)) return n;
-        const r = await this.readVolume();
-        if (!r || r.scalar <= 0.01) return n;
-        const a = r.scalar * 0.7, o = { ...r, targetScalar: a };
-        return this.active.duck = o, await this.ramp(r.deviceId, a), { sessionId: i, voiceGain: 0.45 / 0.7, mediaDucked: !0 };
+        const mediaPlaying = await this.mediaPlaying();
+        if (!mediaPlaying) return fallback;
+        fallback.voiceGain = 0.45;
+        if (!canBoost) return fallback;
+        const volume = await this.readVolume();
+        if (!volume || volume.scalar <= 0.01) return fallback;
+        const targetScalar = volume.scalar * 0.7;
+        const duck = { ...volume, targetScalar };
+        this.active.duck = duck;
+        await this.ramp(volume.deviceId, targetScalar);
+        return { sessionId, voiceGain: 0.45 / 0.7, mediaDucked: true };
       } catch {
-        return await this.restoreActive({ allowPartialRamp: !0 }), this.active = { sessionId: i, duck: null }, n;
+        await this.restoreActive({ allowPartialRamp: true });
+        this.active = { sessionId, duck: null };
+        return fallback;
       }
     });
   }
-  end(e) {
+  end(sessionId) {
     return this.serialize(async () => {
-      !this.active || this.active.sessionId !== e || await this.restoreActive();
+      if (!this.active || this.active.sessionId !== sessionId) return;
+      await this.restoreActive();
     });
   }
   restore() {
     return this.serialize(() => this.restoreActive());
   }
-  async restoreActive({ allowPartialRamp: e = !1 } = {}) {
-    const i = this.active;
-    if (this.active = null, !!i?.duck)
-      try {
-        const n = await this.readVolume();
-        if (!n || n.deviceId !== i.duck.deviceId) return;
-        const s = Math.abs(n.scalar - i.duck.targetScalar) <= 5e-3, r = n.scalar >= Math.min(
-          i.duck.targetScalar,
-          i.duck.scalar
-        ) - 5e-3 && n.scalar <= Math.max(
-          i.duck.targetScalar,
-          i.duck.scalar
-        ) + 5e-3;
-        if (!s && !(e && r)) return;
-        await this.ramp(i.duck.deviceId, i.duck.scalar);
-      } catch {
-      }
+  async restoreActive({ allowPartialRamp = false } = {}) {
+    const active = this.active;
+    this.active = null;
+    if (!active?.duck) return;
+    try {
+      const current = await this.readVolume();
+      if (!current || current.deviceId !== active.duck.deviceId) return;
+      const atTarget = Math.abs(current.scalar - active.duck.targetScalar) <= 5e-3;
+      const betweenRampEndpoints = current.scalar >= Math.min(
+        active.duck.targetScalar,
+        active.duck.scalar
+      ) - 5e-3 && current.scalar <= Math.max(
+        active.duck.targetScalar,
+        active.duck.scalar
+      ) + 5e-3;
+      if (!atTarget && !(allowPartialRamp && betweenRampEndpoints)) return;
+      await this.ramp(active.duck.deviceId, active.duck.scalar);
+    } catch {
+    }
   }
 }
-class ci {
-  constructor({ executable: e = "", spawn: i = xe, platform: n = process.platform, locale: s = process.env.HIKARI_STT_LOCALE || "", timeoutMs: r = 45e3 } = {}) {
-    this.executable = e, this.spawn = i, this.platform = n, this.locale = s, this.timeoutMs = r, this.running = !1;
+class SpeechToTextService {
+  constructor({ executable = "", spawn: spawn$1 = spawn, platform = process.platform, locale = process.env.HIKARI_STT_LOCALE || "", timeoutMs = 45e3 } = {}) {
+    this.executable = executable;
+    this.spawn = spawn$1;
+    this.platform = platform;
+    this.locale = locale;
+    this.timeoutMs = timeoutMs;
+    this.running = false;
   }
   getStatus() {
-    const e = this.platform === "darwin" && !!(this.executable && de(this.executable));
-    return { available: e, status: e ? "ready" : "unavailable", language: this.locale || "system", backend: "apple-speech-on-device", reason: e ? "" : "native_speech_helper_missing" };
+    const available = this.platform === "darwin" && Boolean(this.executable && existsSync(this.executable));
+    return { available, status: available ? "ready" : "unavailable", language: this.locale || "system", backend: "apple-speech-on-device", reason: available ? "" : "native_speech_helper_missing" };
   }
-  async transcribe(e) {
-    const i = this.getStatus();
-    if (!i.available) throw new Error(i.reason);
+  async transcribe(samples) {
+    const status = this.getStatus();
+    if (!status.available) throw new Error(status.reason);
     if (this.running) throw new Error("transcription_busy");
-    if (!(e instanceof Float32Array) || e.length < 1600 || e.length > 16e5) throw new TypeError("Expected 0.1 to 100 seconds of 16 kHz mono audio");
-    this.running = !0;
-    const n = ui(e, 16e3);
+    if (!(samples instanceof Float32Array) || samples.length < 1600 || samples.length > 16e5) throw new TypeError("Expected 0.1 to 100 seconds of 16 kHz mono audio");
+    this.running = true;
+    const wav = encodeFloat32Wav(samples, 16e3);
     try {
-      return await new Promise((s, r) => {
-        const a = this.locale ? ["--locale", this.locale] : [], o = this.spawn(this.executable, a, { stdio: ["pipe", "pipe", "pipe"] });
-        let l = "", u = "";
-        const c = setTimeout(() => {
-          o.kill("SIGKILL"), r(new Error("transcription_timeout"));
+      return await new Promise((resolve, reject) => {
+        const args = this.locale ? ["--locale", this.locale] : [];
+        const child = this.spawn(this.executable, args, { stdio: ["pipe", "pipe", "pipe"] });
+        let stdout = "";
+        let stderr = "";
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(new Error("transcription_timeout"));
         }, this.timeoutMs);
-        o.stdout.setEncoding("utf8"), o.stderr.setEncoding("utf8"), o.stdout.on("data", (h) => {
-          l += h, l.length > 65536 && o.kill("SIGKILL");
-        }), o.stderr.on("data", (h) => {
-          u += h.slice(0, 4096);
-        }), o.once("error", (h) => {
-          clearTimeout(c), r(h);
-        }), o.once("close", (h) => {
-          clearTimeout(c);
-          let d;
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk) => {
+          stdout += chunk;
+          if (stdout.length > 65536) child.kill("SIGKILL");
+        });
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk.slice(0, 4096);
+        });
+        child.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.once("close", (code) => {
+          clearTimeout(timer);
+          let result;
           try {
-            d = JSON.parse(l);
+            result = JSON.parse(stdout);
           } catch {
-            d = null;
+            result = null;
           }
-          h !== 0 || !d || d.error ? r(new Error(d?.error || u.trim() || `speech_exit_${h}`)) : s(String(d.text || "").trim());
-        }), o.stdin.end(n);
+          if (code !== 0 || !result || result.error) reject(new Error(result?.error || stderr.trim() || `speech_exit_${code}`));
+          else resolve(String(result.text || "").trim());
+        });
+        child.stdin.end(wav);
       });
     } finally {
-      this.running = !1, n.fill(0), e.fill(0);
+      this.running = false;
+      wav.fill(0);
+      samples.fill(0);
     }
   }
 }
-function ui(t, e = 16e3) {
-  const i = Buffer.alloc(44 + t.length * 2);
-  i.write("RIFF", 0), i.writeUInt32LE(36 + t.length * 2, 4), i.write("WAVE", 8), i.write("fmt ", 12), i.writeUInt32LE(16, 16), i.writeUInt16LE(1, 20), i.writeUInt16LE(1, 22), i.writeUInt32LE(e, 24), i.writeUInt32LE(e * 2, 28), i.writeUInt16LE(2, 32), i.writeUInt16LE(16, 34), i.write("data", 36), i.writeUInt32LE(t.length * 2, 40);
-  for (let n = 0; n < t.length; n++) i.writeInt16LE(Math.round(Math.max(-1, Math.min(1, t[n])) * 32767), 44 + n * 2);
-  return i;
+function encodeFloat32Wav(samples, sampleRate = 16e3) {
+  const buffer = Buffer.alloc(44 + samples.length * 2);
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + samples.length * 2, 4);
+  buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(samples.length * 2, 40);
+  for (let i = 0; i < samples.length; i++) buffer.writeInt16LE(Math.round(Math.max(-1, Math.min(1, samples[i])) * 32767), 44 + i * 2);
+  return buffer;
 }
-function di(t, e) {
+function fitWindowToWorkArea(bounds, workArea) {
   if (![
-    t.x,
-    t.y,
-    t.width,
-    t.height,
-    e.x,
-    e.y,
-    e.width,
-    e.height
-  ].every(Number.isFinite) || t.width <= 0 || t.height <= 0 || e.width <= 0 || e.height <= 0)
+    bounds.x,
+    bounds.y,
+    bounds.width,
+    bounds.height,
+    workArea.x,
+    workArea.y,
+    workArea.width,
+    workArea.height
+  ].every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0 || workArea.width <= 0 || workArea.height <= 0) {
     throw new TypeError("Invalid window bounds");
-  const i = Math.min(1, e.width / t.width, e.height / t.height), n = Math.max(1, Math.floor(t.width * i)), s = Math.max(1, Math.floor(t.height * i));
+  }
+  const ratio = Math.min(1, workArea.width / bounds.width, workArea.height / bounds.height);
+  const width = Math.max(1, Math.floor(bounds.width * ratio));
+  const height = Math.max(1, Math.floor(bounds.height * ratio));
   return {
-    x: Math.max(e.x, Math.min(Math.round(t.x), e.x + e.width - n)),
-    y: Math.max(e.y, Math.min(Math.round(t.y), e.y + e.height - s)),
-    width: n,
-    height: s
+    x: Math.max(workArea.x, Math.min(Math.round(bounds.x), workArea.x + workArea.width - width)),
+    y: Math.max(workArea.y, Math.min(Math.round(bounds.y), workArea.y + workArea.height - height)),
+    width,
+    height
   };
 }
-function Pe(t, e, i = t.getBounds()) {
-  const n = e.getDisplayMatching(i), s = di(i, n.workArea), r = t.getBounds();
-  return Object.keys(s).some((a) => s[a] !== r[a]) && t.setBounds(s), t.getBounds();
+function constrainWindow(window, screen2, requested = window.getBounds()) {
+  const display = screen2.getDisplayMatching(requested);
+  const fitted = fitWindowToWorkArea(requested, display.workArea);
+  const current = window.getBounds();
+  if (Object.keys(fitted).some((key) => fitted[key] !== current[key])) window.setBounds(fitted);
+  return window.getBounds();
 }
-function hi(t, e) {
-  let i = !1;
-  const n = () => {
-    if (!(i || t.isDestroyed())) {
-      i = !0;
-      try {
-        Pe(t, e);
-      } finally {
-        i = !1;
-      }
+function keepWindowOnScreen(window, screen2) {
+  let adjusting = false;
+  const enforce = () => {
+    if (adjusting || window.isDestroyed()) return;
+    adjusting = true;
+    try {
+      constrainWindow(window, screen2);
+    } finally {
+      adjusting = false;
     }
   };
-  t.on("move", n), t.on("resize", n), e.on("display-metrics-changed", n), e.on("display-removed", n), t.once("closed", () => {
-    e.removeListener("display-metrics-changed", n), e.removeListener("display-removed", n);
-  }), n();
+  window.on("move", enforce);
+  window.on("resize", enforce);
+  screen2.on("display-metrics-changed", enforce);
+  screen2.on("display-removed", enforce);
+  window.once("closed", () => {
+    screen2.removeListener("display-metrics-changed", enforce);
+    screen2.removeListener("display-removed", enforce);
+  });
+  enforce();
 }
-class pi {
+class MusicBeatDetector {
   constructor() {
     this.reset();
   }
   reset() {
-    this.average = 0, this.previousBass = 0, this.lastFrameAt = null, this.lastBeatAt = null, this.beat = 0, this.intervals = [], this.rawIntervals = [], this.intervalMs = null, this.targetIntervalMs = null, this.lastAudibleAt = null;
+    this.average = 0;
+    this.previousBass = 0;
+    this.lastFrameAt = null;
+    this.lastBeatAt = null;
+    this.beat = 0;
+    this.intervals = [];
+    this.rawIntervals = [];
+    this.intervalMs = null;
+    this.targetIntervalMs = null;
+    this.lastAudibleAt = null;
   }
-  learnTempo(e) {
-    if (e < 300 || e > 4500) return;
-    this.rawIntervals.push(e), this.rawIntervals = this.rawIntervals.slice(-3);
-    const i = (l) => [...l].sort((u, c) => u - c)[Math.floor(l.length / 2)], n = i(this.rawIntervals);
-    if (this.intervalMs !== null && this.rawIntervals.length === 3 && this.rawIntervals.every((l) => Math.abs(l / n - 1) < 0.08) && Math.abs(n / this.intervalMs - 1) > 0.12 && n <= 1500) this.intervals = [n, n, n];
+  learnTempo(interval) {
+    if (interval < 300 || interval > 4500) return;
+    this.rawIntervals.push(interval);
+    this.rawIntervals = this.rawIntervals.slice(-3);
+    const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+    const rawMedian = median(this.rawIntervals);
+    const changedTempo = this.intervalMs !== null && this.rawIntervals.length === 3 && this.rawIntervals.every((value) => Math.abs(value / rawMedian - 1) < 0.08) && Math.abs(rawMedian / this.intervalMs - 1) > 0.12 && rawMedian <= 1500;
+    if (changedTempo) this.intervals = [rawMedian, rawMedian, rawMedian];
     else if (this.intervalMs !== null) {
-      const l = Math.round(e / this.intervalMs);
-      l >= 2 && l <= 3 && Math.abs(e / l / this.intervalMs - 1) < 0.12 && (e /= l);
+      const beats = Math.round(interval / this.intervalMs);
+      if (beats >= 2 && beats <= 3 && Math.abs(interval / beats / this.intervalMs - 1) < 0.12) interval /= beats;
     }
-    if (e > 1500 || (this.intervals.push(e), this.intervals = this.intervals.slice(-9), this.intervals.length < 3)) return;
-    const r = i(this.intervals), a = this.intervals.filter((l) => Math.abs(l / r - 1) < 0.12), o = a.reduce((l, u) => l + u, 0) / a.length;
-    this.intervalMs === null ? this.intervalMs = this.targetIntervalMs = o : (Math.abs(o / this.targetIntervalMs - 1) > 0.03 && (this.targetIntervalMs = o), this.intervalMs += (this.targetIntervalMs - this.intervalMs) * 0.2, Math.abs(this.intervalMs / this.targetIntervalMs - 1) < 5e-3 && (this.intervalMs = this.targetIntervalMs));
+    if (interval > 1500) return;
+    this.intervals.push(interval);
+    this.intervals = this.intervals.slice(-9);
+    if (this.intervals.length < 3) return;
+    const centre = median(this.intervals);
+    const inliers = this.intervals.filter((value) => Math.abs(value / centre - 1) < 0.12);
+    const target = inliers.reduce((sum, value) => sum + value, 0) / inliers.length;
+    if (this.intervalMs === null) this.intervalMs = this.targetIntervalMs = target;
+    else {
+      if (Math.abs(target / this.targetIntervalMs - 1) > 0.03) this.targetIntervalMs = target;
+      this.intervalMs += (this.targetIntervalMs - this.intervalMs) * 0.2;
+      if (Math.abs(this.intervalMs / this.targetIntervalMs - 1) < 5e-3) this.intervalMs = this.targetIntervalMs;
+    }
   }
-  update(e, i = Date.now()) {
-    const n = Math.max(0, Math.min(1, Number(e.level) || 0)), s = Math.max(0, Math.min(1, Number(e.bass) || 0)), r = this.lastFrameAt === null ? 40 : Math.max(1, Math.min(200, i - this.lastFrameAt));
-    return this.lastFrameAt !== null && i - this.lastFrameAt > 1500 && this.reset(), n >= 2e-3 && (this.lastAudibleAt !== null && i - this.lastAudibleAt > 8e3 && this.reset(), this.lastAudibleAt = i), s > Math.max(4e-3, this.average * 1.5) && s > this.previousBass * 1.12 && (this.lastBeatAt === null || i - this.lastBeatAt >= 240) && (this.lastBeatAt !== null && this.learnTempo(i - this.lastBeatAt), this.lastBeatAt = i, this.beat++), this.average += (s - this.average) * (1 - Math.exp(-r / 1400)), this.previousBass = s, this.lastFrameAt = i, {
-      level: n,
+  update(frame, now = Date.now()) {
+    const level = Math.max(0, Math.min(1, Number(frame.level) || 0));
+    const bass = Math.max(0, Math.min(1, Number(frame.bass) || 0));
+    const delta = this.lastFrameAt === null ? 40 : Math.max(1, Math.min(200, now - this.lastFrameAt));
+    if (this.lastFrameAt !== null && now - this.lastFrameAt > 1500) this.reset();
+    if (level >= 2e-3) {
+      if (this.lastAudibleAt !== null && now - this.lastAudibleAt > 8e3) this.reset();
+      this.lastAudibleAt = now;
+    }
+    const onset = bass > Math.max(4e-3, this.average * 1.5) && bass > this.previousBass * 1.12 && (this.lastBeatAt === null || now - this.lastBeatAt >= 240);
+    if (onset) {
+      if (this.lastBeatAt !== null) {
+        this.learnTempo(now - this.lastBeatAt);
+      }
+      this.lastBeatAt = now;
+      this.beat++;
+    }
+    this.average += (bass - this.average) * (1 - Math.exp(-delta / 1400));
+    this.previousBass = bass;
+    this.lastFrameAt = now;
+    return {
+      level,
       beat: this.beat,
       lastBeatAt: this.lastBeatAt,
       intervalMs: this.intervalMs,
-      active: this.lastAudibleAt !== null && i - this.lastAudibleAt < 4e3,
-      updatedAt: i
+      active: this.lastAudibleAt !== null && now - this.lastAudibleAt < 4e3,
+      updatedAt: now
     };
   }
 }
-class fi {
+class MusicBeatService {
   constructor({
-    executable: e,
-    spawn: i = xe,
-    available: n = () => process.platform === "darwin" && de(e),
-    excludePids: s = () => [process.pid],
-    onSignal: r = () => {
+    executable,
+    spawn: spawn$1 = spawn,
+    available = () => process.platform === "darwin" && existsSync(executable),
+    excludePids = () => [process.pid],
+    onSignal = () => {
     },
-    onStatus: a = () => {
+    onStatus = () => {
     },
-    now: o = () => Date.now(),
-    mediaPlaying: l = async () => !1,
-    startupTimeoutMs: u = 3e4,
-    silentTimeoutMs: c = 15e3
+    now = () => Date.now(),
+    mediaPlaying = async () => false,
+    startupTimeoutMs = 3e4,
+    silentTimeoutMs = 15e3
   } = {}) {
-    Object.assign(this, { executable: e, spawn: i, available: n, excludePids: s, onSignal: r, onStatus: a, now: o, mediaPlaying: l, startupTimeoutMs: u, silentTimeoutMs: c }), this.detector = new pi(), this.child = null, this.status = { state: "off" }, this.starting = null;
+    Object.assign(this, { executable, spawn: spawn$1, available, excludePids, onSignal, onStatus, now, mediaPlaying, startupTimeoutMs, silentTimeoutMs });
+    this.detector = new MusicBeatDetector();
+    this.child = null;
+    this.status = { state: "off" };
+    this.starting = null;
   }
-  setStatus(e) {
-    return this.status = e, this.onStatus(e), e;
+  setStatus(status) {
+    this.status = status;
+    this.onStatus(status);
+    return status;
   }
   start() {
     if (this.starting) return this.starting;
     if (this.child) return Promise.resolve(this.status);
     if (!this.available()) return Promise.resolve(this.setStatus({ state: "error", reason: "Music sway requires macOS 14.2 or later and the native helper." }));
-    this.detector.reset(), this.setStatus({ state: "starting" });
-    let e;
+    this.detector.reset();
+    this.setStatus({ state: "starting" });
+    let child;
     try {
-      e = this.spawn(this.executable, this.excludePids().map(String), { stdio: ["pipe", "pipe", "pipe"] });
+      child = this.spawn(this.executable, this.excludePids().map(String), { stdio: ["pipe", "pipe", "pipe"] });
     } catch {
       return Promise.resolve(this.setStatus({ state: "error", reason: "Could not start music analysis." }));
     }
-    this.child = e;
-    let i = "", n = !1, s = !1, r = null, a = !1;
-    const o = new Promise((l) => {
-      const u = (h) => {
-        clearTimeout(this.startupTimer), l(h);
+    this.child = child;
+    let buffer = "", ready = false, audible = false, quietSince = null, checking = false;
+    const pending = new Promise((resolve) => {
+      const settle = (status) => {
+        clearTimeout(this.startupTimer);
+        resolve(status);
       };
-      this.settleStart = u, this.startupTimer = setTimeout(() => {
-        this.child === e && this.stop({ state: "error", reason: "System audio access is needed. Allow Hikari in macOS System Audio Recording settings, then try again." });
+      this.settleStart = settle;
+      this.startupTimer = setTimeout(() => {
+        if (this.child !== child) return;
+        this.stop({ state: "error", reason: "System audio access is needed. Allow Hikari in macOS System Audio Recording settings, then try again." });
       }, this.startupTimeoutMs);
-      const c = (h) => {
-        this.child === e && this.stop({ state: "error", reason: h });
+      const fail = (reason) => {
+        if (this.child !== child) return;
+        this.stop({ state: "error", reason });
       };
-      e.stdout.setEncoding("utf8"), e.stderr.setEncoding("utf8"), e.stdin.on("error", () => {
-      }), e.stderr.on("data", () => {
-      }), e.stdout.on("data", (h) => {
-        if (this.child !== e) return;
-        if (i += h, i.length > 65536) {
-          c("Music analysis returned invalid data.");
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdin.on("error", () => {
+      });
+      child.stderr.on("data", () => {
+      });
+      child.stdout.on("data", (chunk) => {
+        if (this.child !== child) return;
+        buffer += chunk;
+        if (buffer.length > 65536) {
+          fail("Music analysis returned invalid data.");
           return;
         }
-        let d;
-        for (; (d = i.indexOf(`
-`)) >= 0 && this.child === e; ) {
-          const f = i.slice(0, d);
-          i = i.slice(d + 1);
-          let m;
+        let end;
+        while ((end = buffer.indexOf("\n")) >= 0 && this.child === child) {
+          const line = buffer.slice(0, end);
+          buffer = buffer.slice(end + 1);
+          let frame;
           try {
-            m = JSON.parse(f);
+            frame = JSON.parse(line);
           } catch {
             continue;
           }
-          if (m.type === "error")
-            c(m.stage === "unsupported" ? "Music sway requires macOS 14.2 or later." : "System audio capture could not start. Allow Hikari in System Audio Recording settings, then try again.");
-          else if (m.type === "ready")
-            n = !0, u(this.setStatus({ state: "listening" }));
-          else if (m.type === "frame" && n && Number.isFinite(m.level) && Number.isFinite(m.bass)) {
-            const A = this.detector.update(m, this.now());
-            A.active && this.status.warning && this.setStatus({ state: "listening" }), this.onSignal(A), s ||= A.active, A.active ? r = null : r ??= this.now(), !s && r !== null && this.now() - r >= this.silentTimeoutMs && !a && (a = !0, Promise.resolve().then(() => this.mediaPlaying()).then((C) => {
-              this.child === e && !s && C && this.setStatus({
-                state: "listening",
-                warning: "No audio captured. If music is playing, check Hikari’s System Audio Recording permission."
+          if (frame.type === "error") {
+            fail(frame.stage === "unsupported" ? "Music sway requires macOS 14.2 or later." : "System audio capture could not start. Allow Hikari in System Audio Recording settings, then try again.");
+          } else if (frame.type === "ready") {
+            ready = true;
+            settle(this.setStatus({ state: "listening" }));
+          } else if (frame.type === "frame" && ready && Number.isFinite(frame.level) && Number.isFinite(frame.bass)) {
+            const signal = this.detector.update(frame, this.now());
+            if (signal.active && this.status.warning) this.setStatus({ state: "listening" });
+            this.onSignal(signal);
+            audible ||= signal.active;
+            if (signal.active) quietSince = null;
+            else quietSince ??= this.now();
+            if (!audible && quietSince !== null && this.now() - quietSince >= this.silentTimeoutMs && !checking) {
+              checking = true;
+              Promise.resolve().then(() => this.mediaPlaying()).then((playing) => {
+                if (this.child === child && !audible && playing) this.setStatus({
+                  state: "listening",
+                  warning: "No audio captured. If music is playing, check Hikari’s System Audio Recording permission."
+                });
+              }).catch(() => {
+              }).finally(() => {
+                checking = false;
+                quietSince = this.now();
               });
-            }).catch(() => {
-            }).finally(() => {
-              a = !1, r = this.now();
-            }));
+            }
           }
         }
-      }), e.once("error", () => c("Could not start music analysis.")), e.once("close", () => c("Music analysis stopped. Toggle Music beat sway to try again.")), this.exclusionTimer = setInterval(() => {
-        this.child === e && !e.stdin.destroyed && e.stdin.write(JSON.stringify(this.excludePids()) + `
-`);
+      });
+      child.once("error", () => fail("Could not start music analysis."));
+      child.once("close", () => fail("Music analysis stopped. Toggle Music beat sway to try again."));
+      this.exclusionTimer = setInterval(() => {
+        if (this.child === child && !child.stdin.destroyed) child.stdin.write(JSON.stringify(this.excludePids()) + "\n");
       }, 1e3);
     }).finally(() => {
-      this.starting === o && (this.starting = null, this.settleStart = null);
+      if (this.starting === pending) {
+        this.starting = null;
+        this.settleStart = null;
+      }
     });
-    return this.starting = o, o;
+    this.starting = pending;
+    return pending;
   }
-  stop(e = { state: "off" }) {
-    clearTimeout(this.startupTimer), clearInterval(this.exclusionTimer);
-    const i = this.child;
-    if (this.child = null, i) {
-      i.stdin.end(), i.kill("SIGTERM");
-      const n = setTimeout(() => i.kill("SIGKILL"), 1500);
-      n.unref?.(), i.once("close", () => clearTimeout(n));
+  stop(status = { state: "off" }) {
+    clearTimeout(this.startupTimer);
+    clearInterval(this.exclusionTimer);
+    const child = this.child;
+    this.child = null;
+    if (child) {
+      child.stdin.end();
+      child.kill("SIGTERM");
+      const timer = setTimeout(() => child.kill("SIGKILL"), 1500);
+      timer.unref?.();
+      child.once("close", () => clearTimeout(timer));
     }
-    return this.detector.reset(), this.onSignal({ active: !1, level: 0, beat: 0, lastBeatAt: null, intervalMs: null, updatedAt: this.now() }), this.setStatus(e), this.settleStart?.(e), this.starting = null, this.settleStart = null, e;
+    this.detector.reset();
+    this.onSignal({ active: false, level: 0, beat: 0, lastBeatAt: null, intervalMs: null, updatedAt: this.now() });
+    this.setStatus(status);
+    this.settleStart?.(status);
+    this.starting = null;
+    this.settleStart = null;
+    return status;
   }
 }
-const oe = process.env.HIKARI_SOFTWARE_GL;
-let H = oe === "1", Ce = H ? "HIKARI_SOFTWARE_GL=1" : oe === "0" ? "auto fallback disabled by HIKARI_SOFTWARE_GL=0" : "platform default";
-if (oe !== "0" && oe !== "1" && process.platform === "linux")
+const softwareGl = process.env.HIKARI_SOFTWARE_GL;
+let useSoftwareGl = softwareGl === "1";
+let renderingReason = useSoftwareGl ? "HIKARI_SOFTWARE_GL=1" : softwareGl === "0" ? "auto fallback disabled by HIKARI_SOFTWARE_GL=0" : "platform default";
+if (softwareGl !== "0" && softwareGl !== "1" && process.platform === "linux") {
   try {
-    H = !ht("/dev/dri").some((t) => /^renderD\d+$/.test(t)), Ce = H ? "no /dev/dri render node" : "/dev/dri render node present";
-  } catch (t) {
-    H = t.code === "ENOENT", Ce = H ? "no /dev/dri directory" : `GPU probe failed (${t.code})`;
+    useSoftwareGl = !readdirSync("/dev/dri").some((name) => /^renderD\d+$/.test(name));
+    renderingReason = useSoftwareGl ? "no /dev/dri render node" : "/dev/dri render node present";
+  } catch (error) {
+    useSoftwareGl = error.code === "ENOENT";
+    renderingReason = useSoftwareGl ? "no /dev/dri directory" : `GPU probe failed (${error.code})`;
   }
-H && (v.commandLine.appendSwitch("ignore-gpu-blocklist"), v.commandLine.appendSwitch("use-angle", "swiftshader"), v.commandLine.appendSwitch("enable-unsafe-swiftshader"));
-console.info(`[gpu] ${H ? "Software rendering (SwiftShader)" : "Default GPU rendering"}: ${Ce}`);
-const mi = dt(import.meta.url), k = S.dirname(mi), We = process.env.NODE_ENV === "development" || !V(S.join(k, "../dist/index.html"));
-let p = null, M = null, O = null, W = null, Ue = !1, Ie = yt(), le = null, ce = null, Me = null, ue = null, Se = null, G = null, pe = !1, te = null, ie = "";
-const gi = ft({
-  getSources: (t) => je.getSources(t),
-  getDisplay: () => p && !p.isDestroyed() ? U.getDisplayMatching(p.getBounds()) : null,
-  getPermissionStatus: () => j.getMediaAccessStatus("screen")
+}
+if (useSoftwareGl) {
+  app.commandLine.appendSwitch("ignore-gpu-blocklist");
+  app.commandLine.appendSwitch("use-angle", "swiftshader");
+  app.commandLine.appendSwitch("enable-unsafe-swiftshader");
+}
+console.info(`[gpu] ${useSoftwareGl ? "Software rendering (SwiftShader)" : "Default GPU rendering"}: ${renderingReason}`);
+const __filename$1 = fileURLToPath$1(import.meta.url);
+const __dirname$1 = path$1.dirname(__filename$1);
+const isDev = process.env.NODE_ENV === "development" || !existsSync$1(path$1.join(__dirname$1, "../dist/index.html"));
+let mainWindow = null;
+let awarenessService = null;
+let localTtsService = null;
+let replyVolumeService = null;
+let restoringVolumeForQuit = false;
+let worldState = createWorldState();
+let pointerPoll = null;
+let contextPoll = null;
+let audioPoll = null;
+let activityPoll = null;
+let sttService = null;
+let musicBeatService = null;
+let voiceListeningEnabled = false;
+let lastPointer = null;
+let lastDesktopContextKey = "";
+const manualScreenCapture = createScreenCaptureService({
+  getSources: (options) => desktopCapturer.getSources(options),
+  getDisplay: () => mainWindow && !mainWindow.isDestroyed() ? screen.getDisplayMatching(mainWindow.getBounds()) : null,
+  getPermissionStatus: () => systemPreferences.getMediaAccessStatus("screen")
 });
-function R(t) {
-  Ie = vt(Ie, t), p && !p.isDestroyed() && !p.webContents.isDestroyed() && p.webContents.send("world-state:patch", t);
-}
-async function Be() {
-  const t = M;
-  if (!t) return;
-  t.activeWindowProvider || await t.initializeActiveWindowProvider(), t.refreshScreenCaptureStatus();
-  let e = await t.getActiveContext().catch(() => null);
-  if (e && t.isHikariContext(e)) {
-    const r = await t.openWindowsProvider?.().catch(() => null);
-    e = (Array.isArray(r) ? r : []).map((a) => ({
-      appName: a?.owner?.name || "",
-      bundleId: a?.owner?.bundleId || "",
-      windowTitle: a?.title || "",
-      windowId: Number.isFinite(Number(a?.id)) ? Number(a.id) : null,
-      bounds: a?.bounds || null,
-      processId: Number(a?.owner?.processId) || null
-    })).find((a) => a.appName && !t.isHikariContext(a)) || null;
+function publishWorldPatch(patch) {
+  worldState = mergeWorldStatePatch(worldState, patch);
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send("world-state:patch", patch);
   }
-  const i = e ? `${e.bundleId || e.appName || "unknown"}:${e.windowId ?? e.windowTitle ?? "unknown"}` : "", n = !!(ie && i && i !== ie);
-  ie = i || ie;
-  const s = Date.now();
-  R({ desktop: {
-    appName: e?.appName || "",
-    bundleId: e?.bundleId || "",
-    windowTitle: e?.windowTitle || "",
-    windowId: e?.windowId ?? null,
-    windowBounds: e?.bounds || null,
-    contextUpdatedAt: s,
-    contextStale: !e,
-    screen: n ? { available: !!t.getStatus().screenCaptureAvailable, visionAvailable: !!t.getStatus().screenCaptureAvailable, changeLevel: "unknown", changeAt: 0, changeStale: !0, lastSummary: "", summaryAt: 0, summaryStale: !0, summaryContextKey: "" } : { available: !!t.getStatus().screenCaptureAvailable, visionAvailable: !!t.getStatus().screenCaptureAvailable }
-  }, browser: { available: !1 } });
 }
-function He() {
-  if (!M) return;
-  const t = Math.max(0, (Number(qe.getSystemIdleTime()) || 0) * 1e3);
-  R({ desktop: { activity: { ...M.getActivityState(), idleForMs: t, idle: t >= 6e4, updatedAt: Date.now(), stale: !1 } } });
+async function pollDesktopContext() {
+  const service = awarenessService;
+  if (!service) return;
+  if (!service.activeWindowProvider) await service.initializeActiveWindowProvider();
+  service.refreshScreenCaptureStatus();
+  let context = await service.getActiveContext().catch(() => null);
+  if (context && service.isHikariContext(context)) {
+    const windows = await service.openWindowsProvider?.().catch(() => null);
+    context = (Array.isArray(windows) ? windows : []).map((window) => ({
+      appName: window?.owner?.name || "",
+      bundleId: window?.owner?.bundleId || "",
+      windowTitle: window?.title || "",
+      windowId: Number.isFinite(Number(window?.id)) ? Number(window.id) : null,
+      bounds: window?.bounds || null,
+      processId: Number(window?.owner?.processId) || null
+    })).find((window) => window.appName && !service.isHikariContext(window)) || null;
+  }
+  const contextKey = context ? `${context.bundleId || context.appName || "unknown"}:${context.windowId ?? context.windowTitle ?? "unknown"}` : "";
+  const contextChanged = Boolean(lastDesktopContextKey && contextKey && contextKey !== lastDesktopContextKey);
+  lastDesktopContextKey = contextKey || lastDesktopContextKey;
+  const observedAt = Date.now();
+  publishWorldPatch({ desktop: {
+    appName: context?.appName || "",
+    bundleId: context?.bundleId || "",
+    windowTitle: context?.windowTitle || "",
+    windowId: context?.windowId ?? null,
+    windowBounds: context?.bounds || null,
+    contextUpdatedAt: observedAt,
+    contextStale: !context,
+    screen: contextChanged ? { available: Boolean(service.getStatus().screenCaptureAvailable), visionAvailable: Boolean(service.getStatus().screenCaptureAvailable), changeLevel: "unknown", changeAt: 0, changeStale: true, lastSummary: "", summaryAt: 0, summaryStale: true, summaryContextKey: "" } : { available: Boolean(service.getStatus().screenCaptureAvailable), visionAvailable: Boolean(service.getStatus().screenCaptureAvailable) }
+  }, browser: { available: false } });
 }
-async function ze(t) {
-  if (process.platform !== "darwin" || !t.ensureMediaPlaybackProvider()) {
-    R({ audio: { system: { available: !1, updatedAt: Date.now() } } });
+function pollActivityState() {
+  if (!awarenessService) return;
+  const idleForMs = Math.max(0, (Number(powerMonitor.getSystemIdleTime()) || 0) * 1e3);
+  publishWorldPatch({ desktop: { activity: { ...awarenessService.getActivityState(), idleForMs, idle: idleForMs >= 6e4, updatedAt: Date.now(), stale: false } } });
+}
+async function pollSystemAudio(service) {
+  if (process.platform !== "darwin" || !service.ensureMediaPlaybackProvider()) {
+    publishWorldPatch({ audio: { system: { available: false, updatedAt: Date.now() } } });
     return;
   }
   try {
-    const [e, i] = await Promise.all([
-      Q().call(["audio-state"]).catch(() => ""),
-      Q().readVolume().catch(() => null)
-    ]), n = gt(e);
-    R({ audio: { system: {
-      available: n?.available ?? !1,
-      stale: !1,
-      captureAvailable: G?.status.state === "listening",
-      running: n?.running ?? !1,
-      volume: n?.volume ?? i?.scalar ?? null,
-      muted: n?.muted ?? null,
+    const [rawAudioState, output] = await Promise.all([
+      getReplyVolumeService().call(["audio-state"]).catch(() => ""),
+      getReplyVolumeService().readVolume().catch(() => null)
+    ]);
+    const audioState = parseSystemAudioOutput(rawAudioState);
+    publishWorldPatch({ audio: { system: {
+      available: audioState?.available ?? false,
+      stale: false,
+      captureAvailable: musicBeatService?.status.state === "listening",
+      running: audioState?.running ?? false,
+      volume: audioState?.volume ?? output?.scalar ?? null,
+      muted: audioState?.muted ?? null,
       level: null,
       classification: "unknown",
       confidence: 0,
       updatedAt: Date.now()
     } } });
   } catch {
-    R({ audio: { system: { available: !1, updatedAt: Date.now() } } });
+    publishWorldPatch({ audio: { system: { available: false, updatedAt: Date.now() } } });
   }
 }
-function wi() {
-  le || ce || ue || (Be(), He(), ze(M), ce = setInterval(() => {
-    Be();
-  }, 1500), ue = setInterval(He, 500), Me = setInterval(() => {
-    ze(M);
-  }, 5e3), le = setInterval(() => {
-    const t = U.getCursorScreenPoint();
-    if (!(!te || Math.abs(t.x - te.x) >= 4 || Math.abs(t.y - te.y) >= 4)) return;
-    te = t;
-    const i = U.getDisplayNearestPoint(t);
-    R({ desktop: { pointer: { ...t, displayId: i?.id ?? null, updatedAt: Date.now(), stale: !1 } } });
-  }, 100));
+function startWorldStatePolling() {
+  if (pointerPoll || contextPoll || activityPoll) return;
+  void pollDesktopContext();
+  pollActivityState();
+  void pollSystemAudio(awarenessService);
+  contextPoll = setInterval(() => void pollDesktopContext(), 1500);
+  activityPoll = setInterval(pollActivityState, 500);
+  audioPoll = setInterval(() => void pollSystemAudio(awarenessService), 5e3);
+  pointerPoll = setInterval(() => {
+    const point = screen.getCursorScreenPoint();
+    const moved = !lastPointer || Math.abs(point.x - lastPointer.x) >= 4 || Math.abs(point.y - lastPointer.y) >= 4;
+    if (!moved) return;
+    lastPointer = point;
+    const display = screen.getDisplayNearestPoint(point);
+    publishWorldPatch({ desktop: { pointer: { ...point, displayId: display?.id ?? null, updatedAt: Date.now(), stale: false } } });
+  }, 100);
 }
-function Ze() {
-  clearInterval(le), clearInterval(ce), clearInterval(ue), clearInterval(Me), le = null, ce = null, ue = null, Me = null;
+function stopWorldStatePolling() {
+  clearInterval(pointerPoll);
+  clearInterval(contextPoll);
+  clearInterval(activityPoll);
+  clearInterval(audioPoll);
+  pointerPoll = null;
+  contextPoll = null;
+  activityPoll = null;
+  audioPoll = null;
 }
-function et() {
-  if (!Se) {
-    const t = v.isPackaged ? [S.join(process.resourcesPath, "voice-stt", "voice-stt")] : [
-      S.join(v.getAppPath(), "tools", "voice-stt", "voice-stt"),
-      S.resolve(k, "../../tools/voice-stt/voice-stt"),
-      S.resolve(k, "../tools/voice-stt/voice-stt")
+function getSttService() {
+  if (!sttService) {
+    const candidates = app.isPackaged ? [path$1.join(process.resourcesPath, "voice-stt", "voice-stt")] : [
+      path$1.join(app.getAppPath(), "tools", "voice-stt", "voice-stt"),
+      path$1.resolve(__dirname$1, "../../tools/voice-stt/voice-stt"),
+      path$1.resolve(__dirname$1, "../tools/voice-stt/voice-stt")
     ];
-    Se = new ci({ executable: process.env.HIKARI_SPEECH_HELPER || t.find((e) => V(e)) || t[0] });
+    sttService = new SpeechToTextService({ executable: process.env.HIKARI_SPEECH_HELPER || candidates.find((candidate) => existsSync$1(candidate)) || candidates[0] });
   }
-  return Se;
+  return sttService;
 }
-function Q() {
-  if (!W) {
-    const t = v.isPackaged ? [S.join(process.resourcesPath, "media-state", "media-state")] : [
-      S.join(v.getAppPath(), "tools", "media-state", "media-state"),
-      S.resolve(k, "../tools/media-state/media-state")
+function getReplyVolumeService() {
+  if (!replyVolumeService) {
+    const candidates = app.isPackaged ? [path$1.join(process.resourcesPath, "media-state", "media-state")] : [
+      path$1.join(app.getAppPath(), "tools", "media-state", "media-state"),
+      path$1.resolve(__dirname$1, "../tools/media-state/media-state")
     ];
-    W = new li({
-      helperPath: t.find((e) => V(e)),
+    replyVolumeService = new ReplyVolumeService({
+      helperPath: candidates.find((candidate) => existsSync$1(candidate)),
       // The voice player's own AudioContext opens the output device before
       // playback. Exclude Hikari's processes so it cannot count as media.
-      mediaPlaying: async () => String(await W.call([
+      mediaPlaying: async () => String(await replyVolumeService.call([
         "playing-except",
         String(process.pid),
-        ...v.getAppMetrics().map((e) => String(e.pid))
+        ...app.getAppMetrics().map((metric) => String(metric.pid))
       ])).trim() === "1"
     });
   }
-  return W;
+  return replyVolumeService;
 }
-function yi() {
-  if (!O && process.env.HIKARI_SERVICE_URL && (O = ri({ url: process.env.HIKARI_SERVICE_URL })), !O) {
-    const t = v.isPackaged ? [S.join(process.resourcesPath, "companion-tts")] : [
-      S.join(v.getAppPath(), "tools/companion-tts"),
-      S.resolve(k, "../tools/companion-tts"),
-      S.resolve(k, "../../tools/companion-tts")
-    ], e = process.env.HIKARI_TTS_TOOL_DIR || t.find(
-      (i) => V(S.join(i, "tts.py"))
-    ) || t[0];
-    O = Gt({ toolDir: e });
+function getLocalTtsService() {
+  if (!localTtsService && process.env.HIKARI_SERVICE_URL) {
+    localTtsService = createRemoteTtsService({ url: process.env.HIKARI_SERVICE_URL });
   }
-  return O;
+  if (!localTtsService) {
+    const candidates = app.isPackaged ? [path$1.join(process.resourcesPath, "companion-tts")] : [
+      path$1.join(app.getAppPath(), "tools/companion-tts"),
+      path$1.resolve(__dirname$1, "../tools/companion-tts"),
+      path$1.resolve(__dirname$1, "../../tools/companion-tts")
+    ];
+    const toolDir = process.env.HIKARI_TTS_TOOL_DIR || candidates.find(
+      (directory) => existsSync$1(path$1.join(directory, "tts.py"))
+    ) || candidates[0];
+    localTtsService = createLocalTtsService({ toolDir });
+  }
+  return localTtsService;
 }
-function bi() {
-  if (!G) {
-    const t = v.isPackaged ? [S.join(process.resourcesPath, "music-beat", "music-beat")] : [S.join(v.getAppPath(), "tools/music-beat/music-beat"), S.resolve(k, "../tools/music-beat/music-beat")], e = (i, n) => {
-      p && !p.isDestroyed() && !p.webContents.isDestroyed() && p.webContents.send(i, n);
+function getMusicBeatService() {
+  if (!musicBeatService) {
+    const candidates = app.isPackaged ? [path$1.join(process.resourcesPath, "music-beat", "music-beat")] : [path$1.join(app.getAppPath(), "tools/music-beat/music-beat"), path$1.resolve(__dirname$1, "../tools/music-beat/music-beat")];
+    const send = (channel, value) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send(channel, value);
     };
-    G = new fi({
-      executable: t.find((i) => V(i)) || t[0],
-      excludePids: () => [process.pid, ...v.getAppMetrics().map((i) => i.pid)],
-      mediaPlaying: () => Q().mediaPlaying(),
-      onSignal: (i) => e("music-beat:signal", i),
-      onStatus: (i) => e("music-beat:status", i)
+    musicBeatService = new MusicBeatService({
+      executable: candidates.find((candidate) => existsSync$1(candidate)) || candidates[0],
+      excludePids: () => [process.pid, ...app.getAppMetrics().map((metric) => metric.pid)],
+      mediaPlaying: () => getReplyVolumeService().mediaPlaying(),
+      onSignal: (value) => send("music-beat:signal", value),
+      onStatus: (value) => send("music-beat:status", value)
     });
   }
-  return G;
+  return musicBeatService;
 }
-function T(t) {
-  return !!(p && !p.isDestroyed() && t.sender === p.webContents);
+function isMainRenderer(event) {
+  return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
 }
-function P() {
-  return M || (M = new Lt({
-    getHikariBounds: () => p && !p.isDestroyed() ? p.getBounds() : null,
-    emitCandidate: (t) => {
-      const e = t.context || {}, i = `${e.bundleId || e.appName || "unknown"}:${t.windowId ?? e.windowId ?? e.windowTitle ?? "unknown"}`, n = [e.appName, e.windowTitle].filter(Boolean).join(" — "), s = t.timestamp || Date.now(), r = Math.max(0, (Number(qe.getSystemIdleTime()) || 0) * 1e3), a = t.trigger === "typing_session_end" ? "a typing session was observed" : t.trigger === "scroll_session_end" ? "a scrolling session was observed" : "desktop activity changed", o = { desktop: {
-        appName: e.appName || "",
-        bundleId: e.bundleId || "",
-        windowTitle: e.windowTitle || "",
-        windowId: e.windowId ?? t.windowId ?? null,
-        contextUpdatedAt: s,
-        contextStale: !e.appName,
-        activity: {
-          ...M?.getActivityState?.() || {},
-          idleForMs: r,
-          idle: r >= 6e4,
-          updatedAt: s,
-          stale: !1
-        },
-        screen: {
-          available: !!M?.getStatus().screenCaptureAvailable,
-          visionAvailable: !!M?.getStatus().screenCaptureAvailable
-        }
-      } };
-      (t.visualChange || ["application_changed", "window_changed", "typing_session_end", "scroll_session_end", "click_caused_screen_change"].includes(t.trigger)) && (o.desktop.screen = {
-        ...o.desktop.screen,
-        changeLevel: t.visualChange?.level || "unknown",
-        changeAt: s,
-        changeStale: !1,
-        lastSummary: n ? `Active window: ${n}; ${a}. Window content was not interpreted.` : `${a}. Window content was not interpreted.`,
-        summaryAt: s,
-        summaryStale: !1,
-        summaryContextKey: i
-      }), (t.media?.state === "playing" || t.media?.state === "stopped") && (o.audio = { system: { available: !0, running: t.media.state === "playing", updatedAt: s, stale: !1 } }), R(o), p && !p.isDestroyed() && !p.webContents.isDestroyed() && p.webContents.send("awareness:candidate", t);
-    }
-  }), M);
-}
-function Fe() {
-  p = new $e({
-    width: 600,
-    height: 900,
-    transparent: !0,
-    frame: !1,
-    alwaysOnTop: !0,
-    resizable: !0,
-    webPreferences: {
-      preload: V(S.join(k, "preload.js")) ? S.join(k, "preload.js") : S.resolve(k, "../preload.js"),
-      contextIsolation: !0,
-      nodeIntegration: !1,
-      webSecurity: !We,
-      backgroundThrottling: !1,
-      autoplayPolicy: "no-user-gesture-required"
-    }
-  }), hi(p, U), We ? (p.loadURL("http://localhost:5174/electron/index.html"), p.webContents.openDevTools({ mode: "detach" })) : p.loadFile(S.join(k, "../dist/index.html")), p.once("closed", () => {
-    G?.stop(), M?.stop(), Ze(), pe = !1, W?.restore(), O?.dispose(), O = null, p = null;
-  });
-}
-y.handle("tts:synthesize", async (t, e) => {
-  if (!T(t)) throw new TypeError("Invalid voice request");
-  return yi().synthesize(e);
-});
-y.handle("music-beat:set-enabled", (t, e) => {
-  if (!T(t) || typeof e != "boolean") throw new TypeError("Invalid music analysis request");
-  const i = bi();
-  return e ? i.start() : i.stop();
-});
-y.handle("music-beat:open-permission", async (t) => {
-  if (!T(t)) throw new TypeError("Invalid music permission request");
-  await Te.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture");
-});
-y.handle("world-state:get", (t) => {
-  if (!T(t)) throw new TypeError("Invalid world-state request");
-  return Ct(Ie);
-});
-y.handle("voice:set-enabled", (t, e) => {
-  if (!T(t) || typeof e != "boolean") throw new TypeError("Invalid voice request");
-  pe = e;
-  const i = process.platform === "darwin" ? j.getMediaAccessStatus("microphone") : "unknown", n = et().getStatus();
-  return R({ audio: { microphone: { enabled: e, permission: i }, stt: { status: n.status, language: "auto" } } }), { enabled: e, permission: i, stt: n };
-});
-y.handle("voice:transcribe", async (t, e) => {
-  if (!T(t) || !pe) throw new TypeError("Voice listening is disabled");
-  if (!(e instanceof Float32Array)) throw new TypeError("Invalid voice audio segment");
-  return et().transcribe(new Float32Array(e));
-});
-y.handle("world-state:renderer-patch", (t, e) => {
-  if (!T(t) || !e || typeof e != "object") throw new TypeError("Invalid world-state update");
-  const i = Tt(e);
-  if (!Object.keys(i).length) throw new TypeError("Invalid world-state update");
-  R(i);
-});
-y.handle("audio:begin-reply", async (t, e) => {
-  if (!T(t) || typeof e?.canBoost != "boolean")
-    throw new TypeError("Invalid reply-audio request");
-  return Q().begin(e);
-});
-y.handle("audio:end-reply", async (t, e) => {
-  if (!T(t) || typeof e != "string")
-    throw new TypeError("Invalid reply-audio request");
-  await Q().end(e);
-});
-y.handle("get-window-position", () => {
-  if (!p) return { x: 0, y: 0 };
-  const t = p.getPosition();
-  return { x: t[0], y: t[1] };
-});
-y.handle("set-window-position", (t, e, i) => {
-  if (!p) return !1;
-  if (!T(t) || ![e, i].every(Number.isFinite)) throw new TypeError("Invalid window position");
-  return Pe(p, U, { ...p.getBounds(), x: Math.round(e), y: Math.round(i) });
-});
-y.handle("get-window-bounds", () => p ? p.getBounds() : { width: 0, height: 0, x: 0, y: 0 });
-y.handle("set-window-bounds", (t, e, i, n, s) => {
-  if (!p) return !1;
-  if (!T(t) || ![e, i, n, s].every(Number.isFinite)) throw new TypeError("Invalid window bounds");
-  return Pe(p, U, {
-    x: Math.round(e),
-    y: Math.round(i),
-    width: Math.max(200, Math.round(n)),
-    height: Math.max(300, Math.round(s))
-  });
-});
-y.handle("set-ignore-mouse-events", (t, e, i) => p ? (p.setIgnoreMouseEvents(e, { forward: i !== !1 }), !0) : !1);
-y.handle("awareness:set-enabled", async (t, e) => {
-  if (!T(t) || typeof e != "boolean")
-    throw new TypeError("Invalid desktop-awareness request");
-  return P().setEnabled(e);
-});
-y.handle("awareness:get-status", async (t) => {
-  if (!T(t)) throw new TypeError("Invalid desktop-awareness request");
-  return P().refreshPermissionStatus();
-});
-y.handle("awareness:get-greeting-context", async (t) => {
-  if (!T(t)) throw new TypeError("Invalid desktop-awareness request");
-  return P().getGreetingContext();
-});
-y.handle("awareness:refresh-status", async (t) => {
-  if (!T(t)) throw new TypeError("Invalid desktop-awareness request");
-  return P().refreshPermissionStatus();
-});
-y.handle("awareness:request-screen-capture", async (t) => {
-  if (!T(t)) throw new TypeError("Invalid desktop-awareness request");
-  return P().requestScreenCapturePermission();
-});
-y.handle("awareness:request-input-monitoring", async (t) => {
-  if (!T(t)) throw new TypeError("Invalid desktop-awareness request");
-  return P().requestInputMonitoringPermission();
-});
-y.handle("screen:capture", async (t) => {
-  if (!T(t)) throw new TypeError("Invalid screenshot request");
+const hermesRequests = /* @__PURE__ */ new Map();
+ipcMain.handle("hermes:chat", async (event, id, body, { gatewayUrl, token, sessionId } = {}) => {
+  if (!isMainRenderer(event) || event.senderFrame !== event.sender.mainFrame || typeof id !== "string" || id.length !== 36 || hermesRequests.has(id)) {
+    throw new TypeError("Invalid Hermes chat request");
+  }
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(18e4)]);
+  hermesRequests.set(id, controller);
+  const cancel = () => controller.abort();
+  event.sender.once("destroyed", cancel);
   try {
-    return { ok: !0, attachment: await gi.capture() };
-  } catch (e) {
-    return { ok: !1, error: { code: e.code || "CAPTURE_FAILED", message: e.message || "Screenshot capture failed." } };
+    const response = await fetchHermesChat(body, { gatewayUrl, token, sessionId, signal }, fetch, "error");
+    return await serializeChatResponse(response);
+  } catch (error) {
+    if (signal.aborted) throw signal.reason;
+    if (error.message !== "fetch failed") throw error;
+    const detail = error.cause?.code || error.cause?.message;
+    const destination = new URL(gatewayUrl.trim().replace(/^ws/i, "http")).origin;
+    throw new Error(`Could not connect to Hermes at ${destination}${detail ? ` (${detail})` : ""}`, { cause: error });
+  } finally {
+    controller.abort();
+    event.sender.removeListener("destroyed", cancel);
+    hermesRequests.delete(id);
   }
 });
-y.handle("awareness:request-snapshot", (t, e) => {
-  if (!T(t) || typeof e != "string" || !e.trim())
-    throw new TypeError("Invalid desktop-awareness snapshot request");
-  return P().requestSnapshot(e);
+ipcMain.on("hermes:cancel-chat", (event, id) => {
+  if (isMainRenderer(event) && event.senderFrame === event.sender.mainFrame) {
+    hermesRequests.get(id)?.abort();
+  }
 });
-y.handle("awareness:capture-screen", async (t) => {
-  if (!T(t)) throw new TypeError("Invalid desktop-awareness capture request");
-  return P().captureScreen();
+function createAwarenessService() {
+  if (awarenessService) return awarenessService;
+  awarenessService = new DesktopAwarenessService({
+    getHikariBounds: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null,
+    emitCandidate: (candidate) => {
+      const context = candidate.context || {};
+      const contextKey = `${context.bundleId || context.appName || "unknown"}:${candidate.windowId ?? context.windowId ?? context.windowTitle ?? "unknown"}`;
+      const appWindow = [context.appName, context.windowTitle].filter(Boolean).join(" — ");
+      const observedAt = candidate.timestamp || Date.now();
+      const idleForMs = Math.max(0, (Number(powerMonitor.getSystemIdleTime()) || 0) * 1e3);
+      const activityLabel = candidate.trigger === "typing_session_end" ? "a typing session was observed" : candidate.trigger === "scroll_session_end" ? "a scrolling session was observed" : "desktop activity changed";
+      const patch = { desktop: {
+        appName: context.appName || "",
+        bundleId: context.bundleId || "",
+        windowTitle: context.windowTitle || "",
+        windowId: context.windowId ?? candidate.windowId ?? null,
+        contextUpdatedAt: observedAt,
+        contextStale: !context.appName,
+        activity: {
+          ...awarenessService?.getActivityState?.() || {},
+          idleForMs,
+          idle: idleForMs >= 6e4,
+          updatedAt: observedAt,
+          stale: false
+        },
+        screen: {
+          available: Boolean(awarenessService?.getStatus().screenCaptureAvailable),
+          visionAvailable: Boolean(awarenessService?.getStatus().screenCaptureAvailable)
+        }
+      } };
+      if (candidate.visualChange || ["application_changed", "window_changed", "typing_session_end", "scroll_session_end", "click_caused_screen_change"].includes(candidate.trigger)) {
+        patch.desktop.screen = {
+          ...patch.desktop.screen,
+          changeLevel: candidate.visualChange?.level || "unknown",
+          changeAt: observedAt,
+          changeStale: false,
+          lastSummary: appWindow ? `Active window: ${appWindow}; ${activityLabel}. Window content was not interpreted.` : `${activityLabel}. Window content was not interpreted.`,
+          summaryAt: observedAt,
+          summaryStale: false,
+          summaryContextKey: contextKey
+        };
+      }
+      if (candidate.media?.state === "playing" || candidate.media?.state === "stopped") {
+        patch.audio = { system: { available: true, running: candidate.media.state === "playing", updatedAt: observedAt, stale: false } };
+      }
+      publishWorldPatch(patch);
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send("awareness:candidate", candidate);
+      }
+    }
+  });
+  return awarenessService;
+}
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 600,
+    height: 900,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    resizable: true,
+    webPreferences: {
+      preload: existsSync$1(path$1.join(__dirname$1, "preload.js")) ? path$1.join(__dirname$1, "preload.js") : path$1.resolve(__dirname$1, "../preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: !isDev,
+      backgroundThrottling: false,
+      autoplayPolicy: "no-user-gesture-required"
+    }
+  });
+  keepWindowOnScreen(mainWindow, screen);
+  if (isDev) {
+    mainWindow.loadURL("http://localhost:5174/electron/index.html");
+    mainWindow.webContents.openDevTools({ mode: "detach" });
+  } else {
+    mainWindow.loadFile(path$1.join(__dirname$1, "../dist/index.html"));
+  }
+  mainWindow.once("closed", () => {
+    musicBeatService?.stop();
+    awarenessService?.stop();
+    stopWorldStatePolling();
+    voiceListeningEnabled = false;
+    void replyVolumeService?.restore();
+    localTtsService?.dispose();
+    localTtsService = null;
+    mainWindow = null;
+  });
+}
+ipcMain.handle("tts:synthesize", async (event, input) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid voice request");
+  return getLocalTtsService().synthesize(input);
 });
-y.on("awareness:direct-interaction", (t) => {
-  T(t) && P().noteDirectInteraction();
+ipcMain.handle("music-beat:set-enabled", (event, enabled) => {
+  if (!isMainRenderer(event) || typeof enabled !== "boolean") throw new TypeError("Invalid music analysis request");
+  const service = getMusicBeatService();
+  return enabled ? service.start() : service.stop();
 });
-v.whenReady().then(() => {
-  P(), ut.defaultSession.setPermissionRequestHandler((t, e, i, n) => {
-    const s = e === "media" && n?.mediaTypes?.includes("audio") && !n?.mediaTypes?.includes("video");
-    i(!!(s && pe));
-  }), Fe(), wi(), ke.enabledByDefault && M.start(), v.on("activate", () => {
-    $e.getAllWindows().length === 0 && Fe();
+ipcMain.handle("music-beat:open-permission", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid music permission request");
+  await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture");
+});
+ipcMain.handle("world-state:get", (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid world-state request");
+  return expireWorldStateFields(worldState);
+});
+ipcMain.handle("voice:set-enabled", (event, enabled) => {
+  if (!isMainRenderer(event) || typeof enabled !== "boolean") throw new TypeError("Invalid voice request");
+  voiceListeningEnabled = enabled;
+  const permission = process.platform === "darwin" ? systemPreferences.getMediaAccessStatus("microphone") : "unknown";
+  const stt = getSttService().getStatus();
+  publishWorldPatch({ audio: { microphone: { enabled, permission }, stt: { status: stt.status, language: "auto" } } });
+  return { enabled, permission, stt };
+});
+ipcMain.handle("voice:transcribe", async (event, input) => {
+  if (!isMainRenderer(event) || !voiceListeningEnabled) throw new TypeError("Voice listening is disabled");
+  if (!(input instanceof Float32Array)) throw new TypeError("Invalid voice audio segment");
+  return getSttService().transcribe(new Float32Array(input));
+});
+ipcMain.handle("world-state:renderer-patch", (event, patch) => {
+  if (!isMainRenderer(event) || !patch || typeof patch !== "object") throw new TypeError("Invalid world-state update");
+  const safePatch = sanitizeRendererWorldPatch(patch);
+  if (!Object.keys(safePatch).length) throw new TypeError("Invalid world-state update");
+  publishWorldPatch(safePatch);
+});
+ipcMain.handle("audio:begin-reply", async (event, options) => {
+  if (!isMainRenderer(event) || typeof options?.canBoost !== "boolean") {
+    throw new TypeError("Invalid reply-audio request");
+  }
+  return getReplyVolumeService().begin(options);
+});
+ipcMain.handle("audio:end-reply", async (event, sessionId) => {
+  if (!isMainRenderer(event) || typeof sessionId !== "string") {
+    throw new TypeError("Invalid reply-audio request");
+  }
+  await getReplyVolumeService().end(sessionId);
+});
+ipcMain.handle("get-window-position", () => {
+  if (!mainWindow) return { x: 0, y: 0 };
+  const position = mainWindow.getPosition();
+  return { x: position[0], y: position[1] };
+});
+ipcMain.handle("set-window-position", (event, x, y) => {
+  if (!mainWindow) return false;
+  if (!isMainRenderer(event) || ![x, y].every(Number.isFinite)) throw new TypeError("Invalid window position");
+  return constrainWindow(mainWindow, screen, { ...mainWindow.getBounds(), x: Math.round(x), y: Math.round(y) });
+});
+ipcMain.handle("get-window-bounds", () => {
+  if (!mainWindow) return { width: 0, height: 0, x: 0, y: 0 };
+  const bounds = mainWindow.getBounds();
+  return bounds;
+});
+ipcMain.handle("set-window-bounds", (event, x, y, width, height) => {
+  if (!mainWindow) return false;
+  if (!isMainRenderer(event) || ![x, y, width, height].every(Number.isFinite)) throw new TypeError("Invalid window bounds");
+  return constrainWindow(mainWindow, screen, {
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.max(200, Math.round(width)),
+    height: Math.max(300, Math.round(height))
   });
 });
-v.on("window-all-closed", () => {
-  M?.stop(), Ze(), process.platform !== "darwin" && v.quit();
+ipcMain.handle("set-ignore-mouse-events", (event, ignore, forward) => {
+  if (!mainWindow) return false;
+  mainWindow.setIgnoreMouseEvents(ignore, { forward: forward !== false });
+  return true;
 });
-v.on("before-quit", (t) => {
-  if (G?.stop(), W?.active && !Ue) {
-    t.preventDefault(), Ue = !0, W.restore().finally(() => {
-      W = null, v.quit();
+ipcMain.handle("awareness:set-enabled", async (event, enabled) => {
+  if (!isMainRenderer(event) || typeof enabled !== "boolean") {
+    throw new TypeError("Invalid desktop-awareness request");
+  }
+  return createAwarenessService().setEnabled(enabled);
+});
+ipcMain.handle("awareness:get-status", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness request");
+  const service = createAwarenessService();
+  return service.refreshPermissionStatus();
+});
+ipcMain.handle("awareness:get-greeting-context", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness request");
+  return createAwarenessService().getGreetingContext();
+});
+ipcMain.handle("awareness:refresh-status", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness request");
+  const service = createAwarenessService();
+  return service.refreshPermissionStatus();
+});
+ipcMain.handle("awareness:request-screen-capture", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness request");
+  return createAwarenessService().requestScreenCapturePermission();
+});
+ipcMain.handle("awareness:request-input-monitoring", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness request");
+  return createAwarenessService().requestInputMonitoringPermission();
+});
+ipcMain.handle("screen:capture", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid screenshot request");
+  try {
+    return { ok: true, attachment: await manualScreenCapture.capture() };
+  } catch (error) {
+    return { ok: false, error: { code: error.code || "CAPTURE_FAILED", message: error.message || "Screenshot capture failed." } };
+  }
+});
+ipcMain.handle("awareness:request-snapshot", (event, candidateId) => {
+  if (!isMainRenderer(event) || typeof candidateId !== "string" || !candidateId.trim()) {
+    throw new TypeError("Invalid desktop-awareness snapshot request");
+  }
+  return createAwarenessService().requestSnapshot(candidateId);
+});
+ipcMain.handle("awareness:capture-screen", async (event) => {
+  if (!isMainRenderer(event)) throw new TypeError("Invalid desktop-awareness capture request");
+  return createAwarenessService().captureScreen();
+});
+ipcMain.on("awareness:direct-interaction", (event) => {
+  if (isMainRenderer(event)) createAwarenessService().noteDirectInteraction();
+});
+app.whenReady().then(() => {
+  createAwarenessService();
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    const audioOnly = permission === "media" && details?.mediaTypes?.includes("audio") && !details?.mediaTypes?.includes("video");
+    callback(Boolean(audioOnly && voiceListeningEnabled));
+  });
+  createWindow();
+  startWorldStatePolling();
+  if (awarenessConfig.enabledByDefault) {
+    awarenessService.start();
+  }
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+});
+app.on("window-all-closed", () => {
+  awarenessService?.stop();
+  stopWorldStatePolling();
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+app.on("before-quit", (event) => {
+  musicBeatService?.stop();
+  if (replyVolumeService?.active && !restoringVolumeForQuit) {
+    event.preventDefault();
+    restoringVolumeForQuit = true;
+    void replyVolumeService.restore().finally(() => {
+      replyVolumeService = null;
+      app.quit();
     });
     return;
   }
-  M?.stop(), O?.dispose();
+  awarenessService?.stop();
+  localTtsService?.dispose();
 });

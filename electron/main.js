@@ -13,6 +13,7 @@ import { parseSystemAudioOutput } from './media-playback-state.js';
 import { createScreenCaptureService } from './screen-capture-main.js';
 import { constrainWindow, keepWindowOnScreen } from './window-geometry.js';
 import { MusicBeatService } from './music-beat-main.js';
+import { fetchHermesChat, serializeChatResponse } from '../shared/services.js';
 
 // Select software GL before app readiness, when Chromium's switches take effect.
 const softwareGl = process.env.HIKARI_SOFTWARE_GL;
@@ -226,6 +227,40 @@ function getMusicBeatService() {
 function isMainRenderer(event) {
   return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
 }
+
+const hermesRequests = new Map();
+ipcMain.handle('hermes:chat', async (event, id, body, { gatewayUrl, token, sessionId } = {}) => {
+  if (!isMainRenderer(event) || event.senderFrame !== event.sender.mainFrame
+    || typeof id !== 'string' || id.length !== 36 || hermesRequests.has(id)) {
+    throw new TypeError('Invalid Hermes chat request');
+  }
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(180_000)]);
+  hermesRequests.set(id, controller);
+  const cancel = () => controller.abort();
+  event.sender.once('destroyed', cancel);
+  try {
+    // Keep the deadline active through the response body as well as the headers.
+    const response = await fetchHermesChat(body, { gatewayUrl, token, sessionId, signal }, fetch, 'error');
+    return await serializeChatResponse(response);
+  } catch (error) {
+    if (signal.aborted) throw signal.reason;
+    if (error.message !== 'fetch failed') throw error;
+    const detail = error.cause?.code || error.cause?.message;
+    const destination = new URL(gatewayUrl.trim().replace(/^ws/i, 'http')).origin;
+    throw new Error(`Could not connect to Hermes at ${destination}${detail ? ` (${detail})` : ''}`, { cause: error });
+  } finally {
+    controller.abort();
+    event.sender.removeListener('destroyed', cancel);
+    hermesRequests.delete(id);
+  }
+});
+
+ipcMain.on('hermes:cancel-chat', (event, id) => {
+  if (isMainRenderer(event) && event.senderFrame === event.sender.mainFrame) {
+    hermesRequests.get(id)?.abort();
+  }
+});
 
 function createAwarenessService() {
   if (awarenessService) return awarenessService;
